@@ -6,6 +6,10 @@ pub enum HarnessId {
     ClaudeCode,
     Codex,
     Opencode,
+    /// DeepSeek coding agent, driven over ACP by the bundled `dsh-acp`.
+    Dsh,
+    /// Pi coding agent, driven over ACP by `pi-acp`.
+    Pi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -62,6 +66,9 @@ impl PermissionMode {
                 Self::FullAccess,
             ],
             HarnessId::Opencode => &[Self::Ask, Self::AcceptEdits, Self::Auto, Self::FullAccess],
+            HarnessId::Dsh | HarnessId::Pi => {
+                &[Self::Ask, Self::Auto, Self::DontAsk, Self::FullAccess]
+            }
         }
     }
 

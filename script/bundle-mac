@@ -118,6 +118,18 @@ mv Cargo.toml.backup Cargo.toml
 popd
 echo "Bundled ${app_path}"
 
+# Ship the bundled DeepSeek ACP agent alongside the app so the DeepSeek
+# harness works out of the box without a global npm install.
+agents_src="crates/wu/resources/agents/dsh-acp-darwin-${arch_suffix}"
+agents_dst="${app_path}/Contents/Resources/agents"
+if [[ -f "${agents_src}" ]]; then
+    mkdir -p "${agents_dst}"
+    cp "${agents_src}" "${agents_dst}/dsh-acp"
+    chmod +x "${agents_dst}/dsh-acp"
+else
+    echo "cargo::warning=Missing ${agents_src}; the DeepSeek agent will not be available in this bundle."
+fi
+
 # DocumentTypes.plist references CFBundleTypeIconFile "Document", so the bundle must contain Document.icns.
 # We use the app icon as a placeholder document icon for now.
 document_icon_source="crates/wu/resources/Document.icns"

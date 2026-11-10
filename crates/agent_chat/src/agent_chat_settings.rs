@@ -24,7 +24,7 @@ pub struct AgentChatSettings {
     pub notify_only_in_background: bool,
     pub auto_compact_tokens: Option<u64>,
     pub default_effort: Option<ReasoningLevel>,
-    default_permissions: [(AgentKind, PermissionMode); 3],
+    default_permissions: Vec<(AgentKind, PermissionMode)>,
     agents: Vec<AgentKind>,
     pub steer_while_working: bool,
     pub confirm_quit_while_working: bool,
@@ -62,6 +62,8 @@ impl Settings for AgentChatSettings {
             (AgentKind::Claude, shown.claude_code),
             (AgentKind::Codex, shown.codex),
             (AgentKind::Opencode, shown.opencode),
+            (AgentKind::DeepSeek, shown.dsh),
+            (AgentKind::Pi, shown.pi),
         ]
         .into_iter()
         .filter(|(_, shown)| shown.unwrap_or(true))
@@ -90,7 +92,7 @@ impl Settings for AgentChatSettings {
                     .clamped()
             }),
             default_effort: effort(content.default_effort.unwrap_or_default()),
-            default_permissions: [
+            default_permissions: vec![
                 (
                     AgentKind::Claude,
                     claude_permission(permission.claude_code.unwrap_or_default()),
@@ -102,6 +104,14 @@ impl Settings for AgentChatSettings {
                 (
                     AgentKind::Opencode,
                     opencode_permission(permission.opencode.unwrap_or_default()),
+                ),
+                (
+                    AgentKind::DeepSeek,
+                    opencode_permission(permission.dsh.unwrap_or_default()),
+                ),
+                (
+                    AgentKind::Pi,
+                    opencode_permission(permission.pi.unwrap_or_default()),
                 ),
             ],
             agents,
@@ -173,6 +183,8 @@ impl AgentKind {
             AgentChatAgent::ClaudeCode => Some(AgentKind::Claude),
             AgentChatAgent::Codex => Some(AgentKind::Codex),
             AgentChatAgent::Opencode => Some(AgentKind::Opencode),
+            AgentChatAgent::DeepSeek => Some(AgentKind::DeepSeek),
+            AgentChatAgent::Pi => Some(AgentKind::Pi),
         }
     }
 
@@ -181,6 +193,8 @@ impl AgentKind {
             AgentKind::Claude => AgentChatAgent::ClaudeCode,
             AgentKind::Codex => AgentChatAgent::Codex,
             AgentKind::Opencode => AgentChatAgent::Opencode,
+            AgentKind::DeepSeek => AgentChatAgent::DeepSeek,
+            AgentKind::Pi => AgentChatAgent::Pi,
         }
     }
 }

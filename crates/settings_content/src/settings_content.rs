@@ -1178,6 +1178,10 @@ pub enum AgentChatAgent {
     Codex,
     #[strum(serialize = "OpenCode")]
     Opencode,
+    #[strum(serialize = "DeepSeek")]
+    DeepSeek,
+    #[strum(serialize = "Pi")]
+    Pi,
 }
 
 #[with_fallible_options]
@@ -1189,6 +1193,10 @@ pub struct AgentChatDefaultPermissionContent {
     pub codex: Option<CodexPermissionDefault>,
     /// Default: "auto"
     pub opencode: Option<OpencodePermissionDefault>,
+    /// Default: "auto"
+    pub dsh: Option<OpencodePermissionDefault>,
+    /// Default: "auto"
+    pub pi: Option<OpencodePermissionDefault>,
 }
 
 #[with_fallible_options]
@@ -1200,6 +1208,10 @@ pub struct AgentChatAgentsContent {
     pub codex: Option<bool>,
     /// Default: true
     pub opencode: Option<bool>,
+    /// Default: true
+    pub dsh: Option<bool>,
+    /// Default: true
+    pub pi: Option<bool>,
 }
 
 #[with_fallible_options]

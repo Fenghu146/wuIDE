@@ -30,6 +30,12 @@ fn missing_agent_message(agent: HarnessId) -> i18n::SharedString {
             "Codex isn't installed. Install it, or use OpenCode to connect your own API or a local model."
         ),
         HarnessId::Opencode => i18n::t!("OpenCode isn't installed. Install it and try again."),
+        HarnessId::Dsh => i18n::t!(
+            "The DeepSeek agent (dsh-acp) isn't available. Bundle it or install it and try again."
+        ),
+        HarnessId::Pi => {
+            i18n::t!("The Pi agent (pi-acp) isn't available. Install it and try again.")
+        }
     }
 }
 
@@ -138,6 +144,8 @@ pub trait Harness: Send + Sync {
 }
 
 pub mod accounts;
+pub mod acp;
+pub use acp::AcpHarness;
 mod catalog;
 mod catalog_failure;
 pub use catalog_failure::{CatalogFailure, CatalogFailureCode};

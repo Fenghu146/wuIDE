@@ -277,7 +277,9 @@ impl Stores {
         match harness {
             HarnessId::ClaudeCode => self.activate_claude(&slot).await,
             HarnessId::Codex => self.activate_codex(&slot),
-            HarnessId::Opencode => Err(i18n::translate(OPENCODE_NO_ACCOUNTS).to_string()),
+            HarnessId::Opencode | HarnessId::Dsh | HarnessId::Pi => {
+                Err(i18n::translate(OPENCODE_NO_ACCOUNTS).to_string())
+            }
         }
     }
 
@@ -354,7 +356,7 @@ impl Stores {
         let live_key = match harness {
             HarnessId::ClaudeCode => self.claude_identity().map(|identity| identity.0),
             HarnessId::Codex => self.detect_codex().map(|live| live.account_key),
-            HarnessId::Opencode => None,
+            HarnessId::Opencode | HarnessId::Dsh | HarnessId::Pi => None,
         };
         if live_key.is_some_and(|key| slot_id_for(harness, &key) == account_id)
             && let Some(Detected {
@@ -369,7 +371,7 @@ impl Stores {
         match harness {
             HarnessId::ClaudeCode => claude_usage_request(&slot.credentials),
             HarnessId::Codex => codex_usage_request(&slot.credentials),
-            HarnessId::Opencode => {
+            HarnessId::Opencode | HarnessId::Dsh | HarnessId::Pi => {
                 Err(i18n::translate(crate::usage::OPENCODE_NO_USAGE).to_string())
             }
         }
@@ -392,7 +394,7 @@ impl Stores {
         let live = match harness {
             HarnessId::ClaudeCode => self.detect_claude().await,
             HarnessId::Codex => self.detect_codex(),
-            HarnessId::Opencode => None,
+            HarnessId::Opencode | HarnessId::Dsh | HarnessId::Pi => None,
         };
         if let Some(live) = &live
             && let Ok(Some(credentials)) = &live.credentials
@@ -561,6 +563,8 @@ fn harness_slug(harness: HarnessId) -> &'static str {
         HarnessId::ClaudeCode => "claude-code",
         HarnessId::Codex => "codex",
         HarnessId::Opencode => "opencode",
+        HarnessId::Dsh => "dsh",
+        HarnessId::Pi => "pi",
     }
 }
 

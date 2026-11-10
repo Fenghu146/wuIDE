@@ -77,6 +77,11 @@ function PrepareForBundle {
     }
     New-Item -Path "$innoDir" -ItemType Directory -Force
     Copy-Item -Path "$workspace\crates\wu\resources\windows\*" -Destination "$innoDir" -Recurse -Force
+    New-Item -Path "$innoDir\agents" -ItemType Directory -Force
+    Copy-Item -Path "$workspace\crates\wu\resources\agents\*.exe" -Destination "$innoDir\agents" -Force
+    if (Test-Path "$workspace\crates\wu\resources\agents\node_modules") {
+        Copy-Item -Path "$workspace\crates\wu\resources\agents\node_modules" -Destination "$innoDir\agents" -Recurse -Force
+    }
     New-Item -Path "$innoDir\make_appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\bin" -ItemType Directory -Force

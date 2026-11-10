@@ -1,6 +1,6 @@
 use crate::{
-    AgentChatSettings, AgentKind, ContinueSavedChat, NewClaudeChat, NewCodexChat, NewOpencodeChat,
-    ToggleFocus,
+    AgentChatSettings, AgentKind, ContinueSavedChat, NewClaudeChat, NewCodexChat,
+    NewDeepSeekChat, NewOpencodeChat, NewPiChat, ToggleFocus,
     chat_style::{accent, ink, selected_row, text_faint, ui, wash},
     chat_view::ChatView,
     session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, SessionSummary},
@@ -77,6 +77,16 @@ pub fn init(cx: &mut App) {
             .register_action(|workspace, _: &NewOpencodeChat, window, cx| {
                 if agent_chat_enabled(cx) {
                     new_chat(workspace, AgentKind::Opencode, window, cx);
+                }
+            })
+            .register_action(|workspace, _: &NewDeepSeekChat, window, cx| {
+                if agent_chat_enabled(cx) {
+                    new_chat(workspace, AgentKind::DeepSeek, window, cx);
+                }
+            })
+            .register_action(|workspace, _: &NewPiChat, window, cx| {
+                if agent_chat_enabled(cx) {
+                    new_chat(workspace, AgentKind::Pi, window, cx);
                 }
             })
             .register_action(|workspace, _: &ContinueSavedChat, window, cx| {
@@ -892,11 +902,11 @@ impl AgentPanel {
         let harness_icon = match session.kind {
             AgentKind::Claude => IconName::AgentClaude,
             AgentKind::Codex => IconName::AgentCodex,
-            AgentKind::Opencode => IconName::AgentOpencode,
+            AgentKind::Opencode | AgentKind::DeepSeek | AgentKind::Pi => IconName::AgentOpencode,
         };
         let harness_tint: Option<Hsla> = match session.kind {
             AgentKind::Claude => Some(rgb(CLAUDE_BRAND).into()),
-            AgentKind::Codex | AgentKind::Opencode => None,
+            AgentKind::Codex | AgentKind::Opencode | AgentKind::DeepSeek | AgentKind::Pi => None,
         };
         let title_content = match renaming {
             Some(field) => self.rename_field(&field.editor, cx),
@@ -1698,6 +1708,8 @@ pub(crate) fn new_chat_action(kind: AgentKind) -> Box<dyn Action> {
         AgentKind::Claude => Box::new(NewClaudeChat),
         AgentKind::Codex => Box::new(NewCodexChat),
         AgentKind::Opencode => Box::new(NewOpencodeChat),
+        AgentKind::DeepSeek => Box::new(NewDeepSeekChat),
+        AgentKind::Pi => Box::new(NewPiChat),
     }
 }
 

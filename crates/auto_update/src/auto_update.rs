@@ -570,6 +570,14 @@ impl AutoUpdater {
     }
 
     pub fn poll(&mut self, check_type: UpdateCheckType, cx: &mut Context<Self>) {
+        // This build is a private fork that ships its own binary; pulling an
+        // upstream release would overwrite our changes. Keep the action inert
+        // instead of contacting GitHub.
+        let _ = check_type;
+        self.status = AutoUpdateStatus::Idle;
+        cx.notify();
+        return;
+
         if check_type.is_manual() {
             self.dismissed_status = None;
         }

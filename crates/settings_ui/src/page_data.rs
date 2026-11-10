@@ -8045,7 +8045,7 @@ fn agent_chat_page() -> SettingsPage {
         ]
     }
 
-    fn agents_section() -> [SettingsPageItem; 5] {
+    fn agents_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader(n!("Agents")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -8154,6 +8154,64 @@ fn agent_chat_page() -> SettingsPage {
                             .get_or_insert_default();
                         agents.opencode = value;
                         keep_one_agent_shown(agents, |agents| &mut agents.opencode);
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("DeepSeek"),
+                description: n!(
+                    "Show DeepSeek in the new chat menu and in Continue Saved Chat. At least one agent stays shown."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("agent_chat.agents.dsh"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent_chat
+                            .as_ref()?
+                            .agents
+                            .as_ref()?
+                            .dsh
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        let agents = settings_content
+                            .agent_chat
+                            .get_or_insert_default()
+                            .agents
+                            .get_or_insert_default();
+                        agents.dsh = value;
+                        keep_one_agent_shown(agents, |agents| &mut agents.dsh);
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Pi"),
+                description: n!(
+                    "Show Pi in the new chat menu and in Continue Saved Chat. At least one agent stays shown."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("agent_chat.agents.pi"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent_chat
+                            .as_ref()?
+                            .agents
+                            .as_ref()?
+                            .pi
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        let agents = settings_content
+                            .agent_chat
+                            .get_or_insert_default()
+                            .agents
+                            .get_or_insert_default();
+                        agents.pi = value;
+                        keep_one_agent_shown(agents, |agents| &mut agents.pi);
                     },
                 }),
                 metadata: None,

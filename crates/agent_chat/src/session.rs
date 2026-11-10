@@ -1,8 +1,8 @@
 use agent_harness::{
-    AgentEvent, CancellationToken, ClaudeHarness, CodexHarness, DoneStatus, ExternalSession,
-    Harness, HarnessId, Model, OpencodeHarness, PermissionMode, ReasoningLevel, RunControls,
-    RunRequest, SkillRef, SlashCommand, SteerMessage, ToolCall, UserInputAnswer, UserInputQuestion,
-    usage::PlanUsage,
+    AcpHarness, AgentEvent, CancellationToken, ClaudeHarness, CodexHarness, DoneStatus,
+    ExternalSession, Harness, HarnessId, Model, OpencodeHarness, PermissionMode, ReasoningLevel,
+    RunControls, RunRequest, SkillRef, SlashCommand, SteerMessage, ToolCall, UserInputAnswer,
+    UserInputQuestion, usage::PlanUsage,
 };
 use anyhow::{Context as _, Result};
 use collections::{HashMap, HashSet};
@@ -167,6 +167,8 @@ impl AgentKind {
             AgentKind::Claude => HarnessId::ClaudeCode,
             AgentKind::Codex => HarnessId::Codex,
             AgentKind::Opencode => HarnessId::Opencode,
+            AgentKind::DeepSeek => HarnessId::Dsh,
+            AgentKind::Pi => HarnessId::Pi,
         }
     }
 
@@ -175,6 +177,8 @@ impl AgentKind {
             AgentKind::Claude => Arc::new(ClaudeHarness::new()),
             AgentKind::Codex => Arc::new(CodexHarness::new()),
             AgentKind::Opencode => Arc::new(OpencodeHarness::new()),
+            AgentKind::DeepSeek => Arc::new(AcpHarness::deepseek()),
+            AgentKind::Pi => Arc::new(AcpHarness::pi()),
         }
     }
 }
