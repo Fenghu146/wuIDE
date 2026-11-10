@@ -4,6 +4,12 @@ set -euo pipefail
 source script/lib/blob-store.sh
 
 build_flag="--release"
+# Extra cargo features for the app binary. Machines without Xcode (no `xcrun metal`)
+# can pass `gpui_platform/runtime_shaders` to compile the Metal shaders at runtime.
+extra_features=""
+if [[ -n "${WU_EXTRA_FEATURES:-}" ]]; then
+    extra_features="--features ${WU_EXTRA_FEATURES}"
+fi
 zed_features=""
 remote_server_features=""
 target_dir="release"
@@ -89,20 +95,22 @@ else
 fi
 
 # Generate the licenses first, so they can be baked into the binaries
-script/generate-licenses
+if [[ -z "${WU_SKIP_LICENSES:-}" ]]; then
+    script/generate-licenses
+fi
 
 rustup target add $target_triple
 
 echo "Compiling wu binaries"
 if [[ "$target_dir" = "release" ]]; then
-    cargo --config .cargo/bundle-config.toml rustc ${build_flag} --package wu --bin wu --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
+    cargo --config .cargo/bundle-config.toml rustc ${build_flag} ${extra_features} --package wu --bin wu --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
     cargo --config .cargo/bundle-config.toml build ${build_flag} --package cli --target $target_triple
 else
-    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} --package wu --package cli --target $target_triple
+    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} ${extra_features} --package wu --package cli --target $target_triple
 fi
 # Build remote_server in separate invocation to prevent feature unification from other crates
 # from influencing dynamic libraries required by it.
-cargo --config .cargo/bundle-config.toml build ${build_flag} ${remote_server_features} --package remote_server --target $target_triple
+cargo --config .cargo/bundle-config.toml build ${build_flag} ${remote_server_features} ${extra_features} --package remote_server --target $target_triple
 
 echo "Creating application bundle"
 pushd crates/wu
@@ -128,6 +136,28 @@ if [[ -f "${agents_src}" ]]; then
     chmod +x "${agents_dst}/dsh-acp"
 else
     echo "cargo::warning=Missing ${agents_src}; the DeepSeek agent will not be available in this bundle."
+fi
+
+# Pi runs through a bundled Node runtime (agents/node) plus its JS dependencies
+# (pi-acp and @earendil-works/pi-coding-agent inside agents/node_modules).
+node_src="crates/wu/resources/agents/node"
+if [[ -f "${node_src}" ]]; then
+    mkdir -p "${agents_dst}"
+    cp "${node_src}" "${agents_dst}/node"
+    chmod +x "${agents_dst}/node"
+else
+    echo "cargo::warning=Missing ${node_src}; the Pi agent will not be available in this bundle."
+fi
+
+node_modules_src="crates/wu/resources/agents/node_modules"
+if [[ -d "${node_modules_src}" ]]; then
+    mkdir -p "${agents_dst}"
+    cp -R "${node_modules_src}" "${agents_dst}/node_modules"
+    # The npm shims come from a Windows checkout, where the POSIX launchers have
+    # no executable bit. pi-acp spawns `.bin/pi` directly, so restore it here.
+    find "${agents_dst}/node_modules/.bin" -type f ! -name '*.cmd' ! -name '*.ps1' -exec chmod +x {} +
+else
+    echo "cargo::warning=Missing ${node_modules_src}; the Pi agent will not be available in this bundle."
 fi
 
 # DocumentTypes.plist references CFBundleTypeIconFile "Document", so the bundle must contain Document.icns.
