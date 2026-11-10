@@ -259,11 +259,10 @@ impl Harness for AcpHarness {
 }
 
 impl AcpHarness {
-    /// Enumerate the models the bundled Pi agent can select, read from its
-    /// isolated config rather than spawning a throwaway session (which would
-    /// race the agent's own session store). Order matters: the first entry is
-    /// Wu's default, so the reachable local model leads, followed by the user's
-    /// other configured providers and their authenticated catalogues.
+    /// Enumerate the models the bundled Pi agent can select, read from the same
+    /// `models.json` cc-switch writes for Pi (mirrored into the isolated home by
+    /// `prepare_pi_home`), so the picker follows whatever the user configures
+    /// there. Providers without a credential are skipped — Pi cannot use them.
     fn pi_models(&self) -> Option<Vec<Model>> {
         let launch = self.resolve_launch().ok()?;
         let (_home, agent_dir) = prepare_pi_home(&launch.program)?;
@@ -271,37 +270,21 @@ impl AcpHarness {
         let mut models = Vec::new();
         let mut seen = HashSet::new();
 
-        push_pi_model(
-            &mut models,
-            &mut seen,
-            &format!("{LOCAL_PROVIDER_ID}/{PI_DEFAULT_MODEL}"),
-            &format!("{LOCAL_PROVIDER_ID}/DeepSeek V4.1 Flash"),
-            &ladder,
-        );
+        let json = read_json(&agent_dir.join("models.json"))?;
+        let providers = provider_entries(&json)?;
 
-        if let Some(json) = read_json(&agent_dir.join("models.json")) {
-            if let Some(providers) = provider_entries(&json) {
-                for (provider, entry) in providers {
-                    let has_key = entry
-                        .get("apiKey")
-                        .and_then(Value::as_str)
-                        .is_some_and(|key| !key.is_empty());
-                    if has_key {
-                        collect_models(&mut models, &mut seen, provider, entry, &ladder);
-                    }
-                }
-            }
-        }
-
-        // Pi only offers a provider it has credentials for; the model list then
-        // comes from the shared catalogue in `models-store.json`.
-        let auth = read_json(&agent_dir.join("auth.json")).unwrap_or_else(|| json!({}));
-        let store = read_json(&agent_dir.join("models-store.json")).unwrap_or_else(|| json!({}));
-        if let (Some(authed), Some(store_providers)) = (auth.as_object(), provider_entries(&store)) {
-            for provider in authed.keys() {
-                if let Some(entry) = store_providers.get(provider) {
-                    collect_models(&mut models, &mut seen, provider, entry, &ladder);
-                }
+        // The local provider leads so it becomes Wu's default; the rest keep the
+        // order cc-switch wrote them in.
+        let mut names: Vec<&String> = providers.keys().collect();
+        names.sort_by_key(|name| u8::from(name.as_str() != LOCAL_PROVIDER_ID));
+        for name in names {
+            let entry = &providers[name];
+            let has_key = entry
+                .get("apiKey")
+                .and_then(Value::as_str)
+                .is_some_and(|key| !key.is_empty());
+            if has_key {
+                collect_models(&mut models, &mut seen, name, entry, &ladder);
             }
         }
 
@@ -502,10 +485,9 @@ fn agent_data_root(program: &Path) -> PathBuf {
 /// user's existing model/credential files (but not their globally installed
 /// extensions, which would need `npm` at runtime).
 ///
-/// The isolated home also gets a provider that is reachable on this machine:
-/// the inherited `defaultProvider` is a cc-switch alias that only exists in the
-/// user's global setup, so without this Pi would fall back to a model it has no
-/// credentials for and answer every prompt with nothing.
+/// The model and credential files are mirrored from the user's global Pi config
+/// on every launch, so edits made in cc-switch (which writes that config) show
+/// up here without the user having to wipe the isolated home.
 fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     let base = agent_data_root(program);
     let home = base.join("pi-home");
@@ -519,23 +501,27 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 
     let settings_path = agent_dir.join("settings.json");
-    if !settings_path.exists() {
-        if let Some(source_home) = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-        {
-            let source_agent = source_home.join(".pi").join("agent");
-            for name in ["auth.json", "models.json", "models-store.json"] {
-                let from = source_agent.join(name);
-                let to = agent_dir.join(name);
-                if from.is_file() && !to.exists() {
-                    if let Err(error) = std::fs::copy(&from, &to) {
-                        log::warn!("failed to seed Pi {name:?}: {error}");
-                    }
+    if let Some(source_agent) = source_pi_agent_dir() {
+        for name in ["auth.json", "models.json"] {
+            let from = source_agent.join(name);
+            if from.is_file() {
+                if let Err(error) = std::fs::copy(&from, &agent_dir.join(name)) {
+                    log::warn!("failed to sync Pi {name:?}: {error}");
                 }
             }
-            let source_settings = source_agent.join("settings.json");
-            let mut value = std::fs::read_to_string(&source_settings)
+        }
+        // Seed the catalogue and settings once; Pi refreshes the catalogue on
+        // its own afterwards, and we must not resurrect globally installed
+        // extensions or `enabledModels` on every launch.
+        let store_from = source_agent.join("models-store.json");
+        let store_to = agent_dir.join("models-store.json");
+        if !store_to.exists() && store_from.is_file() {
+            if let Err(error) = std::fs::copy(&store_from, &store_to) {
+                log::warn!("failed to seed Pi models-store.json: {error}");
+            }
+        }
+        if !settings_path.exists() {
+            let mut value = std::fs::read_to_string(source_agent.join("settings.json"))
                 .ok()
                 .and_then(|text| serde_json::from_str::<Value>(&text).ok())
                 .unwrap_or_else(|| json!({}));
@@ -546,7 +532,9 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
             if let Err(error) = write_json_file(&settings_path, &value) {
                 log::warn!("failed to write Pi settings: {error}");
             }
-        } else if let Err(error) = std::fs::write(&settings_path, "{}") {
+        }
+    } else if !settings_path.exists() {
+        if let Err(error) = std::fs::write(&settings_path, "{}") {
             log::warn!("failed to write Pi settings: {error}");
         }
     }
@@ -558,9 +546,16 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     Some((home, agent_dir))
 }
 
-/// Make sure the isolated Pi home can reach a model: merge the local gateway
-/// into `models.json`, and repoint the default provider at it when the
-/// configured provider cannot be resolved from the isolated files.
+fn source_pi_agent_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join(".pi").join("agent"))
+}
+
+/// Guarantee the isolated Pi home points at a provider it can actually use.
+/// `models.json` is mirrored from cc-switch, so normally a reachable provider
+/// is already present; only when none carries a credential do we inject the
+/// built-in gateway as a last resort.
 fn ensure_local_pi_provider(agent_dir: &Path, settings_path: &Path) -> std::io::Result<()> {
     let models_path = agent_dir.join("models.json");
     let mut models = std::fs::read_to_string(&models_path)
@@ -570,38 +565,52 @@ fn ensure_local_pi_provider(agent_dir: &Path, settings_path: &Path) -> std::io::
     if !models.is_object() {
         models = json!({});
     }
-
-    let mut known: Vec<String> = Vec::new();
-    let mut models_changed = false;
     if let Some(root) = models.as_object_mut() {
         if !root.get("providers").is_some_and(Value::is_object) {
             root.insert("providers".to_owned(), json!({}));
         }
-        if let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) {
-            known.extend(providers.keys().cloned());
-            if !providers.contains_key(LOCAL_PROVIDER_ID) {
-                providers.insert(LOCAL_PROVIDER_ID.to_owned(), local_provider_entry());
-                models_changed = true;
+    }
+
+    // Pick the provider we will default to: the local gateway if present, else
+    // any provider that carries a credential, together with its first model.
+    let mut chosen: Option<(String, Option<String>)> = None;
+    if let Some(providers) = models.get("providers").and_then(Value::as_object) {
+        let mut names: Vec<&String> = providers.keys().collect();
+        names.sort_by_key(|name| u8::from(name.as_str() != LOCAL_PROVIDER_ID));
+        for name in names {
+            let entry = &providers[name];
+            let has_key = entry
+                .get("apiKey")
+                .and_then(Value::as_str)
+                .is_some_and(|key| !key.is_empty());
+            if has_key {
+                let first_model = entry
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .and_then(|list| list.first())
+                    .and_then(|model| model.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                chosen = Some((name.clone(), first_model));
+                break;
             }
         }
     }
-    if models_changed {
-        write_json_file(&models_path, &models)?;
-    }
-    known.push(LOCAL_PROVIDER_ID.to_owned());
 
-    for name in ["auth.json", "models-store.json"] {
-        let path = agent_dir.join(name);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
-        if let Some(object) = value.as_object() {
-            known.extend(object.keys().cloned());
+    if chosen.is_none() {
+        if let Some(providers) = models.get_mut("providers").and_then(Value::as_object_mut) {
+            providers.insert(LOCAL_PROVIDER_ID.to_owned(), local_provider_entry());
         }
+        write_json_file(&models_path, &models)?;
+        chosen = Some((
+            LOCAL_PROVIDER_ID.to_owned(),
+            Some(PI_DEFAULT_MODEL.to_owned()),
+        ));
     }
+
+    let Some((provider, model)) = chosen else {
+        return Ok(());
+    };
 
     let mut settings = std::fs::read_to_string(settings_path)
         .ok()
@@ -610,15 +619,48 @@ fn ensure_local_pi_provider(agent_dir: &Path, settings_path: &Path) -> std::io::
     if !settings.is_object() {
         settings = json!({});
     }
-    let configured = settings
+
+    // Names Pi treats as known providers, so a cc-switch default we cannot
+    // resolve gets corrected while a valid one is left untouched.
+    let mut known: Vec<String> = Vec::new();
+    if let Some(providers) = models.get("providers").and_then(Value::as_object) {
+        known.extend(providers.keys().cloned());
+    }
+    for name in ["auth.json", "models-store.json"] {
+        if let Some(value) = read_json(&agent_dir.join(name)) {
+            if let Some(object) = value.as_object() {
+                known.extend(object.keys().cloned());
+            }
+        }
+    }
+
+    let configured_provider = settings
         .get("defaultProvider")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !known.iter().any(|name| name == configured) {
+        .unwrap_or_default()
+        .to_owned();
+    let configured_model = settings
+        .get("defaultModel")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let mut changed = false;
+    if !known.iter().any(|name| name == &configured_provider) {
         if let Some(object) = settings.as_object_mut() {
-            object.insert("defaultProvider".to_owned(), json!(LOCAL_PROVIDER_ID));
-            object.insert("defaultModel".to_owned(), json!(PI_DEFAULT_MODEL));
+            object.insert("defaultProvider".to_owned(), json!(provider));
+            if let Some(model) = &model {
+                object.insert("defaultModel".to_owned(), json!(model));
+            }
         }
+        changed = true;
+    } else if configured_model.is_empty() {
+        if let (Some(model), Some(object)) = (&model, settings.as_object_mut()) {
+            object.insert("defaultModel".to_owned(), json!(model));
+            changed = true;
+        }
+    }
+    if changed {
         write_json_file(settings_path, &settings)?;
     }
     Ok(())
