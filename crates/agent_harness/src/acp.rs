@@ -75,8 +75,9 @@ pub struct AcpHarness {
 struct Launch {
     program: PathBuf,
     args: Vec<String>,
-    /// Directory prepended to PATH for the child (e.g. bundled node_modules/.bin).
-    path_prepend: Option<PathBuf>,
+    /// Directories prepended to PATH for the child: the bundled runtime's own
+    /// directory (so npm shims find our `node`) and `node_modules/.bin`.
+    path_prepend: Vec<PathBuf>,
 }
 
 impl AcpHarness {
@@ -139,10 +140,20 @@ impl AcpHarness {
         }
         args.extend(self.preset.args.iter().map(|a| (*a).to_owned()));
         self.push_data_dir(&mut args, &program);
-        let path_prepend = program.parent().and_then(|parent| {
-            let bin = parent.join("node_modules").join(".bin");
-            bin.is_dir().then_some(bin)
-        });
+        let path_prepend = program
+            .parent()
+            .map(|parent| {
+                let bin = parent.join("node_modules").join(".bin");
+                // npm's POSIX shims exec `node` from PATH, so the bundled node
+                // next to them has to come first for the runtime to be used
+                // even on machines without a system Node install.
+                let mut dirs = vec![parent.to_path_buf()];
+                if bin.is_dir() {
+                    dirs.push(bin);
+                }
+                dirs
+            })
+            .unwrap_or_default();
         Launch {
             program,
             args,
@@ -770,8 +781,8 @@ async fn drive_inner(
         // Keep the child out of our console window.
         command.creation_flags(0x0800_0000);
     }
-    if let Some(dir) = &launch.path_prepend {
-        let mut paths = vec![dir.clone()];
+    if !launch.path_prepend.is_empty() {
+        let mut paths = launch.path_prepend.clone();
         if let Some(existing) = std::env::var_os("PATH") {
             paths.extend(std::env::split_paths(&existing));
         }
