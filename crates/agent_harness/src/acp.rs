@@ -23,6 +23,17 @@ use crate::{Harness, HarnessError, RunRequest};
 
 const ACP_PROTOCOL_VERSION: i64 = 1;
 
+// The isolated Pi home inherits the user's global `settings.json`, whose
+// `defaultProvider` (a cc-switch alias) does not exist inside the isolated
+// model store. Without a valid provider Pi falls back to a model with no
+// credentials and answers every prompt with an empty message. Seed a provider
+// that actually resolves — the local model gateway this build talks to — and
+// point the default at it unless the configured provider is one we can reach.
+const LOCAL_PROVIDER_ID: &str = "magpie";
+const LOCAL_PROVIDER_BASE_URL: &str = "http://127.0.0.1:3425/v1";
+const LOCAL_PROVIDER_API_KEY: &str = "magpie";
+const PI_DEFAULT_MODEL: &str = "auto/deepseek-v4.1-flash";
+
 #[derive(Clone)]
 struct AcpPreset {
     id: HarnessId,
@@ -305,6 +316,11 @@ fn agent_data_root(program: &Path) -> PathBuf {
 /// Build an isolated `$HOME` for the bundled Pi agent and seed it with the
 /// user's existing model/credential files (but not their globally installed
 /// extensions, which would need `npm` at runtime).
+///
+/// The isolated home also gets a provider that is reachable on this machine:
+/// the inherited `defaultProvider` is a cc-switch alias that only exists in the
+/// user's global setup, so without this Pi would fall back to a model it has no
+/// credentials for and answer every prompt with nothing.
 fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     let base = agent_data_root(program);
     let home = base.join("pi-home");
@@ -328,7 +344,9 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
                 let from = source_agent.join(name);
                 let to = agent_dir.join(name);
                 if from.is_file() && !to.exists() {
-                    let _ = std::fs::copy(&from, &to);
+                    if let Err(error) = std::fs::copy(&from, &to) {
+                        log::warn!("failed to seed Pi {name:?}: {error}");
+                    }
                 }
             }
             let source_settings = source_agent.join("settings.json");
@@ -340,16 +358,165 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
                 object.remove("packages");
                 object.remove("enabledModels");
             }
-            let _ = std::fs::write(
-                &settings_path,
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".into()),
-            );
-        } else {
-            let _ = std::fs::write(&settings_path, "{}");
+            if let Err(error) = write_json_file(&settings_path, &value) {
+                log::warn!("failed to write Pi settings: {error}");
+            }
+        } else if let Err(error) = std::fs::write(&settings_path, "{}") {
+            log::warn!("failed to write Pi settings: {error}");
         }
     }
 
+    if let Err(error) = ensure_local_pi_provider(&agent_dir, &settings_path) {
+        log::warn!("failed to configure the Pi model provider: {error}");
+    }
+
     Some((home, agent_dir))
+}
+
+/// Make sure the isolated Pi home can reach a model: merge the local gateway
+/// into `models.json`, and repoint the default provider at it when the
+/// configured provider cannot be resolved from the isolated files.
+fn ensure_local_pi_provider(agent_dir: &Path, settings_path: &Path) -> std::io::Result<()> {
+    let models_path = agent_dir.join("models.json");
+    let mut models = std::fs::read_to_string(&models_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or_else(|| json!({}));
+    if !models.is_object() {
+        models = json!({});
+    }
+
+    let mut known: Vec<String> = Vec::new();
+    let mut models_changed = false;
+    if let Some(root) = models.as_object_mut() {
+        if !root.get("providers").is_some_and(Value::is_object) {
+            root.insert("providers".to_owned(), json!({}));
+        }
+        if let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) {
+            known.extend(providers.keys().cloned());
+            if !providers.contains_key(LOCAL_PROVIDER_ID) {
+                providers.insert(LOCAL_PROVIDER_ID.to_owned(), local_provider_entry());
+                models_changed = true;
+            }
+        }
+    }
+    if models_changed {
+        write_json_file(&models_path, &models)?;
+    }
+    known.push(LOCAL_PROVIDER_ID.to_owned());
+
+    for name in ["auth.json", "models-store.json"] {
+        let path = agent_dir.join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if let Some(object) = value.as_object() {
+            known.extend(object.keys().cloned());
+        }
+    }
+
+    let mut settings = std::fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or_else(|| json!({}));
+    if !settings.is_object() {
+        settings = json!({});
+    }
+    let configured = settings
+        .get("defaultProvider")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !known.iter().any(|name| name == configured) {
+        if let Some(object) = settings.as_object_mut() {
+            object.insert("defaultProvider".to_owned(), json!(LOCAL_PROVIDER_ID));
+            object.insert("defaultModel".to_owned(), json!(PI_DEFAULT_MODEL));
+        }
+        write_json_file(settings_path, &settings)?;
+    }
+    Ok(())
+}
+
+fn local_provider_entry() -> Value {
+    json!({
+        "name": LOCAL_PROVIDER_ID,
+        "baseUrl": LOCAL_PROVIDER_BASE_URL,
+        "api": "openai-completions",
+        "apiKey": LOCAL_PROVIDER_API_KEY,
+        "models": [
+            {
+                "id": PI_DEFAULT_MODEL,
+                "name": "DeepSeek V4.1 Flash",
+                "reasoning": true,
+                "input": ["text", "image"],
+                "contextWindow": 1_048_576,
+                "maxTokens": 384_000
+            },
+            {
+                "id": "auto/glm-5.3-flash",
+                "name": "GLM-5.3 Flash",
+                "reasoning": true,
+                "input": ["text"],
+                "contextWindow": 200_000,
+                "maxTokens": 32_000
+            }
+        ]
+    })
+}
+
+fn write_json_file(path: &Path, value: &Value) -> std::io::Result<()> {
+    let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_owned());
+    std::fs::write(path, text)
+}
+
+/// Read the real error Pi recorded for a session, because ACP itself only
+/// reports `end_turn`. Pi writes the assistant message (with `stopReason` and
+/// `errorMessage`) to its native transcript; the ACP bridge maps the session id
+/// to that file in `session-map.json`. Returns the error message of the most
+/// recent assistant message when that turn ended in an error, else `None`.
+fn pi_error_message(agent_dir: Option<&Path>, session_id: &str) -> Option<String> {
+    let agent_dir = agent_dir?;
+    let acp_dir = agent_dir.parent()?.join("pi-acp");
+    let map_text = std::fs::read_to_string(acp_dir.join("session-map.json")).ok()?;
+    let map: Value = serde_json::from_str(&map_text).ok()?;
+    let session_file = map
+        .get("sessions")?
+        .get(session_id)?
+        .get("sessionFile")?
+        .as_str()?;
+    let transcript = std::fs::read_to_string(session_file).ok()?;
+    for line in transcript.lines().rev() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(message) = entry.get("message") else {
+            continue;
+        };
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        // Only the most recent assistant message reflects this turn; stop there
+        // rather than reporting an error left over from an earlier turn.
+        if message.get("stopReason").and_then(Value::as_str) != Some("error") {
+            return None;
+        }
+        let detail = message
+            .get("errorMessage")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        return Some(if detail.is_empty() {
+            "unknown error".to_owned()
+        } else {
+            detail.to_owned()
+        });
+    }
+    None
 }
 
 async fn drive_inner(
@@ -402,13 +569,16 @@ async fn drive_inner(
     // `$HOME/.pi`. Point them at a private home inside Wu's own data directory so
     // they never write into (or read plugin state from) the machine-wide install,
     // and so the sandboxed app never has to touch the user's real home.
-    if harness_id == HarnessId::Pi
-        && let Some((home, agent_dir)) = prepare_pi_home(&launch.program)
-    {
+    let pi_home = if harness_id == HarnessId::Pi {
+        prepare_pi_home(&launch.program)
+    } else {
+        None
+    };
+    if let Some((home, agent_dir)) = &pi_home {
         command
-            .env("USERPROFILE", &home)
-            .env("HOME", &home)
-            .env("PI_CODING_AGENT_DIR", &agent_dir);
+            .env("USERPROFILE", home.as_os_str())
+            .env("HOME", home.as_os_str())
+            .env("PI_CODING_AGENT_DIR", agent_dir.as_os_str());
     }
     let mut child: Child = command.spawn().map_err(|error| {
         HarnessError::NotInstalled(format!("{} ({error})", launch.program.display()))
@@ -521,6 +691,7 @@ async fn drive_inner(
 
     let mut final_status = DoneStatus::Completed;
     let mut final_error: Option<String> = None;
+    let mut saw_output = false;
 
     loop {
         tokio::select! {
@@ -553,8 +724,8 @@ async fn drive_inner(
             message = incoming.recv() => {
                 match message {
                     Some(Incoming::Notification { method, params }) => {
-                        if method == "session/update" {
-                            handle_update(&params, events).await;
+                        if method == "session/update" && handle_update(&params, events).await {
+                            saw_output = true;
                         }
                     }
                     Some(Incoming::Request { id, method, params }) => {
@@ -575,6 +746,25 @@ async fn drive_inner(
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.start_kill();
         let _ = tokio::time::timeout(kill_grace, child.wait()).await;
+    }
+
+    // Pi reports a failed model call as `end_turn` over ACP and never forwards
+    // the error text (it may even stream retry notices as normal text), so the
+    // turn would otherwise look like a successful reply. The native transcript
+    // still records the truth, so consult it and surface the real cause.
+    if matches!(final_status, DoneStatus::Completed) {
+        if let Some(detail) = pi_error_message(
+            pi_home.as_ref().map(|(_, agent_dir)| agent_dir.as_path()),
+            &session_id,
+        ) {
+            final_status = DoneStatus::Errored;
+            final_error = Some(format!("The model request failed: {detail}"));
+        } else if !saw_output {
+            final_status = DoneStatus::Errored;
+            final_error = Some(
+                "The agent finished without returning any output. The model request may have failed (invalid API key, expired key, or network error).".to_owned(),
+            );
+        }
     }
 
     send(
@@ -679,17 +869,21 @@ fn permission_response(permission: PermissionMode, params: &Value) -> Value {
     }
 }
 
-async fn handle_update(params: &Value, events: &EventSender) {
+async fn handle_update(params: &Value, events: &EventSender) -> bool {
     let Some(update) = params.get("update") else {
-        return;
+        return false;
     };
     let kind = update
         .get("sessionUpdate")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let mut produced = false;
     match kind {
         "agent_message_chunk" => {
             if let Some(text) = content_text(update.get("content")) {
+                if !text.trim().is_empty() {
+                    produced = true;
+                }
                 send(events, AgentEvent::TextDelta { text }).await;
             }
         }
@@ -700,6 +894,7 @@ async fn handle_update(params: &Value, events: &EventSender) {
         }
         "tool_call" => {
             if let Some(id) = update.get("toolCallId").and_then(Value::as_str) {
+                produced = true;
                 let call = map_tool_call(update);
                 send(
                     events,
@@ -716,6 +911,7 @@ async fn handle_update(params: &Value, events: &EventSender) {
             if matches!(status, Some("completed") | Some("failed"))
                 && let Some(id) = update.get("toolCallId").and_then(Value::as_str)
             {
+                produced = true;
                 let is_error = status == Some("failed");
                 let output = content_text(update.get("content"));
                 send(
@@ -731,6 +927,7 @@ async fn handle_update(params: &Value, events: &EventSender) {
             }
         }
         "plan" => {
+            produced = true;
             let items = map_plan(update);
             send(
                 events,
@@ -754,6 +951,7 @@ async fn handle_update(params: &Value, events: &EventSender) {
         }
         _ => {}
     }
+    produced
 }
 
 fn content_text(content: Option<&Value>) -> Option<String> {
