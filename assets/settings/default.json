@@ -131,12 +131,16 @@
       "claude_code": "auto",
       "codex": "auto",
       "opencode": "auto",
+      "dsh": "auto",
+      "pi": "auto",
     },
     // Agents shown in the new chat menu and in Continue Saved Chat.
     "agents": {
       "claude_code": true,
       "codex": true,
       "opencode": true,
+      "dsh": true,
+      "pi": true,
     },
     // "queue" waits for the agent to finish; "steer" sends the message right away.
     "while_working": "queue",

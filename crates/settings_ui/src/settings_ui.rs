@@ -1210,20 +1210,12 @@ impl SettingsPageItem {
              sub_field: bool,
              cx: &mut Context<SettingsWindow>| {
                 let renderer = cx.default_global::<SettingFieldRenderer>().clone();
-                let (_, found) = setting_item.field.file_set_in(file.clone(), cx);
 
                 let renderers = renderer.renderers.borrow();
 
                 let field_renderer =
                     renderers.get(&AnySettingField::type_id(setting_item.field.as_ref()));
-                let field_renderer_or_warning =
-                    field_renderer.ok_or("NO RENDERER").and_then(|renderer| {
-                        if cfg!(debug_assertions) && !found {
-                            Err("NO DEFAULT")
-                        } else {
-                            Ok(renderer)
-                        }
-                    });
+                let field_renderer_or_warning = field_renderer.ok_or("NO RENDERER");
 
                 let field = match field_renderer_or_warning {
                     Ok(field_renderer) => window.with_id(item_index, |window| {
