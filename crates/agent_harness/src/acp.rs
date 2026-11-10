@@ -5,6 +5,7 @@
 //! `pi-acp` for Pi). This module drives any such agent and translates its
 //! `session/update` notifications into Wu's [`AgentEvent`] stream.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,6 +34,20 @@ const LOCAL_PROVIDER_ID: &str = "magpie";
 const LOCAL_PROVIDER_BASE_URL: &str = "http://127.0.0.1:3425/v1";
 const LOCAL_PROVIDER_API_KEY: &str = "magpie";
 const PI_DEFAULT_MODEL: &str = "auto/deepseek-v4.1-flash";
+
+// Pi exposes its thinking effort as `off|minimal|low|medium|high`. Wu's slider
+// cannot express `off`, so leaving it out keeps every position an explicit
+// effort the agent understands.
+const PI_REASONING_LEVELS: &[ReasoningLevel] = &[
+    ReasoningLevel::Minimal,
+    ReasoningLevel::Low,
+    ReasoningLevel::Medium,
+    ReasoningLevel::High,
+];
+
+// ACP config option ids that pi-acp understands for `session/set_config_option`.
+const PI_MODEL_CONFIG_ID: &str = "model";
+const PI_THINKING_CONFIG_ID: &str = "thought_level";
 
 #[derive(Clone)]
 struct AcpPreset {
@@ -176,7 +191,11 @@ impl Harness for AcpHarness {
     }
 
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
-        &[]
+        if self.preset.id == HarnessId::Pi {
+            PI_REASONING_LEVELS
+        } else {
+            &[]
+        }
     }
 
     fn installed(&self) -> bool {
@@ -188,6 +207,11 @@ impl Harness for AcpHarness {
     }
 
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        if self.preset.id == HarnessId::Pi {
+            if let Some(models) = self.pi_models() {
+                return Ok(models);
+            }
+        }
         Ok(self.fallback_models())
     }
 
@@ -231,6 +255,167 @@ impl Harness for AcpHarness {
             receiver.recv().await.map(|event| (event, receiver))
         })
         .boxed())
+    }
+}
+
+impl AcpHarness {
+    /// Enumerate the models the bundled Pi agent can select, read from its
+    /// isolated config rather than spawning a throwaway session (which would
+    /// race the agent's own session store). Order matters: the first entry is
+    /// Wu's default, so the reachable local model leads, followed by the user's
+    /// other configured providers and their authenticated catalogues.
+    fn pi_models(&self) -> Option<Vec<Model>> {
+        let launch = self.resolve_launch().ok()?;
+        let (_home, agent_dir) = prepare_pi_home(&launch.program)?;
+        let ladder = PI_REASONING_LEVELS.to_vec();
+        let mut models = Vec::new();
+        let mut seen = HashSet::new();
+
+        push_pi_model(
+            &mut models,
+            &mut seen,
+            &format!("{LOCAL_PROVIDER_ID}/{PI_DEFAULT_MODEL}"),
+            &format!("{LOCAL_PROVIDER_ID}/DeepSeek V4.1 Flash"),
+            &ladder,
+        );
+
+        if let Some(json) = read_json(&agent_dir.join("models.json")) {
+            if let Some(providers) = provider_entries(&json) {
+                for (provider, entry) in providers {
+                    let has_key = entry
+                        .get("apiKey")
+                        .and_then(Value::as_str)
+                        .is_some_and(|key| !key.is_empty());
+                    if has_key {
+                        collect_models(&mut models, &mut seen, provider, entry, &ladder);
+                    }
+                }
+            }
+        }
+
+        // Pi only offers a provider it has credentials for; the model list then
+        // comes from the shared catalogue in `models-store.json`.
+        let auth = read_json(&agent_dir.join("auth.json")).unwrap_or_else(|| json!({}));
+        let store = read_json(&agent_dir.join("models-store.json")).unwrap_or_else(|| json!({}));
+        if let (Some(authed), Some(store_providers)) = (auth.as_object(), provider_entries(&store)) {
+            for provider in authed.keys() {
+                if let Some(entry) = store_providers.get(provider) {
+                    collect_models(&mut models, &mut seen, provider, entry, &ladder);
+                }
+            }
+        }
+
+        (!models.is_empty()).then_some(models)
+    }
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+}
+
+/// Both `models.json` and `models-store.json` nest providers under `providers`;
+/// tolerate a flat `{ provider: {...} }` layout too.
+fn provider_entries(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    if let Some(map) = value.get("providers").and_then(Value::as_object) {
+        return Some(map);
+    }
+    let map = value.as_object()?;
+    if !map.is_empty() && map.values().all(Value::is_object) {
+        Some(map)
+    } else {
+        None
+    }
+}
+
+fn collect_models(
+    out: &mut Vec<Model>,
+    seen: &mut HashSet<String>,
+    provider: &str,
+    entry: &Value,
+    ladder: &[ReasoningLevel],
+) {
+    let Some(list) = entry.get("models").and_then(Value::as_array) else {
+        return;
+    };
+    for model in list {
+        let Some(id) = model.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let name = model.get("name").and_then(Value::as_str).unwrap_or(id);
+        push_pi_model(
+            out,
+            seen,
+            &format!("{provider}/{id}"),
+            &format!("{provider}/{name}"),
+            ladder,
+        );
+    }
+}
+
+fn push_pi_model(
+    out: &mut Vec<Model>,
+    seen: &mut HashSet<String>,
+    id: &str,
+    label: &str,
+    ladder: &[ReasoningLevel],
+) {
+    if id.is_empty() || !seen.insert(id.to_owned()) {
+        return;
+    }
+    out.push(Model {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        description: None,
+        reasoning_levels: ladder.to_vec(),
+        options: Vec::new(),
+    });
+}
+
+fn pi_thinking_value(level: ReasoningLevel) -> &'static str {
+    match level {
+        ReasoningLevel::Minimal => "minimal",
+        ReasoningLevel::Low => "low",
+        ReasoningLevel::Medium => "medium",
+        ReasoningLevel::High => "high",
+        _ => "high",
+    }
+}
+
+/// Push the chosen model and thinking effort to Pi before a prompt. Selecting a
+/// missing model or an unsupported effort is not fatal — the run continues on
+/// the agent's current settings — so failures are logged, not surfaced.
+async fn apply_pi_selection(
+    client: &RpcClient,
+    session_id: &str,
+    model: Option<&str>,
+    reasoning: Option<ReasoningLevel>,
+) {
+    // Legacy fallback ids (`pi`, `deepseek-flash`) are not real Pi models; leave
+    // them to the agent's own default instead of sending an unknown id.
+    if let Some(model) = model.filter(|model| model.contains('/')) {
+        if let Err(error) = client
+            .request(
+                "session/set_config_option",
+                json!({"sessionId": session_id, "configId": PI_MODEL_CONFIG_ID, "value": model}),
+            )
+            .await
+        {
+            log::warn!("failed to select Pi model {model}: {error}");
+        }
+    }
+    if let Some(level) = reasoning {
+        let value = pi_thinking_value(level);
+        if let Err(error) = client
+            .request(
+                "session/set_config_option",
+                json!({"sessionId": session_id, "configId": PI_THINKING_CONFIG_ID, "value": value}),
+            )
+            .await
+        {
+            log::warn!("failed to set Pi thinking level {value}: {error}");
+        }
     }
 }
 
@@ -675,6 +860,11 @@ async fn drive_inner(
         {
             handle_request(&client, &id, &method, &params, &controls.permission);
         }
+    }
+
+    if harness_id == HarnessId::Pi {
+        apply_pi_selection(&client, &session_id, request.model.as_deref(), request.reasoning)
+            .await;
     }
 
     let assistant_message_id = uuid::Uuid::new_v4().to_string();
