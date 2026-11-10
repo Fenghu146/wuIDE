@@ -28,6 +28,11 @@ type StdoutObserver = Box<dyn Fn(&str) + Send>;
 
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
 
+/// ACP `session/load` replays the whole stored conversation as notifications
+/// before it replies; the buffer must hold that burst without blocking the
+/// stdout reader, which would otherwise deadlock the pending response.
+const INCOMING_BUFFER: usize = 65_536;
+
 #[derive(Clone)]
 pub(crate) struct RpcClient {
     next_id: Arc<AtomicI64>,
@@ -49,7 +54,7 @@ impl RpcClient {
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<String>();
         tokio::spawn(write_loop(stdin, writer_rx));
         let pending: Pending = Arc::default();
-        let (incoming_tx, incoming_rx) = mpsc::channel(256);
+        let (incoming_tx, incoming_rx) = mpsc::channel(INCOMING_BUFFER);
         let closed = Arc::new(AtomicBool::new(false));
         tokio::spawn(read_loop(
             stdout,

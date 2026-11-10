@@ -660,6 +660,23 @@ async fn drive_inner(
         .or_else(|| request.resume.clone())
         .ok_or_else(|| HarnessError::Protocol("agent did not return a sessionId".into()))?;
 
+    // ACP `session/load` replays the stored conversation as `session/update`
+    // notifications so a fresh client can rebuild its view. Wu keeps its own
+    // transcript and renders it separately, so anything queued before we send
+    // the prompt is history replay, not this turn's output. Drop it, otherwise
+    // every resumed turn shows the previous answer again. Answer any request the
+    // agent made while replaying so it is not left waiting.
+    while let Ok(message) = incoming.try_recv() {
+        if let Incoming::Request {
+            id,
+            method,
+            params,
+        } = message
+        {
+            handle_request(&client, &id, &method, &params, &controls.permission);
+        }
+    }
+
     let assistant_message_id = uuid::Uuid::new_v4().to_string();
     send(
         events,
