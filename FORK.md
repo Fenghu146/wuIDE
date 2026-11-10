@@ -57,3 +57,16 @@ cd script
 # 或仅开发构建
 cargo build -p wu --bin wu
 ```
+
+> **重要：Windows 构建产物不能带 Low 完整性标签。**
+> 如果构建目录在受限环境（例如 DSH 沙箱）里生成，`target\debug`、`wu.exe` 和 `agents\*` 会被打上
+> `Mandatory Label\Low Mandatory Level`。以 Low IL 启动的 Wu 无法写入 `%LOCALAPPDATA%\Wu`
+> 与 `%APPDATA%\Wu`，表现为启动提示“无法加载数据库文件”、设置开关全部失效、日志不落盘、
+> Pi 初始化失败。打包或分发前执行：
+>
+> ```powershell
+> icacls "$wu\target\debug\wu.exe" /setintegritylevel Medium
+> icacls "$wu\target\debug\agents" /setintegritylevel "(OI)(CI)Medium" /T /C
+> ```
+>
+> `target\debug\agents` 还必须同时具备 `node.exe` 与 `node_modules\`（Pi 的运行时）。
