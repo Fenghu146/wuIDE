@@ -58,3 +58,6 @@ xcuserdata/
 /video
 /notes
 .cache
+
+# Bundled Pi runtime for macOS (see FORK.md)
+crates/wu/resources/agents/node
