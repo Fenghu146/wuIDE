@@ -3,9 +3,9 @@ AppId={#AppId}
 AppName={#AppName}
 AppVerName={#AppDisplayName}
 AppPublisher=Farshed
-AppPublisherURL=https://github.com/dstrml/wu
-AppSupportURL=https://github.com/dstrml/wu/issues
-AppUpdatesURL=https://github.com/dstrml/wu/releases
+AppPublisherURL=https://github.com/Fenghu146/wu
+AppSupportURL=https://github.com/Fenghu146/wu/issues
+AppUpdatesURL=https://github.com/Fenghu146/wu/releases
 DefaultGroupName={#AppDisplayName}
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -67,7 +67,7 @@ Name: "{app}"; AfterInstall: DisableAppDirInheritance
 [Files]
 Source: "{#ResourcesDir}\{#AppExeName}.exe"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
 Source: "{#ResourcesDir}\bin\*"; DestDir: "{code:GetInstallDir}\bin"; Flags: ignoreversion
-Source: "{#ResourcesDir}\agents\*"; DestDir: "{code:GetInstallDir}\agents"; Flags: ignoreversion
+Source: "{#ResourcesDir}\agents\*"; DestDir: "{code:GetInstallDir}\agents"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#ResourcesDir}\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "{#ResourcesDir}\appx\*"; DestDir: "{app}\appx";  BeforeInstall: RemoveAppxPackage; AfterInstall: AddAppxPackage; Flags: ignoreversion; Check: IsWindows11OrLater
 #ifexist ResourcesDir + "\amd_ags_x64.dll"
@@ -1256,7 +1256,11 @@ Root: HKCU; Subkey: "Software\Classes\Drive\shell\{#RegValueName}\command"; Valu
 ; Environment
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{code:AddToPath|{app}\bin}"; Tasks: addtopath; Check: NeedsAddToPath(ExpandConstant('{app}\bin'))
 
-; URI Scheme
+; URI Scheme (ide is the current scheme; wu stays registered for old links)
+Root: HKCU; Subkey: "Software\Classes\ide"; ValueType: "string"; ValueData: "URL:ide Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\ide"; ValueType: "string"; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\ide\DefaultIcon"; ValueType: "string"; ValueData: "{app}\{#AppExeName}.exe,1"
+Root: HKCU; Subkey: "Software\Classes\ide\shell\open\command"; ValueType: "string"; ValueData: """{app}\{#AppExeName}.exe"" ""%1"""
 Root: HKCU; Subkey: "Software\Classes\wu"; ValueType: "string"; ValueData: "URL:wu Protocol"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\wu"; ValueType: "string"; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\wu\DefaultIcon"; ValueType: "string"; ValueData: "{app}\{#AppExeName}.exe,1"
@@ -1415,11 +1419,22 @@ begin
   RegDeleteKeyIncludingSubkeys(HKCU, Key);
 end;
 
+procedure RemoveOldInstallDir(OldName: String);
+var
+  OldDir: String;
+begin
+  OldDir := ExpandConstant('{autopf}\') + OldName;
+  if (CompareText(OldDir, ExpandConstant('{app}')) <> 0) and DirExists(OldDir) then
+    DelTree(OldDir, True, True, True);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
     RemoveOldUninstallEntry();
+    RemoveOldInstallDir('Wu');
+    RemoveOldInstallDir('Wu Dev');
     if IsUpdating() then
     begin
       SaveStringToFile(ExpandConstant('{app}\updates\versions.txt'), '{#Version}' + #13#10, True);

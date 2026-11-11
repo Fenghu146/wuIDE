@@ -193,8 +193,9 @@ function BuildInstaller {
             # Wu used Zed's AppId before it got its own, so installs from then are registered under it.
             $oldAppId = "2DB0DA96-CA55-49BB-AF4F-64AF36A86712"
             $appIconName = "app-icon"
-            # `appName` names the install directory. The installer moves an old
-            # {autopf}\Wu install to {autopf}\IDE so upgrading does not leave two copies.
+            # `appName` names the install directory. A fresh install lands in {autopf}\IDE and the
+            # post-install step deletes a leftover {autopf}\Wu; an upgrade keeps the directory it
+            # finds in the previous uninstall entry (Inno's UsePreviousAppDir), so old installs stay in {autopf}\Wu.
             $appName = "IDE"
             $appDisplayName = "IDE"
             $appSetupName = "IDE-$Architecture"
