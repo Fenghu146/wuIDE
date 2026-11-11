@@ -51,7 +51,10 @@
 - `paths::APP_NAME` 改为 `IDE`，所以用户档案目录（设置、会话、日志）现在是 `%LOCALAPPDATA%\IDE`、`~/Library/Application Support/IDE`、`~/.config/ide`。**代价**：已经在用 Wu 的机器升级后是空档案，旧配置不会自动迁移；想保留旧档案就单独回退 `paths::APP_NAME` 那一行。
 - 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`、`base_keymap: "Wu"`）、主题名（`Wu Dark` 等）、Windows 安装目录 `{autopf}\Wu` 与安装包文件名 `Wu-*.exe` / `Wu-*.dmg`（发版脚本与下载链接依赖它们）。
 - 安装器侧跟进：`bundle-windows.ps1` 打包 `IDE.exe`，`zed.iss` 的 `AppExeName` 为 IDE；显示名（Add/Remove Programs、开始菜单、右键菜单）与 Linux `.desktop` 的 `Name` 也改为 IDE，但只改标签、不改 ID 与路径。
+- 打包链路全部跟着改名对齐：`bundle-mac` / `bundle-linux` / `check-translations` 用 `--bin IDE` 与 `release/IDE`，macOS 可执行文件为 `Contents/MacOS/IDE`（dSYM 也改名为 `IDE.dSYM`），`explorer_command_injector` 的 Appx 清单与右键菜单指向 `IDE.exe`，`uninstall.sh` 清 `IDE.app` 与 `~/.config/ide`、`~/.local/share/ide`。
+- `wu` CLI 会先找 `IDE.exe`，再回退到 `Wu.exe`，所以改名之前安装的机器也能用。
 - 智能体的运行期目录仍按旧名：`acp.rs` 里各 agent 的数据根目录还是 `Wu`/`wu`（`WU_AGENT_DATA_DIR` 可覆盖），所以 Pi/DeepSeek 的凭据与插件不会因改名失效。
+- 仍然叫 Wu 的还有：命令行里的 `wu`、tarball / 安装包文件名（`wu-linux-*.tar.gz`、`Wu-*.exe`、`Wu-*.dmg`）、Linux bundle 内的 `libexec/wu-editor`、数据目录里的 `wu-<channel>.sock`、`.wu_server`。改这些会牵动发版产物与下载链接，暂不动。
 - `README.md` 仍是上游文案（下载链接指向上游 release），改名前后的产品说明请看本文件。
 
 ## 已知限制

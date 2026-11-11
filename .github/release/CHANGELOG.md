@@ -8,6 +8,7 @@ All notable user-facing changes to Wu are listed here, newest first.
 - Pick a model and reasoning effort for Pi from the model picker, re-reading Pi's catalogue when it changes on disk.
 - Rename the app to IDE in window titles, the app menu, dialogs, CLI help and the macOS bundle name.
 - Ship the Windows build as `IDE.exe` and keep the profile in an `IDE` directory. Existing installs start with an empty profile: settings, chats and logs from the `Wu` directory are not migrated.
+- Package the renamed executable in the macOS and Linux bundles, and let the `wu` CLI find installs that still ship `Wu.exe`.
 - Use the IDE name in the Windows installer, Start menu entry, context menus and the Linux app-launcher entry.
 - Fix the `wu` CLI failing to find the installed app on Windows.
 - Bundle the DeepSeek and Pi agents in Linux builds.

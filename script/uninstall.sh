@@ -7,7 +7,7 @@ check_remaining_installations() {
     platform="$(uname -s)"
     if [ "$platform" = "Darwin" ]; then
         # Check for any Wu variants in /Applications
-        remaining=$(ls -d /Applications/Wu*.app 2>/dev/null | wc -l)
+        remaining=$(ls -d /Applications/IDE*.app 2>/dev/null | wc -l)
         [ "$remaining" -eq 0 ]
     else
         # Check for any Wu variants in ~/.local
@@ -21,7 +21,7 @@ prompt_remove_preferences() {
     read -r response
     case "$response" in
         [nN]|[nN][oO])
-            rm -rf "$HOME/.config/wu"
+            rm -rf "$HOME/.config/ide"
             echo "Preferences removed."
             ;;
         *)
@@ -82,14 +82,14 @@ linux() {
     rm -f "$HOME/.local/share/applications/${appid}.desktop"
 
     # Remove the database directory for this channel
-    rm -rf "$HOME/.local/share/wu/db/0-$db_suffix"
+    rm -rf "$HOME/.local/share/ide/db/0-$db_suffix"
 
     # Remove socket file
-    rm -f "$HOME/.local/share/wu/wu-$db_suffix.sock"
+    rm -f "$HOME/.local/share/ide/wu-$db_suffix.sock"
 
     # Remove the entire Wu directory if no installations remain
     if check_remaining_installations; then
-        rm -rf "$HOME/.local/share/wu"
+        rm -rf "$HOME/.local/share/ide"
         prompt_remove_preferences
     fi
 
@@ -97,12 +97,12 @@ linux() {
 }
 
 macos() {
-    app="Wu.app"
+    app="IDE.app"
     db_suffix="stable"
     app_id="me.farshed.Wu"
     case "$channel" in
       dev)
-        app="Wu Dev.app"
+        app="IDE Dev.app"
         db_suffix="dev"
         app_id="me.farshed.Wu-Dev"
         ;;

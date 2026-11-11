@@ -106,7 +106,7 @@ struct Args {
     /// Run wu in the foreground (useful for debugging)
     #[arg(long)]
     foreground: bool,
-    /// Custom path to Wu.app or the wu binary
+    /// Custom path to IDE.app or the IDE binary
     #[arg(long)]
     zed: Option<PathBuf>,
     /// Run wu in dev-server mode
@@ -897,8 +897,13 @@ mod linux {
                 let dir = cli.parent().context("no parent path for cli")?;
 
                 // libexec is the standard, lib/wu is for Arch (and other non-libexec distros),
-                // ./wu is for the target directory in development builds.
-                let possible_locations = ["../libexec/wu-editor", "../lib/wu/wu-editor", "./wu"];
+                // ./IDE and ./wu are for the target directory in development builds.
+                let possible_locations = [
+                    "../libexec/wu-editor",
+                    "../lib/wu/wu-editor",
+                    "./IDE",
+                    "./wu",
+                ];
                 possible_locations
                     .iter()
                     .find_map(|p| dir.join(p).canonicalize().ok().filter(|path| path != &cli))
@@ -1493,7 +1498,7 @@ mod mac_os {
             user_data_dir: Option<&str>,
         ) -> io::Result<ExitStatus> {
             let path = match self {
-                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/wu"),
+                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/IDE"),
                 Bundle::LocalPath { executable, .. } => executable.clone(),
             };
 
@@ -1507,7 +1512,7 @@ mod mac_os {
 
         fn path(&self) -> PathBuf {
             match self {
-                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/wu"),
+                Bundle::App { app_bundle, .. } => app_bundle.join("Contents/MacOS/IDE"),
                 Bundle::LocalPath { executable, .. } => executable.clone(),
             }
         }
