@@ -6,7 +6,7 @@ AppPublisher=Farshed
 AppPublisherURL=https://github.com/dstrml/wu
 AppSupportURL=https://github.com/dstrml/wu/issues
 AppUpdatesURL=https://github.com/dstrml/wu/releases
-DefaultGroupName={#AppName}
+DefaultGroupName={#AppDisplayName}
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
 AllowNoIcons=yes
@@ -65,7 +65,7 @@ Name: "addtopath"; Description: "{cm:AddToPath}"; GroupDescription: "{cm:Other}"
 Name: "{app}"; AfterInstall: DisableAppDirInheritance
 
 [Files]
-Source: "{#ResourcesDir}\Wu.exe"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
+Source: "{#ResourcesDir}\{#AppExeName}.exe"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
 Source: "{#ResourcesDir}\bin\*"; DestDir: "{code:GetInstallDir}\bin"; Flags: ignoreversion
 Source: "{#ResourcesDir}\agents\*"; DestDir: "{code:GetInstallDir}\agents"; Flags: ignoreversion
 Source: "{#ResourcesDir}\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
@@ -82,11 +82,11 @@ Source: "{#ResourcesDir}\arm64\OpenConsole.exe"; DestDir: "{code:GetInstallDir}\
 Source: "{#ResourcesDir}\conpty.dll"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}.exe"; AppUserModelID: "{#AppUserId}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}.exe"; Tasks: desktopicon; AppUserModelID: "{#AppUserId}"
+Name: "{group}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}.exe"; AppUserModelID: "{#AppUserId}"
+Name: "{autodesktop}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}.exe"; Tasks: desktopicon; AppUserModelID: "{#AppUserId}"
 
 [Run]
-Filename: "{app}\{#AppExeName}.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall; Check: WizardNotSilent
+Filename: "{app}\{#AppExeName}.exe"; Description: "{cm:LaunchProgram,{#AppDisplayName}}"; Flags: nowait postinstall; Check: WizardNotSilent
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "Invoke-Command -ScriptBlock {{Remove-AppxPackage -Package ""{#AppxFullName}""}"; Check: IsWindows11OrLater; Flags: shellexec waituntilterminated runhidden
@@ -1229,7 +1229,7 @@ Root: HKCU; Subkey: "Software\Classes\{#RegValueName}.zsh\DefaultIcon"; ValueTyp
 Root: HKCU; Subkey: "Software\Classes\{#RegValueName}.zsh\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#AppExeName}.exe"""; Tasks: associatewithfiles
 Root: HKCU; Subkey: "Software\Classes\{#RegValueName}.zsh\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}.exe"" ""%1"""; Tasks: associatewithfiles
 
-Root: HKCU; Subkey: "Software\Classes\{#RegValueName}SourceFile"; ValueType: string; ValueName: ""; ValueData: "{cm:SourceFile,{#AppName}}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\{#RegValueName}SourceFile"; ValueType: string; ValueName: ""; ValueData: "{cm:SourceFile,{#AppDisplayName}}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\{#RegValueName}SourceFile\DefaultIcon"; ValueType: none; Flags: deletekey
 Root: HKCU; Subkey: "Software\Classes\{#RegValueName}SourceFile\shell\open"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}.exe"""
 Root: HKCU; Subkey: "Software\Classes\{#RegValueName}SourceFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}.exe"" ""%1"""
@@ -1259,8 +1259,8 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 ; URI Scheme
 Root: HKCU; Subkey: "Software\Classes\wu"; ValueType: "string"; ValueData: "URL:wu Protocol"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\wu"; ValueType: "string"; ValueName: "URL Protocol"; ValueData: ""
-Root: HKCU; Subkey: "Software\Classes\wu\DefaultIcon"; ValueType: "string"; ValueData: "{app}\Wu.exe,1"
-Root: HKCU; Subkey: "Software\Classes\wu\shell\open\command"; ValueType: "string"; ValueData: """{app}\Wu.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\wu\DefaultIcon"; ValueType: "string"; ValueData: "{app}\{#AppExeName}.exe,1"
+Root: HKCU; Subkey: "Software\Classes\wu\shell\open\command"; ValueType: "string"; ValueData: """{app}\{#AppExeName}.exe"" ""%1"""
 
 [Code]
 function WizardNotSilent(): Boolean;

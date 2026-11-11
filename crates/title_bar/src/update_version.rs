@@ -54,6 +54,7 @@ impl UpdateVersion {
                 error: Arc::new(anyhow!("Network timeout")),
             },
             AutoUpdateStatus::Errored { .. } => AutoUpdateStatus::Idle,
+            AutoUpdateStatus::Disabled => AutoUpdateStatus::Idle,
         };
 
         self.status = next_state;
@@ -126,6 +127,14 @@ impl Render for UpdateVersion {
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(workspace::OpenLog), cx);
                     })
+                    .on_dismiss(cx.listener(|this, _, _window, cx| this.dismiss(cx)))
+                    .into_any_element()
+            }
+            // `updates_enabled()` is false in this build, so an explicit check
+            // reports that it cannot be served instead of silently doing nothing.
+            AutoUpdateStatus::Disabled => {
+                UpdateButton::new(IconName::Info, t!("Could not check for updates"))
+                    .with_dismiss()
                     .on_dismiss(cx.listener(|this, _, _window, cx| this.dismiss(cx)))
                     .into_any_element()
             }

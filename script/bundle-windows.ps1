@@ -97,7 +97,7 @@ function GenerateLicenses {
 function BuildWuAndItsFriends {
     Write-Output "Building Wu and its friends, for channel: $channel"
     cargo --config .cargo/bundle-config.toml build --release --package wu --package cli --package auto_update_helper --target $target
-    Copy-Item -Path ".\$CargoOutDir\wu.exe" -Destination "$innoDir\Wu.exe" -Force
+    Copy-Item -Path ".\$CargoOutDir\IDE.exe" -Destination "$innoDir\IDE.exe" -Force
     Copy-Item -Path ".\$CargoOutDir\cli.exe" -Destination "$innoDir\cli.exe" -Force
     Copy-Item -Path ".\$CargoOutDir\auto_update_helper.exe" -Destination "$innoDir\auto_update_helper.exe" -Force
     switch ($channel) {
@@ -186,16 +186,19 @@ function BuildInstaller {
             # Wu used Zed's AppId before it got its own, so installs from then are registered under it.
             $oldAppId = "2DB0DA96-CA55-49BB-AF4F-64AF36A86712"
             $appIconName = "app-icon"
+            # `appName` names the install directory ({autopf}\Wu) and must not change, or
+            # existing installs would end up with two copies. Only the labels the user
+            # reads (Add/Remove Programs, Start menu, context menus) follow the IDE rename.
             $appName = "Wu"
-            $appDisplayName = "Wu"
+            $appDisplayName = "IDE"
             $appSetupName = "Wu-$Architecture"
             # Must match `app_identifier()` in crates/release_channel/src/lib.rs plus the "-Instance-Mutex" suffix
             # used by crates/wu/src/wu/windows_only_instance.rs.
             $appMutex = "Wu-Editor-Stable-Instance-Mutex"
-            $appExeName = "Wu"
+            $appExeName = "IDE"
             $regValueName = "Wu"
             $appUserId = "Farshed.Wu"
-            $appShellNameShort = "W&u"
+            $appShellNameShort = "I&DE"
             $appAppxFullName = "Farshed.Wu_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "dev" {
@@ -203,13 +206,13 @@ function BuildInstaller {
             $oldAppId = "8357632E-24A4-4F32-BA97-E575B4D1FE5D"
             $appIconName = "app-icon-dev"
             $appName = "Wu Dev"
-            $appDisplayName = "Wu Dev"
+            $appDisplayName = "IDE Dev"
             $appSetupName = "Wu-$Architecture"
             $appMutex = "Wu-Editor-Dev-Instance-Mutex"
-            $appExeName = "Wu"
+            $appExeName = "IDE"
             $regValueName = "WuDev"
             $appUserId = "Farshed.Wu.Dev"
-            $appShellNameShort = "W&u Dev"
+            $appShellNameShort = "I&DE Dev"
             $appAppxFullName = "Farshed.Wu_1.0.0.0_neutral__japxn1gcva8rg"
         }
         default {

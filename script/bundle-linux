@@ -128,6 +128,38 @@ wu_dir="${temp_dir}/wu$suffix.app"
 # Binary
 mkdir -p "${wu_dir}/bin" "${wu_dir}/libexec"
 cp "${target_dir}/${target_triple}/release/wu" "${wu_dir}/libexec/wu-editor"
+
+# Ship the bundled agents next to the editor binary, which is where the agent
+# harness looks for them (`libexec/agents`). The DeepSeek adapter is a native
+# binary; Pi runs on Node, so it needs `node` plus its JS dependencies.
+agents_src="crates/wu/resources/agents"
+agents_dst="${wu_dir}/libexec/agents"
+arch_suffix=$(uname -m)
+if [[ -f "${agents_src}/dsh-acp-linux-${arch_suffix}" ]]; then
+  mkdir -p "${agents_dst}"
+  cp "${agents_src}/dsh-acp-linux-${arch_suffix}" "${agents_dst}/dsh-acp"
+  chmod +x "${agents_dst}/dsh-acp"
+else
+  echo "cargo::warning=Missing ${agents_src}/dsh-acp-linux-${arch_suffix}; the DeepSeek agent will not be available in this bundle."
+fi
+if [[ -f "${agents_src}/node" ]]; then
+  mkdir -p "${agents_dst}"
+  cp "${agents_src}/node" "${agents_dst}/node"
+  chmod +x "${agents_dst}/node"
+else
+  echo "cargo::warning=Missing ${agents_src}/node; the Pi agent needs a Node runtime on PATH in this bundle."
+fi
+if [[ -d "${agents_src}/node_modules" ]]; then
+  mkdir -p "${agents_dst}"
+  cp -R "${agents_src}/node_modules" "${agents_dst}/node_modules"
+  # The npm shims come from a Windows checkout, where the POSIX launchers have
+  # no executable bit. pi-acp spawns `.bin/pi` directly, so restore it here.
+  if [[ -d "${agents_dst}/node_modules/.bin" ]]; then
+    find "${agents_dst}/node_modules/.bin" -type f ! -name '*.cmd' ! -name '*.ps1' -exec chmod +x {} +
+  fi
+else
+  echo "cargo::warning=Missing ${agents_src}/node_modules; the Pi agent will not be available in this bundle."
+fi
 cp "${target_dir}/${target_triple}/release/cli" "${wu_dir}/bin/wu"
 
 # Libs
@@ -159,11 +191,14 @@ export DO_STARTUP_NOTIFY="true"
 export APP_CLI="wu"
 export APP_ICON="wu"
 export APP_ARGS="%U"
+# APP_NAME is the label shown in app launchers, so it follows the IDE rename. APP_ID
+# stays as-is: it is the .desktop filename and what desktops remember for pins and
+# default-app associations.
 if [[ "$channel" == "dev" ]]; then
-  export APP_NAME="Wu Dev"
+  export APP_NAME="IDE Dev"
   APP_ID="me.farshed.Wu-Dev"
 else
-  export APP_NAME="Wu"
+  export APP_NAME="IDE"
   APP_ID="me.farshed.Wu"
 fi
 

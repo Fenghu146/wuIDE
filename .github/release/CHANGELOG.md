@@ -4,6 +4,17 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+- Add the DeepSeek and Pi agents, each with a visibility toggle in settings.
+- Pick a model and reasoning effort for Pi from the model picker, re-reading Pi's catalogue when it changes on disk.
+- Rename the app to IDE in window titles, the app menu, dialogs, CLI help and the macOS bundle name.
+- Ship the Windows build as `IDE.exe` and keep the profile in an `IDE` directory. Existing installs start with an empty profile: settings, chats and logs from the `Wu` directory are not migrated.
+- Use the IDE name in the Windows installer, Start menu entry, context menus and the Linux app-launcher entry.
+- Fix the `wu` CLI failing to find the installed app on Windows.
+- Bundle the DeepSeek and Pi agents in Linux builds.
+- Let Pi use a Node runtime from `PATH` when the bundle doesn't ship one.
+- Report that updates are unavailable when checking for updates, instead of doing nothing.
+- Fill in the missing Simplified Chinese translations for the DeepSeek and Pi agents.
+
 ## 1.2.1 - 2026-11-09
 
 - Fix links and text selection in tables rendered in agent chat.

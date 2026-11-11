@@ -34,17 +34,30 @@
 
 ## 5. 关闭官方自动更新
 
-- `crates/auto_update/src/auto_update.rs` 的 `poll()` 直接返回 Idle：私人分叉自己发版，不跟随上游 `dstrml/wu` 的 release，避免官方更新覆盖本地修改。
+- `crates/auto_update/src/auto_update.rs` 的 `updates_enabled()` 返回 `false`：私人分叉自己发版，不跟随上游 `dstrml/wu` 的 release，避免官方更新覆盖本地修改。
+- 自动轮询不发请求；手动点“检查更新”会显示“无法检查更新”的提示，不再是一个点了没反应的哑入口。
 
 ## 6. 打包
 
 - `script/bundle-windows.ps1`：把 `crates/wu/resources/agents/*.exe` 与 `node_modules/` 复制进安装包；`crates/wu/resources/windows/zed.iss` 增加 `agents\*` 条目。
 - `script/bundle-mac`：把对应架构的 `dsh-acp-darwin-*` 复制到 `Contents/Resources/agents/dsh-acp`。
-- 运行期在 exe 同级的 `agents/`、`resources/agents/`、macOS `Contents/Resources/agents/` 中查找内置二进制。
+- `script/bundle-linux`：把 `dsh-acp-linux-*` 复制到 `libexec/agents/dsh-acp`，并带上 `node` 与 `node_modules/`。
+- 运行期在 exe 同级的 `agents/`、`resources/agents/`、macOS `Contents/Resources/agents/`、Linux `libexec/agents/` 中查找内置二进制。
+
+## 7. 产品名称改为 IDE
+
+- 窗口标题、菜单、关于窗口、设置页、对话框、CLI 帮助、`user_agent`/系统信息里的产品名从 Wu 改为 **IDE**（macOS bundle 名为 `IDE` / `IDE Dev`）。
+- Windows 上真正落盘的可执行文件也叫 `IDE.exe`：`crates/wu/Cargo.toml` 的 `[[bin]] name` / `default-run` 改为 `IDE`，Windows 版本资源（ProductName / FileDescription）改为 IDE / IDE Dev。
+- `paths::APP_NAME` 改为 `IDE`，所以用户档案目录（设置、会话、日志）现在是 `%LOCALAPPDATA%\IDE`、`~/Library/Application Support/IDE`、`~/.config/ide`。**代价**：已经在用 Wu 的机器升级后是空档案，旧配置不会自动迁移；想保留旧档案就单独回退 `paths::APP_NAME` 那一行。
+- 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`、`base_keymap: "Wu"`）、主题名（`Wu Dark` 等）、Windows 安装目录 `{autopf}\Wu` 与安装包文件名 `Wu-*.exe` / `Wu-*.dmg`（发版脚本与下载链接依赖它们）。
+- 安装器侧跟进：`bundle-windows.ps1` 打包 `IDE.exe`，`zed.iss` 的 `AppExeName` 为 IDE；显示名（Add/Remove Programs、开始菜单、右键菜单）与 Linux `.desktop` 的 `Name` 也改为 IDE，但只改标签、不改 ID 与路径。
+- 智能体的运行期目录仍按旧名：`acp.rs` 里各 agent 的数据根目录还是 `Wu`/`wu`（`WU_AGENT_DATA_DIR` 可覆盖），所以 Pi/DeepSeek 的凭据与插件不会因改名失效。
+- `README.md` 仍是上游文案（下载链接指向上游 release），改名前后的产品说明请看本文件。
 
 ## 已知限制
 
-- **macOS 的 Pi 运行时**需要为对应架构打包一份 `node` 可执行文件；当前仓库只内置了 Windows 的 `node.exe`，macOS 上的 Pi 需要在打包机放置 `agents/node`（可执行）。
+- **Pi 的 Node 运行时只入库了 Windows 的 `node.exe`**（`crates/wu/resources/agents/node` 被 `.gitignore` 忽略）。macOS / Linux 出包前需要在打包机放入对应架构的 `agents/node`，否则该平台的 Pi 不可用；打包脚本只打印 `cargo::warning`，不会中断。若机器上装了系统 `node`，运行期会退回到 `PATH` 里的 `node`，并从内置 `agents/` 目录加载 `pi-acp`。
+- 仓库直接提交了 `crates/wu/resources/agents/` 下的运行时（`node_modules` 约 16k 个文件、`node.exe` 约 90MB）。这样做是因为打包脚本不做 `npm install`；如果要瘦身，需要先把“构建时下载/安装运行时”接进 `bundle-*` 与 CI，并重写 git 历史。
 - **DeepSeek** 需要 `DEEPSEEK_API_KEY`（或 `dsh-acp --api-key`）；当前通过环境变量传入，后续可在设置页补充输入框。
 - Pi 首次运行会复制用户 `~/.pi/agent` 的模型/凭据；若本机没有 Pi 配置，则需要在终端执行一次 `pi` 登录/配置。
 

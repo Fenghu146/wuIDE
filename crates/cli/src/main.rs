@@ -1275,9 +1275,16 @@ mod windows {
                 let cli = std::env::current_exe()?;
                 let dir = cli.parent().context("no parent path for cli")?;
 
-                // ../IDE.exe is the standard, lib/wu is for MSYS2, ./wu.exe is for the target
-                // directory in development builds.
-                let possible_locations = ["../IDE.exe", "../lib/wu/wu-editor.exe", "./wu.exe"];
+                // ../IDE.exe is the shipped installer layout, ../Wu.exe is the same
+                // installer from before the rename, lib/wu is for MSYS2, and ./IDE.exe
+                // plus ./wu.exe cover Cargo's target directory.
+                let possible_locations = [
+                    "../IDE.exe",
+                    "../Wu.exe",
+                    "../lib/wu/wu-editor.exe",
+                    "./IDE.exe",
+                    "./wu.exe",
+                ];
                 possible_locations
                     .iter()
                     .find_map(|p| dir.join(p).canonicalize().ok().filter(|path| path != &cli))

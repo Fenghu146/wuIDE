@@ -177,6 +177,8 @@ pub enum AutoUpdateStatus {
     Errored {
         error: Arc<anyhow::Error>,
     },
+    /// This build does not update itself (see `updates_enabled`).
+    Disabled,
 }
 
 impl PartialEq for AutoUpdateStatus {
@@ -201,6 +203,7 @@ impl PartialEq for AutoUpdateStatus {
             (AutoUpdateStatus::Errored { error: e1 }, AutoUpdateStatus::Errored { error: e2 }) => {
                 e1.to_string() == e2.to_string()
             }
+            (AutoUpdateStatus::Disabled, AutoUpdateStatus::Disabled) => true,
             _ => false,
         }
     }
@@ -210,6 +213,13 @@ impl AutoUpdateStatus {
     pub fn is_updated(&self) -> bool {
         matches!(self, Self::Updated { .. })
     }
+}
+
+/// Whether this build may replace itself with a downloaded release. This private
+/// fork publishes its own binaries, and upstream releases lack its changes, so
+/// following them would quietly roll the editor back.
+fn updates_enabled() -> bool {
+    false
 }
 
 pub struct AutoUpdater {
@@ -570,13 +580,17 @@ impl AutoUpdater {
     }
 
     pub fn poll(&mut self, check_type: UpdateCheckType, cx: &mut Context<Self>) {
-        // This build is a private fork that ships its own binary; pulling an
-        // upstream release would overwrite our changes. Keep the action inert
-        // instead of contacting GitHub.
-        let _ = check_type;
-        self.status = AutoUpdateStatus::Idle;
-        cx.notify();
-        return;
+        if !updates_enabled() {
+            // Automatic polling runs on an interval, so only answer an explicit
+            // check. Answering it keeps the menu entry from looking broken.
+            if check_type.is_manual() {
+                self.update_check_type = check_type;
+                self.dismissed_status = None;
+                self.status = AutoUpdateStatus::Disabled;
+                cx.notify();
+            }
+            return;
+        }
 
         if check_type.is_manual() {
             self.dismissed_status = None;

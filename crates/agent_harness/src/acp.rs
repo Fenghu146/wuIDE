@@ -121,10 +121,10 @@ impl AcpHarness {
 
     fn resolve_launch(&self) -> Result<Launch, HarnessError> {
         if let Some(path) = &self.program_override {
-            return Ok(self.build_launch(path.clone()));
+            return self.build_launch(path.clone());
         }
         if let Some(found) = find_program(self.preset.program) {
-            return Ok(self.build_launch(found));
+            return self.build_launch(found);
         }
         Err(HarnessError::agent_missing(
             self.preset.id,
@@ -132,33 +132,46 @@ impl AcpHarness {
         ))
     }
 
-    fn build_launch(&self, program: PathBuf) -> Launch {
+    fn build_launch(&self, program: PathBuf) -> Result<Launch, HarnessError> {
         let mut args: Vec<String> = Vec::new();
+        let mut agent_dir = program
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         if let Some(entry) = self.preset.js_entry {
-            let base = program.parent().unwrap_or_else(|| Path::new("."));
-            args.push(base.join(entry).to_string_lossy().into_owned());
+            agent_dir = self.agent_dir_for_entry(&program, entry)?;
+            args.push(agent_dir.join(entry).to_string_lossy().into_owned());
         }
         args.extend(self.preset.args.iter().map(|a| (*a).to_owned()));
         self.push_data_dir(&mut args, &program);
-        let path_prepend = program
-            .parent()
-            .map(|parent| {
-                let bin = parent.join("node_modules").join(".bin");
-                // npm's POSIX shims exec `node` from PATH, so the bundled node
-                // next to them has to come first for the runtime to be used
-                // even on machines without a system Node install.
-                let mut dirs = vec![parent.to_path_buf()];
-                if bin.is_dir() {
-                    dirs.push(bin);
-                }
-                dirs
-            })
-            .unwrap_or_default();
-        Launch {
+        let bin = agent_dir.join("node_modules").join(".bin");
+        // npm's POSIX shims exec `node` from PATH, so the bundled node next to
+        // them has to come first for the runtime to be used even on machines
+        // without a system Node install.
+        let mut path_prepend = vec![agent_dir];
+        if bin.is_dir() {
+            path_prepend.push(bin);
+        }
+        Ok(Launch {
             program,
             args,
             path_prepend,
+        })
+    }
+
+    /// The directory that holds the JS entrypoint, which is the one with
+    /// `node_modules` in it. A bundled `node` lives right next to those, but a
+    /// Node runtime picked up from `PATH` (distro package, Homebrew) does not,
+    /// so the bundled agent directories are searched as a fallback.
+    fn agent_dir_for_entry(&self, program: &Path, entry: &str) -> Result<PathBuf, HarnessError> {
+        let parent = program.parent().unwrap_or_else(|| Path::new("."));
+        if parent.join(entry).is_file() {
+            return Ok(parent.to_path_buf());
         }
+        bundled_dirs()
+            .into_iter()
+            .find(|dir| dir.join(entry).is_file())
+            .ok_or_else(|| HarnessError::agent_missing(self.preset.id, entry))
     }
 
     /// Point the agent at an isolated data directory inside Wu's own folder so
@@ -856,7 +869,7 @@ async fn drive_inner(
                     "fs": {"readTextFile": false, "writeTextFile": false},
                     "terminal": false
                 },
-                "clientInfo": {"name": "Wu", "version": env!("CARGO_PKG_VERSION")}
+                "clientInfo": {"name": "IDE", "version": env!("CARGO_PKG_VERSION")}
             }),
         )
         .await?;
