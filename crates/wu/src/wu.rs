@@ -374,7 +374,7 @@ pub fn build_window_options(display_uuid: Option<Uuid>, cx: &mut App) -> WindowO
             height: px(240.0),
         }),
         tabbing_identifier: if use_system_window_tabs {
-            Some(String::from("wu"))
+            Some(String::from("ide"))
         } else {
             None
         },
@@ -978,7 +978,7 @@ fn register_actions(
                         Toast::new(
                             NotificationId::unique::<RegisterWuScheme>(),
                             t!(
-                                "wu:// links will now open in {app_name}.",
+                                "ide:// links will now open in {app_name}.",
                                 app_name = ReleaseChannel::global(cx).display_name()
                             )
                             .to_string(),
@@ -989,7 +989,7 @@ fn register_actions(
                 Ok(())
             })
             .detach_and_prompt_err(
-                &t!("Error registering wu:// scheme"),
+                &t!("Error registering ide:// scheme"),
                 window,
                 cx,
                 |_, _, _| None,

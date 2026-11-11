@@ -31,7 +31,14 @@ use walkdir::WalkDir;
 
 use std::io::IsTerminal;
 
-const URL_PREFIX: [&'static str; 5] = ["wu://", "http://", "https://", "file://", "ssh://"];
+const URL_PREFIX: [&'static str; 6] = [
+    "ide://",
+    "wu://",
+    "http://",
+    "https://",
+    "file://",
+    "ssh://",
+];
 
 struct Detect;
 
@@ -48,21 +55,21 @@ trait InstalledApp {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "wu",
+    name = "ide",
     disable_version_flag = true,
     before_help = "The IDE CLI binary.
 This CLI is a separate binary that invokes IDE.
 
 Examples:
-    `wu`
+    `ide`
           Simply opens IDE
-    `wu --foreground`
+    `ide --foreground`
           Runs in foreground (shows all logs)
-    `wu path-to-your-project`
+    `ide path-to-your-project`
           Open your project in IDE
-    `wu -n path-to-file `
+    `ide -n path-to-file `
           Open file/folder in a new window",
-    after_help = "To read from stdin, append '-', e.g. 'ps axf | wu -'"
+    after_help = "To read from stdin, append '-', e.g. 'ps axf | ide -'"
 )]
 struct Args {
     /// Wait for all of the given paths to be opened/closed before exiting.
@@ -87,11 +94,11 @@ struct Args {
     classic: bool,
     /// Sets a custom directory for all user data (e.g., database, extensions, logs).
     /// This overrides the default platform-specific data directory location:
-    #[cfg_attr(target_os = "macos", doc = "`~/Library/Application Support/Wu`.")]
-    #[cfg_attr(target_os = "windows", doc = "`%LOCALAPPDATA%\\Wu`.")]
+    #[cfg_attr(target_os = "macos", doc = "`~/Library/Application Support/IDE`.")]
+    #[cfg_attr(target_os = "windows", doc = "`%LOCALAPPDATA%\\IDE`.")]
     #[cfg_attr(
         not(any(target_os = "windows", target_os = "macos")),
-        doc = "`$XDG_DATA_HOME/wu`."
+        doc = "`$XDG_DATA_HOME/ide`."
     )]
     #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     user_data_dir: Option<String>,
@@ -103,13 +110,13 @@ struct Args {
     /// Print IDE's version and the app path.
     #[arg(short, long)]
     version: bool,
-    /// Run wu in the foreground (useful for debugging)
+    /// Run IDE in the foreground (useful for debugging)
     #[arg(long)]
     foreground: bool,
     /// Custom path to IDE.app or the IDE binary
     #[arg(long)]
     zed: Option<PathBuf>,
-    /// Run wu in dev-server mode
+    /// Run IDE in dev-server mode
     #[arg(long)]
     dev_server_token: Option<String>,
     /// The username and WSL distribution to use when opening paths. If not specified,
@@ -831,7 +838,7 @@ fn anonymous_fd(path: &str) -> Option<fs::File> {
 }
 
 /// Shows an interactive prompt asking the user to choose the default open
-/// behavior for `wu <path>`. Returns `None` if the prompt cannot be shown
+/// behavior for `ide <path>`. Returns `None` if the prompt cannot be shown
 /// (e.g. stdin is not a terminal) or the user cancels.
 fn prompt_open_behavior() -> Option<cli::CliBehaviorSetting> {
     if !std::io::stdin().is_terminal() {
@@ -842,14 +849,14 @@ fn prompt_open_behavior() -> Option<cli::CliBehaviorSetting> {
     let items = [
         format!(
             "Add to existing IDE window ({})",
-            blue.apply_to("wu --existing")
+            blue.apply_to("ide --existing")
         ),
-        format!("Open a new window ({})", blue.apply_to("wu --classic")),
+        format!("Open a new window ({})", blue.apply_to("ide --classic")),
     ];
 
     let prompt = format!(
         "Configure default behavior for {}\n{}",
-        blue.apply_to("wu <path>"),
+        blue.apply_to("ide <path>"),
         console::style("You can change this later in IDE settings"),
     );
 
@@ -896,12 +903,16 @@ mod linux {
                 let cli = env::current_exe()?;
                 let dir = cli.parent().context("no parent path for cli")?;
 
-                // libexec is the standard, lib/wu is for Arch (and other non-libexec distros),
-                // ./IDE and ./wu are for the target directory in development builds.
+                // libexec is the standard, lib/ide is for Arch (and other non-libexec
+                // distros), and ./IDE plus ./ide cover development builds. The old
+                // wu names stay as a fallback for installs made before the rename.
                 let possible_locations = [
+                    "../libexec/ide",
                     "../libexec/wu-editor",
+                    "../lib/ide/ide",
                     "../lib/wu/wu-editor",
                     "./IDE",
+                    "./ide",
                     "./wu",
                 ];
                 possible_locations
@@ -1036,7 +1047,7 @@ mod flatpak {
         if !invocation_args.iter().any(|arg| arg == "--zed") {
             // Positional paths consume all following arguments, so launcher options must precede them.
             args.push("--zed".into());
-            args.push(flatpak_dir.join("libexec").join("wu-editor").into());
+            args.push(flatpak_dir.join("libexec").join("ide").into());
         }
 
         args.extend_from_slice(invocation_args);
@@ -1071,7 +1082,7 @@ mod flatpak {
                 )
                 .into(),
             );
-            args.push(flatpak_dir.join("bin").join("wu").into());
+            args.push(flatpak_dir.join("bin").join("ide").into());
 
             let invocation_args = env::args_os().skip(1).collect::<Vec<_>>();
             args.extend(restart_cli_args(&flatpak_dir, &invocation_args));
@@ -1087,7 +1098,7 @@ mod flatpak {
             && env::var("FLATPAK_ID").is_ok_and(|id| id.starts_with("me.farshed.IDE"))
             && args.zed.is_none()
         {
-            args.zed = Some("/app/libexec/wu-editor".into());
+            args.zed = Some("/app/libexec/ide".into());
             unsafe { env::set_var("ZED_UPDATE_EXPLANATION", "Please use flatpak to update zed") };
         }
         args
@@ -1142,10 +1153,10 @@ mod flatpak {
             let flatpak_dir = Path::new("/flatpak");
             let args = restart_cli_args(flatpak_dir, &["project".into()]);
             let parsed =
-                crate::Args::try_parse_from(std::iter::once(OsString::from("wu")).chain(args))
+                crate::Args::try_parse_from(std::iter::once(OsString::from("ide")).chain(args))
                     .unwrap();
 
-            assert_eq!(parsed.zed, Some(flatpak_dir.join("libexec/wu-editor")));
+            assert_eq!(parsed.zed, Some(flatpak_dir.join("libexec/ide")));
             assert_eq!(parsed.paths_with_position, ["project"]);
 
             let invocation_args = ["--zed".into(), "/custom/zed-editor".into()];
@@ -1281,13 +1292,15 @@ mod windows {
                 let dir = cli.parent().context("no parent path for cli")?;
 
                 // ../IDE.exe is the shipped installer layout, ../Wu.exe is the same
-                // installer from before the rename, lib/wu is for MSYS2, and ./IDE.exe
-                // plus ./wu.exe cover Cargo's target directory.
+                // installer from before the rename, lib/ide is for MSYS2, and ./IDE.exe
+                // plus ./ide.exe cover Cargo's target directory.
                 let possible_locations = [
                     "../IDE.exe",
                     "../Wu.exe",
+                    "../lib/ide/ide.exe",
                     "../lib/wu/wu-editor.exe",
                     "./IDE.exe",
+                    "./ide.exe",
                     "./wu.exe",
                 ];
                 possible_locations

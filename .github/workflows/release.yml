@@ -68,7 +68,7 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}
           path: |
-            target/${{ matrix.arch }}-apple-darwin/release/Wu-${{ matrix.arch }}.dmg
+            target/${{ matrix.arch }}-apple-darwin/release/IDE-${{ matrix.arch }}.dmg
             target/wu-remote-server-macos-${{ matrix.arch }}.gz
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
@@ -106,7 +106,7 @@ jobs:
         with:
           name: linux-${{ matrix.arch }}
           path: |
-            target/release/wu-linux-${{ matrix.arch }}.tar.gz
+            target/release/ide-linux-${{ matrix.arch }}.tar.gz
             target/wu-remote-server-linux-${{ matrix.arch }}.gz
           if-no-files-found: error
 
@@ -128,7 +128,7 @@ jobs:
         with:
           name: windows-x86_64
           path: |
-            target/Wu-x86_64.exe
+            target/IDE-x86_64.exe
             target/wu-remote-server-windows-x86_64.gz
           if-no-files-found: error
 

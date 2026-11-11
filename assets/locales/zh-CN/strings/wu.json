@@ -38,7 +38,7 @@
   "Edit tasks.json…": "编辑 tasks.json…",
   "Editor Controls": "编辑器选项",
   "Editor Layout": "编辑器布局",
-  "Error registering wu:// scheme": "注册 wu:// 协议时出错",
+  "Error registering ide:// scheme": "注册 ide:// 协议时出错",
   "Expand Selection": "扩大选区",
   "Extensions": "扩展",
   "Failed to move IDE to Applications": "无法将 IDE 移到“应用程序”文件夹",
@@ -181,6 +181,6 @@
   "Zoom Out": "缩小",
   "inotify_init returned {error}\n\nThis may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux": "inotify_init 返回了 {error}\n\n这可能是由于系统对 inotify 实例数量的限制。排查方法请参阅：https://zed.dev/docs/linux",
   "navigation|Back": "后退",
-  "wu:// links will now open in {app_name}.": "wu:// 链接现在会在 {app_name} 中打开。",
+  "ide:// links will now open in {app_name}.": "ide:// 链接现在会在 {app_name} 中打开。",
   "{keystroke} to open in a split": "{keystroke} 可在拆分窗格中打开"
 }

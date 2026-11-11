@@ -688,8 +688,11 @@ impl ProtoClient for Client {
     }
 }
 
-/// prefix for the wu:// url scheme
-pub const ZED_URL_SCHEME: &str = "wu";
+/// prefix for the ide:// url scheme
+pub const ZED_URL_SCHEME: &str = "ide";
+
+/// The pre-rename scheme, still registered so old wu:// links keep working.
+pub const LEGACY_URL_SCHEME: &str = "wu";
 
 #[cfg(test)]
 mod tests {

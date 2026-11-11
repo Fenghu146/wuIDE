@@ -13,7 +13,7 @@ use workspace::{Toast, Workspace};
 actions!(
     cli,
     [
-        /// Installs the Wu CLI tool to the system PATH.
+        /// Installs the IDE CLI tool to the system PATH.
         InstallCliBinary,
     ]
 );
@@ -27,23 +27,28 @@ const CANT_INSTALL_DOCS_URL: &str =
 /// commonly because the user is not an admin.
 async fn install_script(cx: &AsyncApp) -> Result<Option<PathBuf>> {
     let cli_path = cx.update(|cx| cx.path_for_auxiliary_executable("cli"))?;
-    let link_path = Path::new("/usr/local/bin/wu");
-    let bin_dir_path = link_path.parent().unwrap();
+    let bin_dir_path = Path::new("/usr/local/bin");
+    let link_path = bin_dir_path.join("ide");
+    let legacy_link_path = bin_dir_path.join("wu");
 
     // Don't re-create symlink if it points to the same CLI binary.
-    if smol::fs::read_link(link_path).await.ok().as_ref() == Some(&cli_path) {
-        return Ok(Some(link_path.into()));
+    if smol::fs::read_link(&link_path).await.ok().as_ref() == Some(&cli_path) {
+        return Ok(Some(link_path));
     }
 
     // If the symlink is not there or is outdated, first try replacing it
-    // without escalating.
-    smol::fs::remove_file(link_path).await.log_err();
-    if smol::fs::unix::symlink(&cli_path, link_path)
+    // without escalating. `wu` stays as an alias for existing scripts.
+    smol::fs::remove_file(&link_path).await.log_err();
+    smol::fs::remove_file(&legacy_link_path).await.log_err();
+    if smol::fs::unix::symlink(&cli_path, &link_path)
         .await
         .log_err()
         .is_some()
     {
-        return Ok(Some(link_path.into()));
+        smol::fs::unix::symlink(&cli_path, &legacy_link_path)
+            .await
+            .log_err();
+        return Ok(Some(link_path));
     }
 
     // The symlink could not be created without escalating, so use osascript
@@ -54,11 +59,14 @@ async fn install_script(cx: &AsyncApp) -> Result<Option<PathBuf>> {
             &format!(
                 "do shell script \" \
                     mkdir -p \'{}\' && \
+                    ln -sf \'{}\' \'{}\' && \
                     ln -sf \'{}\' \'{}\' \
                 \" with administrator privileges",
                 bin_dir_path.to_string_lossy(),
                 cli_path.to_string_lossy(),
                 link_path.to_string_lossy(),
+                cli_path.to_string_lossy(),
+                legacy_link_path.to_string_lossy(),
             ),
         ])
         .output()
@@ -100,7 +108,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
             // The user dismissed the administrator prompt; nothing to do.
             Ok(None) => return Ok(()),
             Err(error) => {
-                log::error!("failed to install wu CLI: {error:#}");
+                log::error!("failed to install IDE CLI: {error:#}");
                 workspace.update(cx, |workspace, cx| {
                     struct CliInstallFailed;
 
@@ -110,7 +118,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                         |cx| {
                             cx.new(|cx| {
                                 MessageNotification::new(
-                                    t!("You can add `wu` to your PATH manually."),
+                                    t!("You can add `ide` to your PATH manually."),
                                     cx,
                                 )
                                 .with_title(t!("Couldn't install the IDE CLI"))
@@ -131,7 +139,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                 Toast::new(
                     NotificationId::unique::<InstalledZedCli>(),
                     t!(
-                        "Installed `wu` to {path}. You can launch {app} from your terminal.",
+                        "Installed `ide` to {path}. You can launch {app} from your terminal.",
                         path = path.to_string_lossy(),
                         app = ReleaseChannel::global(cx).display_name()
                     )

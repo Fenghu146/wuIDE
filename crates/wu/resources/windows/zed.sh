@@ -6,6 +6,11 @@ fi
 
 ZED_PATH="$(dirname "$(realpath "$0")")"
 
+IDE_EXE="$ZED_PATH/ide.exe"
+if [ ! -f "$IDE_EXE" ]; then
+    IDE_EXE="$ZED_PATH/wu.exe"
+fi
+
 IN_WSL=false
 if [ -n "$WSL_DISTRO_NAME" ]; then
 	# $WSL_DISTRO_NAME is available since WSL builds 18362, also for WSL2
@@ -17,9 +22,9 @@ if [ $IN_WSL = true ]; then
     if [ -z "$WSL_USER" ]; then
         WSL_USER="$USERNAME"
     fi
-    "$ZED_PATH/wu.exe" --wsl "$WSL_USER@$WSL_DISTRO_NAME" "$@"
+    "$IDE_EXE" --wsl "$WSL_USER@$WSL_DISTRO_NAME" "$@"
     exit $?
 else
-    "$ZED_PATH/wu.exe" "$@"
+    "$IDE_EXE" "$@"
     exit $?
 fi

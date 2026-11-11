@@ -131,6 +131,12 @@ impl OpenRequest {
         }
 
         for url in request.urls {
+            // Accept the current ide:// scheme everywhere the legacy wu:// URLs
+            // are still parsed, so existing links and new links behave the same.
+            let url = match url.strip_prefix("ide://") {
+                Some(rest) => format!("wu://{rest}"),
+                None => url,
+            };
             if let Some(server_name) = url.strip_prefix("wu-cli://") {
                 this.kind = Some(OpenRequestKind::CliConnection(connect_to_cli(server_name)?));
             } else if let Some(action_index) = url.strip_prefix("zed-dock-action://") {

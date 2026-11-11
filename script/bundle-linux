@@ -126,17 +126,17 @@ fi
 # Move everything that should end up in the final package
 # into a temp directory.
 temp_dir=$(mktemp -d)
-wu_dir="${temp_dir}/wu$suffix.app"
+ide_dir="${temp_dir}/ide$suffix.app"
 
 # Binary
-mkdir -p "${wu_dir}/bin" "${wu_dir}/libexec"
-cp "${target_dir}/${target_triple}/release/IDE" "${wu_dir}/libexec/wu-editor"
+mkdir -p "${ide_dir}/bin" "${ide_dir}/libexec"
+cp "${target_dir}/${target_triple}/release/IDE" "${ide_dir}/libexec/ide"
 
 # Ship the bundled agents next to the editor binary, which is where the agent
 # harness looks for them (`libexec/agents`). The DeepSeek adapter is a native
 # binary; Pi runs on Node, so it needs `node` plus its JS dependencies.
 agents_src="crates/wu/resources/agents"
-agents_dst="${wu_dir}/libexec/agents"
+agents_dst="${ide_dir}/libexec/agents"
 arch_suffix=$(uname -m)
 if [[ -f "${agents_src}/dsh-acp-linux-${arch_suffix}" ]]; then
   mkdir -p "${agents_dst}"
@@ -166,7 +166,8 @@ else
   echo "error: missing ${agents_src}/node_modules; the Pi agent would not be available in this bundle" >&2
   exit 1
 fi
-cp "${target_dir}/${target_triple}/release/cli" "${wu_dir}/bin/wu"
+cp "${target_dir}/${target_triple}/release/cli" "${ide_dir}/bin/ide"
+ln -sf ide "${ide_dir}/bin/wu"
 
 # Libs
 # Bundle libstdc++ so older supported systems can run binaries built with our
@@ -182,20 +183,20 @@ find_libs() {
         grep -v '\<\(libglib-2.0.so\|libgobject-2.0.so\|libgio-2.0.so\|libgmodule-2.0.so\|libpcre.so\|libpcre2-8.so\|libmount.so\|libblkid.so\|libselinux.so\|libffi.so\|libresolv.so\|libz.so\)'
 }
 
-mkdir -p "${wu_dir}/lib"
-rm -rf "${wu_dir}/lib/*"
-cp $(find_libs) "${wu_dir}/lib"
+mkdir -p "${ide_dir}/lib"
+rm -rf "${ide_dir}/lib/*"
+cp $(find_libs) "${ide_dir}/lib"
 
 # Icons
-mkdir -p "${wu_dir}/share/icons/hicolor/512x512/apps"
-cp "crates/wu/resources/app-icon$suffix.png" "${wu_dir}/share/icons/hicolor/512x512/apps/wu.png"
-mkdir -p "${wu_dir}/share/icons/hicolor/1024x1024/apps"
-cp "crates/wu/resources/app-icon$suffix@2x.png" "${wu_dir}/share/icons/hicolor/1024x1024/apps/wu.png"
+mkdir -p "${ide_dir}/share/icons/hicolor/512x512/apps"
+cp "crates/wu/resources/app-icon$suffix.png" "${ide_dir}/share/icons/hicolor/512x512/apps/ide.png"
+mkdir -p "${ide_dir}/share/icons/hicolor/1024x1024/apps"
+cp "crates/wu/resources/app-icon$suffix@2x.png" "${ide_dir}/share/icons/hicolor/1024x1024/apps/ide.png"
 
 # .desktop
 export DO_STARTUP_NOTIFY="true"
-export APP_CLI="wu"
-export APP_ICON="wu"
+export APP_CLI="ide"
+export APP_ICON="ide"
 export APP_ARGS="%U"
 # APP_NAME is the label shown in app launchers, so it follows the IDE rename. APP_ID
 # stays as-is: it is the .desktop filename and what desktops remember for pins and
@@ -208,20 +209,20 @@ else
   APP_ID="me.farshed.Wu"
 fi
 
-mkdir -p "${wu_dir}/share/applications"
-envsubst < "crates/wu/resources/zed.desktop.in" > "${wu_dir}/share/applications/$APP_ID.desktop"
-chmod +x "${wu_dir}/share/applications/$APP_ID.desktop"
+mkdir -p "${ide_dir}/share/applications"
+envsubst < "crates/wu/resources/zed.desktop.in" > "${ide_dir}/share/applications/$APP_ID.desktop"
+chmod +x "${ide_dir}/share/applications/$APP_ID.desktop"
 
 # Copy generated licenses so they'll end up in archive too
-cp "assets/licenses.md" "${wu_dir}/licenses.md"
+cp "assets/licenses.md" "${ide_dir}/licenses.md"
 
 # Create archive out of everything that's in the temp directory
 arch=$(uname -m)
-archive="wu-linux-${arch}.tar.gz"
+archive="ide-linux-${arch}.tar.gz"
 
 rm -rf "${archive}"
-remove_match="wu(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
+remove_match="ide(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
 ls "${target_dir}/release" | grep -E ${remove_match} | xargs -d "\n" -I {} rm -f "${target_dir}/release/{}" || true
-tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "wu$suffix.app"
+tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "ide$suffix.app"
 
 gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/wu-remote-server-linux-${arch}.gz"

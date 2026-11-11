@@ -1431,7 +1431,7 @@ struct Args {
     /// Use `path:line:row` syntax to open a file at a specific location.
     /// Non-existing paths and directories will ignore `:line:row` suffix.
     ///
-    /// URLs can either be `file://` or `wu://` scheme, or relative to <https://zed.dev>.
+    /// URLs can either be `file://` or `ide://` scheme, or relative to <https://zed.dev>.
     paths_or_urls: Vec<String>,
 
     /// Pairs of file paths to diff. Can be specified multiple times.
@@ -1552,6 +1552,7 @@ fn parse_url_arg(arg: &str) -> String {
         Ok(path) => format!("file://{}", path.display()),
         Err(_) => {
             if arg.starts_with("file://")
+                || arg.starts_with("ide://")
                 || arg.starts_with("wu://")
                 || arg.starts_with("wu-cli://")
                 || arg.starts_with("ssh://")
