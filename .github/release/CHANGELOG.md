@@ -4,6 +4,15 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+## 1.3.1 - 2026-11-11
+
+- Show the application icon on the welcome and onboarding screens, and use the same "不打扰你的编辑器" tagline on both of them.
+- Label the base keymap IDE while keeping the stored value `Zed`, so existing settings keep working.
+- Rename the built-in UI themes to `IDE Dark` / `IDE Light` / `IDE Dark Translucent` and map the old names when settings load.
+- Draw the base-keymap mark and the agent chat thinking animation with the character silhouette, and keep the spinner's tint bands.
+- Give the Pi agent its own pixel mark instead of the OpenCode icon.
+- Report IDE to debug adapters, in the update helper window title and in the Windows COM surrogate name.
+
 ## 1.3.0 - 2026-11-11
 
 - Add the DeepSeek and Pi agents, each with a visibility toggle in settings.

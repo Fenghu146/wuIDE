@@ -2,7 +2,7 @@
 description = "The fast, native VSCode alternative."
 edition.workspace = true
 name = "wu"
-version = "1.3.0"
+version = "1.3.1"
 publish.workspace = true
 license = "GPL-3.0-or-later"
 default-run = "IDE"
@@ -240,7 +240,7 @@ identifier = "me.farshed.Wu-Dev"
 name = "IDE Dev"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["wu"]
+osx_url_schemes = ["ide", "wu"]
 
 [package.metadata.bundle-stable]
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
@@ -248,7 +248,7 @@ identifier = "me.farshed.Wu"
 name = "IDE"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["wu"]
+osx_url_schemes = ["ide", "wu"]
 
 [package.metadata.cargo-shear]
 ignored = ["profiling", "tracing"]

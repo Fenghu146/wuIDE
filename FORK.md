@@ -31,6 +31,7 @@
   - `crates/wu/resources/app-icon.png`、`app-icon@2x.png`、`app-icon-dev.png`、`app-icon-dev@2x.png`
   - `crates/wu/resources/windows/app-icon.ico`、`app-icon-dev.ico`
   - `crates/wu/resources/Document.icns`
+- 欢迎页/引导页沿用的 `assets/images/wu_icon.png` 现在是 `app-icon.png` 的逐字节副本（`sha256` 相同），旧鹿头图已删除。仓库里仍以 Wu 命名的图形资源只剩 `assets/images/wu_icon.png`、`assets/images/wu_logo.svg`、`assets/icons/wu_mark.svg`（内容均已换新）与已无代码引用的 `assets/icons/wu.svg`。
 
 ## 5. 关闭官方自动更新
 
@@ -51,14 +52,15 @@
 - 窗口标题、菜单、关于窗口、设置页、对话框、CLI 帮助、`user_agent`/系统信息里的产品名从 Wu 改为 **IDE**（macOS bundle 名为 `IDE` / `IDE Dev`）。
 - Windows 上真正落盘的可执行文件也叫 `IDE.exe`：`crates/wu/Cargo.toml` 的 `[[bin]] name` / `default-run` 改为 `IDE`，Windows 版本资源（ProductName / FileDescription）改为 IDE / IDE Dev。
 - `paths::APP_NAME` 改为 `IDE`，所以用户档案目录（设置、会话、日志）现在是 `%LOCALAPPDATA%\IDE`、`~/Library/Application Support/IDE`、`~/.config/ide`。**代价**：已经在用 Wu 的机器升级后是空档案，旧配置不会自动迁移；想保留旧档案就单独回退 `paths::APP_NAME` 那一行。
-- 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`）、主题名（`Wu Dark` 等）、Windows 安装目录 `{autopf}\Wu` 与安装包文件名 `Wu-*.exe` / `Wu-*.dmg`（发版脚本与下载链接依赖它们）。`base_keymap` 的显示名已改为 IDE，但存储值仍是 `Zed`，不影响旧设置。
-- 界面标识统一：欢迎页/引导页 logo 直接使用 `crates/wu/resources/app-icon.png`（不再是鹿头 `wu_icon.png`）；欢迎页 tagline 统一为“不打扰你的编辑器”；DAP `client_name`、更新助手窗口标题、Appx COM surrogate 的 `DisplayName` 也改为 IDE。
+- 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`）、Windows 安装目录 `{autopf}\Wu` 与安装包文件名 `Wu-*.exe` / `Wu-*.dmg`（发版脚本与下载链接依赖它们）。`base_keymap` 的显示名已改为 IDE，但存储值仍是 `Zed`，不影响旧设置。主题名不再是保留项，见下文。
+- 界面标识统一：欢迎页/引导页 logo 用的是 `assets/images/wu_icon.png`，它与 `crates/wu/resources/app-icon.png` 是同一张图（逐字节相同），所以界面 logo 与安装包图标始终一致；欢迎页 tagline 统一为“不打扰你的编辑器”；DAP `client_name`、更新助手窗口标题、Appx COM surrogate 的 `DisplayName` 也改为 IDE。
 - 安装器侧跟进：`bundle-windows.ps1` 打包 `IDE.exe`，`zed.iss` 的 `AppExeName` 为 IDE；显示名（Add/Remove Programs、开始菜单、右键菜单）与 Linux `.desktop` 的 `Name` 也改为 IDE，但只改标签、不改 ID 与路径。
 - 打包链路全部跟着改名对齐：`bundle-mac` / `bundle-linux` / `check-translations` 用 `--bin IDE` 与 `release/IDE`，macOS 可执行文件为 `Contents/MacOS/IDE`（dSYM 也改名为 `IDE.dSYM`），`explorer_command_injector` 的 Appx 清单与右键菜单指向 `IDE.exe`，`uninstall.sh` 清 `IDE.app` 与 `~/.config/ide`、`~/.local/share/ide`。
 - `wu` CLI 会先找 `IDE.exe`，再回退到 `Wu.exe`，所以改名之前安装的机器也能用。
 - 智能体的运行期目录仍按旧名：`acp.rs` 里各 agent 的数据根目录还是 `Wu`/`wu`（`WU_AGENT_DATA_DIR` 可覆盖），所以 Pi/DeepSeek 的凭据与插件不会因改名失效。
-- 仍然叫 Wu 的还有：命令行里的 `wu`、tarball / 安装包文件名（`wu-linux-*.tar.gz`、`Wu-*.exe`、`Wu-*.dmg`）、Linux bundle 内的 `libexec/wu-editor`、数据目录里的 `wu-<channel>.sock`、`.wu_server`、主题名（`Wu Dark` / `Wu Light` / `Wu Dark Translucent`）与 icon theme 名（`Wu Classic`）。改主题名需要同时做旧主题名的设置迁移；改发版文件名会牵动下载链接，暂不动。
-- 智能体聊天里的思考动画仍用 `assets/icons/wu_mark.svg` 的鹿头轮廓（单色遮罩动画），没有跟随新的应用图标。
+- 仍然叫 Wu 的还有：命令行里的 `wu`、tarball / 安装包文件名（`wu-linux-*.tar.gz`、`Wu-*.exe`、`Wu-*.dmg`）、Linux bundle 内的 `libexec/wu-editor`、数据目录里的 `wu-<channel>.sock`、`.wu_server`。改发版文件名会牵动下载链接，暂不动。
+- 主题与图标主题名已随 IDE 改名：`assets/themes/wu/wu.json` 里是 `IDE Dark` / `IDE Light` / `IDE Dark Translucent`，用户设置中的旧名由 `crates/theme_settings/src/settings.rs` 的 `migrate_theme_name` 和 `crates/theme/src/registry.rs` 的 `ThemeRegistry::get` 兜底迁移；图标主题是 `Symbols Dark` / `Symbols Light`（`assets/icon_themes/symbols/icon_theme.json`，`assets/settings/default.json` 默认用它们），代码内置的兜底图标主题名是 `IDE Classic`（`crates/theme/src/icon_theme.rs` 的 `DEFAULT_ICON_THEME_NAME`），`Wu Classic` / `Wu (Default)` 只作为 legacy 常量存在，由 `ThemeRegistry::get_icon_theme` 映射过来。
+- 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它与 `assets/icons/wu.svg` 的 `viewBox`（`205 1 1053 1551`）和文件结构一致，已是同一套人物剪影，不再是鹿头轮廓。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。
 - `README.md` 仍是上游文案（下载链接指向上游 release），改名前后的产品说明请看本文件。
 
 ## 已知限制

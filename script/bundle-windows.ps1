@@ -165,8 +165,10 @@ function DownloadConpty {
 function CollectFiles {
     Move-Item -Path "$innoDir\zed_explorer_command_injector.appx" -Destination "$innoDir\appx\zed_explorer_command_injector.appx" -Force
     Move-Item -Path "$innoDir\zed_explorer_command_injector.dll" -Destination "$innoDir\appx\zed_explorer_command_injector.dll" -Force
-    Move-Item -Path "$innoDir\cli.exe" -Destination "$innoDir\bin\wu.exe" -Force
-    Move-Item -Path "$innoDir\zed.sh" -Destination "$innoDir\bin\wu" -Force
+    Move-Item -Path "$innoDir\cli.exe" -Destination "$innoDir\bin\ide.exe" -Force
+    Copy-Item -Path "$innoDir\bin\ide.exe" -Destination "$innoDir\bin\wu.exe" -Force
+    Move-Item -Path "$innoDir\zed.sh" -Destination "$innoDir\bin\ide" -Force
+    Copy-Item -Path "$innoDir\bin\ide" -Destination "$innoDir\bin\wu" -Force
     Move-Item -Path "$innoDir\auto_update_helper.exe" -Destination "$innoDir\tools\auto_update_helper.exe" -Force
     if($Architecture -eq "aarch64") {
         New-Item -Type Directory -Path "$innoDir\arm64" -Force
@@ -191,17 +193,16 @@ function BuildInstaller {
             # Wu used Zed's AppId before it got its own, so installs from then are registered under it.
             $oldAppId = "2DB0DA96-CA55-49BB-AF4F-64AF36A86712"
             $appIconName = "app-icon"
-            # `appName` names the install directory ({autopf}\Wu) and must not change, or
-            # existing installs would end up with two copies. Only the labels the user
-            # reads (Add/Remove Programs, Start menu, context menus) follow the IDE rename.
-            $appName = "Wu"
+            # `appName` names the install directory. The installer moves an old
+            # {autopf}\Wu install to {autopf}\IDE so upgrading does not leave two copies.
+            $appName = "IDE"
             $appDisplayName = "IDE"
-            $appSetupName = "Wu-$Architecture"
+            $appSetupName = "IDE-$Architecture"
             # Must match `app_identifier()` in crates/release_channel/src/lib.rs plus the "-Instance-Mutex" suffix
             # used by crates/wu/src/wu/windows_only_instance.rs.
             $appMutex = "Wu-Editor-Stable-Instance-Mutex"
             $appExeName = "IDE"
-            $regValueName = "Wu"
+            $regValueName = "IDE"
             $appUserId = "Farshed.Wu"
             $appShellNameShort = "I&DE"
             $appAppxFullName = "Farshed.Wu_1.0.0.0_neutral__japxn1gcva8rg"
@@ -210,12 +211,12 @@ function BuildInstaller {
             $appId = "{{3EF9FC05-FE00-4BD0-941C-21F3BA4E6952}"
             $oldAppId = "8357632E-24A4-4F32-BA97-E575B4D1FE5D"
             $appIconName = "app-icon-dev"
-            $appName = "Wu Dev"
+            $appName = "IDE Dev"
             $appDisplayName = "IDE Dev"
-            $appSetupName = "Wu-$Architecture"
+            $appSetupName = "IDE-$Architecture"
             $appMutex = "Wu-Editor-Dev-Instance-Mutex"
             $appExeName = "IDE"
-            $regValueName = "WuDev"
+            $regValueName = "IDEDev"
             $appUserId = "Farshed.Wu.Dev"
             $appShellNameShort = "I&DE Dev"
             $appAppxFullName = "Farshed.Wu_1.0.0.0_neutral__japxn1gcva8rg"
@@ -226,8 +227,16 @@ function BuildInstaller {
         }
     }
 
-    # Windows runner 2022 default has iscc in PATH, https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
-    $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    # The Windows runner image ships ISCC in Program Files; a per-user `winget install JRSoftware.InnoSetup`
+    # lands it under LOCALAPPDATA instead, so check both.
+    $innoSetupPath = @(
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $innoSetupPath) {
+        throw "ISCC.exe not found; install Inno Setup 6"
+    }
 
     $definitions = @{
         "AppId"          = $appId
@@ -286,8 +295,8 @@ Pop-Location
 if ($buildSuccess) {
     Write-Output "Build successful"
     if ($Install) {
-        Write-Output "Installing Wu..."
-        Start-Process -FilePath "$workspace/target/Wu-$Architecture.exe"
+        Write-Output "Installing IDE..."
+        Start-Process -FilePath "$workspace/target/IDE-$Architecture.exe"
     }
     exit 0
 }
