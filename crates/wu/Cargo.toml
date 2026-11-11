@@ -5,7 +5,7 @@ name = "wu"
 version = "1.2.1"
 publish.workspace = true
 license = "GPL-3.0-or-later"
-default-run = "wu"
+default-run = "IDE"
 
 [lints]
 workspace = true
@@ -48,7 +48,7 @@ visual-tests = [
 ]
 
 [[bin]]
-name = "wu"
+name = "IDE"
 path = "src/main.rs"
 
 [[bin]]
