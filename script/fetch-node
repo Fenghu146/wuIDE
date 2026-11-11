@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+# Fetches the Node runtime that runs the bundled Pi agent.
+#
+# Windows ships `crates/wu/resources/agents/node.exe` in the repository. macOS
+# and Linux download the matching official build here at bundle time instead of
+# carrying a ~100MB binary per architecture in Git. The version must stay in
+# sync with node.exe.
+
+set -euo pipefail
+
+node_version="${WU_NODE_VERSION:-24.22.1}"
+target="${1:-$(rustc -vV | sed -n 's/^host: //p')}"
+
+case "$target" in
+    x86_64-apple-darwin)
+        platform="darwin"
+        arch="x64"
+        ;;
+    aarch64-apple-darwin)
+        platform="darwin"
+        arch="arm64"
+        ;;
+    x86_64-*-linux-gnu | x86_64-*-linux-musl)
+        platform="linux"
+        arch="x64"
+        ;;
+    aarch64-*-linux-gnu | aarch64-*-linux-musl)
+        platform="linux"
+        arch="arm64"
+        ;;
+    x86_64-pc-windows-msvc)
+        platform="win"
+        arch="x64"
+        ;;
+    aarch64-pc-windows-msvc)
+        platform="win"
+        arch="arm64"
+        ;;
+    *)
+        echo "Unsupported target for the bundled Node runtime: ${target}" >&2
+        exit 1
+        ;;
+esac
+
+archive="node-v${node_version}-${platform}-${arch}"
+base_url="https://nodejs.org/dist/v${node_version}"
+
+if [[ "$platform" = "win" ]]; then
+    archive="${archive}.zip"
+    dest="${WU_NODE_PATH:-crates/wu/resources/agents/node.exe}"
+else
+    if [[ "$platform" = "darwin" ]]; then
+        archive="${archive}.tar.gz"
+    else
+        archive="${archive}.tar.xz"
+    fi
+    dest="${WU_NODE_PATH:-crates/wu/resources/agents/node}"
+fi
+
+temp_dir=$(mktemp -d)
+trap 'rm -rf "$temp_dir"' EXIT
+
+echo "Fetching ${base_url}/${archive}"
+curl -fsSL "${base_url}/${archive}" -o "${temp_dir}/${archive}"
+curl -fsSL "${base_url}/SHASUMS256.txt" -o "${temp_dir}/SHASUMS256.txt"
+
+expected=$(awk -v name="$archive" '$2 == name { print $1 }' "${temp_dir}/SHASUMS256.txt")
+if [[ -z "$expected" ]]; then
+    echo "No SHA256 entry for ${archive}" >&2
+    exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "${temp_dir}/${archive}" | awk '{ print $1 }')
+else
+    actual=$(shasum -a 256 "${temp_dir}/${archive}" | awk '{ print $1 }')
+fi
+if [[ "$expected" != "$actual" ]]; then
+    echo "SHA256 mismatch for ${archive}: expected ${expected}, got ${actual}" >&2
+    exit 1
+fi
+
+mkdir -p "$(dirname "$dest")"
+unpacked="node-v${node_version}-${platform}-${arch}"
+case "$platform" in
+    win)
+        unzip -p "${temp_dir}/${archive}" "${unpacked}/node.exe" > "${dest}"
+        ;;
+    darwin)
+        tar -xzf "${temp_dir}/${archive}" -C "${temp_dir}" "${unpacked}/bin/node"
+        cp "${temp_dir}/${unpacked}/bin/node" "${dest}"
+        ;;
+    linux)
+        tar -xJf "${temp_dir}/${archive}" -C "${temp_dir}" "${unpacked}/bin/node"
+        cp "${temp_dir}/${unpacked}/bin/node" "${dest}"
+        ;;
+esac
+chmod +x "${dest}"
+
+echo "Wrote ${dest}"

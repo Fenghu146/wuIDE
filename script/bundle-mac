@@ -101,6 +101,9 @@ fi
 
 rustup target add $target_triple
 
+# Fetch Pi's Node runtime before the long build, so a network failure is quick.
+script/fetch-node "${target_triple}"
+
 echo "Compiling wu binaries"
 if [[ "$target_dir" = "release" ]]; then
     cargo --config .cargo/bundle-config.toml rustc ${build_flag} ${extra_features} --package wu --bin IDE --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
@@ -147,7 +150,8 @@ if [[ -f "${node_src}" ]]; then
     cp "${node_src}" "${agents_dst}/node"
     chmod +x "${agents_dst}/node"
 else
-    echo "cargo::warning=Missing ${node_src}; the Pi agent will need a Node runtime on PATH."
+    echo "error: missing ${node_src}; the Pi agent would not be available in this bundle" >&2
+    exit 1
 fi
 
 node_modules_src="crates/wu/resources/agents/node_modules"

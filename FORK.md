@@ -23,7 +23,7 @@
   - Linux：`$XDG_DATA_HOME/wu/agents/<agent>`（回退 `~/.local/share/wu/agents`）
   - 可用环境变量 `WU_AGENT_DATA_DIR` 覆盖。
 - DeepSeek 通过 `--data-dir` 指向该目录。
-- Pi 额外准备私有 `$HOME`（`pi-home/.pi/...`），并首次运行时从用户已有的 `~/.pi/agent` 复制 `auth.json` / `models.json` / `models-store.json` 与去掉 `packages`、`enabledModels` 的 `settings.json`——保留模型与凭据，不装载需要 `npm` 的全局扩展。
+- Pi 额外准备私有 `$HOME`（`pi-home/.pi/...`），并在每次启动时从用户已有的 `~/.pi/agent` 镜像 `auth.json` / `models.json` / `models-store.json` 与去掉 `packages`、`enabledModels` 的 `settings.json`——保留模型与凭据，不装载需要 `npm` 的全局扩展。cc-switch 切换配置后写的就是 `~/.pi/agent`，所以下一次对话就会用上新供应商/模型，不需要清空隔离目录。
 
 ## 4. 图标
 
@@ -42,6 +42,7 @@
 - `script/bundle-windows.ps1`：把 `crates/wu/resources/agents/*.exe` 与 `node_modules/` 复制进安装包；`crates/wu/resources/windows/zed.iss` 增加 `agents\*` 条目。
 - `script/bundle-mac`：把对应架构的 `dsh-acp-darwin-*` 复制到 `Contents/Resources/agents/dsh-acp`。
 - `script/bundle-linux`：把 `dsh-acp-linux-*` 复制到 `libexec/agents/dsh-acp`，并带上 `node` 与 `node_modules/`。
+- `script/fetch-node`：macOS / Linux 打包时下载固定版本（当前 `24.22.1`，与仓库里的 `node.exe` 对齐）的官方 Node，并按 `SHASUMS256.txt` 校验；Windows 直接使用仓库里的 `node.exe`。
 - 三个平台的打包脚本都会在缺少 `dsh-acp` 或 `node_modules/` 时直接失败，避免发出一个“设置里能看到智能体、点开却起不来”的包；缺少 `node` 只警告，因为 macOS/Linux 可以退回到 `PATH` 里的系统 Node。
 - 运行期在 exe 同级的 `agents/`、`resources/agents/`、macOS `Contents/Resources/agents/`、Linux `libexec/agents/` 中查找内置二进制。
 
@@ -60,7 +61,7 @@
 
 ## 已知限制
 
-- **Pi 的 Node 运行时只入库了 Windows 的 `node.exe`**（`crates/wu/resources/agents/node` 被 `.gitignore` 忽略）。macOS / Linux 出包前需要在打包机放入对应架构的 `agents/node`；缺少时打包脚本打印 `cargo::warning` 但不会中断。若机器上装了系统 `node`，运行期会退回到 `PATH` 里的 `node`，并从内置 `agents/` 目录加载 `pi-acp`。
+- **Pi 的 Node 运行时**：Windows 使用入库的 `node.exe`；macOS / Linux 由 `script/fetch-node` 在打包时下载对应架构的官方 Node（`crates/wu/resources/agents/node` 被 `.gitignore` 忽略）并校验 SHA256，因此打包机需要能访问 `nodejs.org`。打包脚本在缺少 `node`、`dsh-acp` 或 `node_modules` 时都会失败，不再发出缺少智能体的包。
 - 仓库直接提交了 `crates/wu/resources/agents/` 下的运行时（`node_modules` 约 16k 个文件、`node.exe` 约 90MB）。这样做是因为打包脚本不做 `npm install`；如果要瘦身，需要先把“构建时下载/安装运行时”接进 `bundle-*` 与 CI，并重写 git 历史。
 - **DeepSeek** 需要 `DEEPSEEK_API_KEY`（或 `dsh-acp --api-key`）；当前通过环境变量传入，后续可在设置页补充输入框。
 - Pi 首次运行会复制用户 `~/.pi/agent` 的模型/凭据；若本机没有 Pi 配置，则需要在终端执行一次 `pi` 登录/配置。

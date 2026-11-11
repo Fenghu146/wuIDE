@@ -515,9 +515,9 @@ fn agent_data_root(program: &Path) -> PathBuf {
 /// user's existing model/credential files (but not their globally installed
 /// extensions, which would need `npm` at runtime).
 ///
-/// The model and credential files are mirrored from the user's global Pi config
-/// on every launch, so edits made in cc-switch (which writes that config) show
-/// up here without the user having to wipe the isolated home.
+/// The model, credential and settings files are mirrored from the user's global
+/// Pi config on every launch, so a profile switch in cc-switch (which writes
+/// that config) reaches the bundled Pi without wiping the isolated home.
 fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     let base = agent_data_root(program);
     let home = base.join("pi-home");
@@ -532,7 +532,7 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
 
     let settings_path = agent_dir.join("settings.json");
     if let Some(source_agent) = source_pi_agent_dir() {
-        for name in ["auth.json", "models.json"] {
+        for name in ["auth.json", "models.json", "models-store.json"] {
             let from = source_agent.join(name);
             if from.is_file() {
                 if let Err(error) = std::fs::copy(&from, &agent_dir.join(name)) {
@@ -540,26 +540,16 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
                 }
             }
         }
-        // Seed the catalogue and settings once; Pi refreshes the catalogue on
-        // its own afterwards, and we must not resurrect globally installed
-        // extensions or `enabledModels` on every launch.
-        let store_from = source_agent.join("models-store.json");
-        let store_to = agent_dir.join("models-store.json");
-        if !store_to.exists() && store_from.is_file() {
-            if let Err(error) = std::fs::copy(&store_from, &store_to) {
-                log::warn!("failed to seed Pi models-store.json: {error}");
+        // Mirror the settings on every launch as well: cc-switch rewrites them
+        // when the user switches profiles, and the bundled Pi has to follow.
+        // Globally installed packages and `enabledModels` are dropped because
+        // they need npm at runtime.
+        if let Some(settings) = read_json(&source_agent.join("settings.json")) {
+            if let Err(error) = write_json_file(&settings_path, &isolated_pi_settings(&settings)) {
+                log::warn!("failed to mirror Pi settings: {error}");
             }
-        }
-        if !settings_path.exists() {
-            let mut value = std::fs::read_to_string(source_agent.join("settings.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                .unwrap_or_else(|| json!({}));
-            if let Some(object) = value.as_object_mut() {
-                object.remove("packages");
-                object.remove("enabledModels");
-            }
-            if let Err(error) = write_json_file(&settings_path, &value) {
+        } else if !settings_path.exists() {
+            if let Err(error) = std::fs::write(&settings_path, "{}") {
                 log::warn!("failed to write Pi settings: {error}");
             }
         }
@@ -574,6 +564,15 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 
     Some((home, agent_dir))
+}
+
+fn isolated_pi_settings(source: &Value) -> Value {
+    let mut settings = source.clone();
+    if let Some(object) = settings.as_object_mut() {
+        object.remove("packages");
+        object.remove("enabledModels");
+    }
+    settings
 }
 
 fn source_pi_agent_dir() -> Option<PathBuf> {
@@ -1466,6 +1465,21 @@ mod tests {
                 command: "cargo test".into()
             }
         );
+    }
+
+    #[test]
+    fn mirrored_settings_drop_global_extensions() {
+        let source = json!({
+            "defaultProvider": "magpie",
+            "defaultModel": "auto/deepseek-v4.1-flash",
+            "packages": ["npm:pi-extension"],
+            "enabledModels": ["pi"]
+        });
+        let settings = isolated_pi_settings(&source);
+        assert_eq!(settings["defaultProvider"], "magpie");
+        assert_eq!(settings["defaultModel"], "auto/deepseek-v4.1-flash");
+        assert!(settings.get("packages").is_none());
+        assert!(settings.get("enabledModels").is_none());
     }
 
     #[test]

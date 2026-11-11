@@ -64,6 +64,9 @@ if command -v rustup >/dev/null 2>&1; then
     rustup_installed=true
 fi
 
+# Fetch Pi's Node runtime before the long build, so a network failure is quick.
+script/fetch-node "${target_triple}"
+
 # Generate the licenses first, so they can be baked into the binaries
 script/generate-licenses
 
@@ -148,7 +151,8 @@ if [[ -f "${agents_src}/node" ]]; then
   cp "${agents_src}/node" "${agents_dst}/node"
   chmod +x "${agents_dst}/node"
 else
-  echo "cargo::warning=Missing ${agents_src}/node; the Pi agent needs a Node runtime on PATH in this bundle."
+  echo "error: missing ${agents_src}/node; the Pi agent would not be available in this bundle" >&2
+  exit 1
 fi
 if [[ -d "${agents_src}/node_modules" ]]; then
   mkdir -p "${agents_dst}"
