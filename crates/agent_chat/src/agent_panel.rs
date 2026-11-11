@@ -902,7 +902,8 @@ impl AgentPanel {
         let harness_icon = match session.kind {
             AgentKind::Claude => IconName::AgentClaude,
             AgentKind::Codex => IconName::AgentCodex,
-            AgentKind::Opencode | AgentKind::DeepSeek | AgentKind::Pi => IconName::AgentOpencode,
+            AgentKind::Opencode | AgentKind::DeepSeek => IconName::AgentOpencode,
+            AgentKind::Pi => IconName::AgentPi,
         };
         let harness_tint: Option<Hsla> = match session.kind {
             AgentKind::Claude => Some(rgb(CLAUDE_BRAND).into()),

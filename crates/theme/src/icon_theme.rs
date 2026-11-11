@@ -421,10 +421,13 @@ fn icon_keys_by_association(
 }
 
 /// The name of the built-in icon theme that every other icon theme falls back to.
-pub const DEFAULT_ICON_THEME_NAME: &str = "Wu Classic";
+pub const DEFAULT_ICON_THEME_NAME: &str = "IDE Classic";
 
 /// The name [`DEFAULT_ICON_THEME_NAME`] had before, still found in older user settings.
 pub const LEGACY_DEFAULT_ICON_THEME_NAME: &str = "Wu (Default)";
+
+/// The name [`DEFAULT_ICON_THEME_NAME`] had before the IDE rename.
+pub const LEGACY_WU_ICON_THEME_NAME: &str = "Wu Classic";
 
 /// The name of the bundled icon theme the default settings use in dark mode.
 pub const SYMBOLS_ICON_THEME_NAME: &str = "Symbols Dark";

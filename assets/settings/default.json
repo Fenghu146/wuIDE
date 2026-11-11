@@ -8,8 +8,8 @@
   // - "dark": Use the theme indicated by the "dark" field
   "theme": {
     "mode": "system",
-    "light": "Wu Light",
-    "dark": "Wu Dark",
+    "light": "IDE Light",
+    "dark": "IDE Dark",
   },
   "icon_theme": {
     "mode": "system",

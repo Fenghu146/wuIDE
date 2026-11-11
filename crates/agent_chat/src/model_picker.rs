@@ -61,9 +61,8 @@ pub(crate) fn agent_icon(kind: AgentKind) -> Icon {
             Icon::new(IconName::AgentClaude).color(Color::Custom(rgb(CLAUDE_BRAND).into()))
         }
         AgentKind::Codex => Icon::new(IconName::AgentCodex),
-        AgentKind::Opencode | AgentKind::DeepSeek | AgentKind::Pi => {
-            Icon::new(IconName::AgentOpencode)
-        }
+        AgentKind::Opencode | AgentKind::DeepSeek => Icon::new(IconName::AgentOpencode),
+        AgentKind::Pi => Icon::new(IconName::AgentPi),
     }
 }
 
@@ -71,7 +70,8 @@ fn agent_icon_name(kind: AgentKind) -> IconName {
     match kind {
         AgentKind::Claude => IconName::AgentClaude,
         AgentKind::Codex => IconName::AgentCodex,
-        AgentKind::Opencode | AgentKind::DeepSeek | AgentKind::Pi => IconName::AgentOpencode,
+        AgentKind::Opencode | AgentKind::DeepSeek => IconName::AgentOpencode,
+        AgentKind::Pi => IconName::AgentPi,
     }
 }
 

@@ -11,6 +11,7 @@ pub enum IconName {
     AgentClaude,
     AgentCodex,
     AgentOpencode,
+    AgentPi,
     AgentFast,
     AgentFastFilled,
     AgentArrowDown,
@@ -241,6 +242,7 @@ pub enum IconName {
     UserCheck,
     Warning,
     Wu,
+    WuMark,
     WholeWord,
     XCircle,
 }

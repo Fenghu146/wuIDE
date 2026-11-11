@@ -14,8 +14,8 @@ pub use settings::{FontFamilyName, IconThemeName, ThemeAppearanceMode, ThemeName
 use settings::{IntoGpui, RegisterSetting, Settings, SettingsContent};
 use std::sync::Arc;
 use theme::{
-    Appearance, SYMBOLS_ICON_THEME_LIGHT_NAME, SYMBOLS_ICON_THEME_NAME, SyntaxTheme, Theme,
-    UiDensity,
+    Appearance, DEFAULT_ICON_THEME_NAME, LEGACY_WU_ICON_THEME_NAME, SYMBOLS_ICON_THEME_LIGHT_NAME,
+    SYMBOLS_ICON_THEME_NAME, SyntaxTheme, Theme, UiDensity,
 };
 
 const MIN_FONT_SIZE: Pixels = px(6.0);
@@ -142,13 +142,35 @@ pub enum ThemeSelection {
     },
 }
 
+fn migrate_theme_name(name: settings::ThemeName) -> settings::ThemeName {
+    let migrated: &str = match name.0.as_ref() {
+        "Wu Dark" => "IDE Dark",
+        "Wu Light" => "IDE Light",
+        "Wu Dark Translucent" => "IDE Dark Translucent",
+        _ => return name,
+    };
+    settings::ThemeName(migrated.into())
+}
+
+fn migrate_icon_theme_name(name: settings::IconThemeName) -> settings::IconThemeName {
+    if name.0.as_ref() == LEGACY_WU_ICON_THEME_NAME {
+        settings::IconThemeName(DEFAULT_ICON_THEME_NAME.into())
+    } else {
+        name
+    }
+}
+
 impl From<settings::ThemeSelection> for ThemeSelection {
     fn from(selection: settings::ThemeSelection) -> Self {
         match selection {
-            settings::ThemeSelection::Static(theme) => ThemeSelection::Static(theme),
-            settings::ThemeSelection::Dynamic { mode, light, dark } => {
-                ThemeSelection::Dynamic { mode, light, dark }
+            settings::ThemeSelection::Static(theme) => {
+                ThemeSelection::Static(migrate_theme_name(theme))
             }
+            settings::ThemeSelection::Dynamic { mode, light, dark } => ThemeSelection::Dynamic {
+                mode,
+                light: migrate_theme_name(light),
+                dark: migrate_theme_name(dark),
+            },
         }
     }
 }
@@ -197,9 +219,15 @@ pub enum IconThemeSelection {
 impl From<settings::IconThemeSelection> for IconThemeSelection {
     fn from(selection: settings::IconThemeSelection) -> Self {
         match selection {
-            settings::IconThemeSelection::Static(theme) => IconThemeSelection::Static(theme),
+            settings::IconThemeSelection::Static(theme) => {
+                IconThemeSelection::Static(migrate_icon_theme_name(theme))
+            }
             settings::IconThemeSelection::Dynamic { mode, light, dark } => {
-                IconThemeSelection::Dynamic { mode, light, dark }
+                IconThemeSelection::Dynamic {
+                    mode,
+                    light: migrate_icon_theme_name(light),
+                    dark: migrate_icon_theme_name(dark),
+                }
             }
         }
     }

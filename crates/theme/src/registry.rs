@@ -9,8 +9,8 @@ use thiserror::Error;
 
 use crate::{
     Appearance, AppearanceContent, BUNDLED_ICON_THEME_NAMES, ChevronIcons, DEFAULT_ICON_THEME_NAME,
-    DirectoryIcons, IconDefinition, IconTheme, IconThemeFamilyContent, Theme, ThemeFamily,
-    default_icon_theme,
+    DirectoryIcons, IconDefinition, IconTheme, IconThemeFamilyContent,
+    LEGACY_WU_ICON_THEME_NAME, Theme, ThemeFamily, default_icon_theme,
 };
 
 const BUNDLED_ICON_THEME_PATHS: &[&str] = &["icon_themes/symbols/icon_theme.json"];
@@ -247,6 +247,12 @@ impl ThemeRegistry {
 
     /// Returns the theme with the given name.
     pub fn get(&self, name: &str) -> Result<Arc<Theme>, ThemeNotFoundError> {
+        let name = match name {
+            "Wu Dark" => "IDE Dark",
+            "Wu Light" => "IDE Light",
+            "Wu Dark Translucent" => "IDE Dark Translucent",
+            _ => name,
+        };
         self.state
             .read()
             .themes
@@ -275,6 +281,11 @@ impl ThemeRegistry {
 
     /// Returns the icon theme with the specified name.
     pub fn get_icon_theme(&self, name: &str) -> Result<Arc<IconTheme>, IconThemeNotFoundError> {
+        let name = if name == LEGACY_WU_ICON_THEME_NAME {
+            DEFAULT_ICON_THEME_NAME
+        } else {
+            name
+        };
         self.state
             .read()
             .icon_themes
