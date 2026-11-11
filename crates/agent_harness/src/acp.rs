@@ -226,6 +226,12 @@ impl Harness for AcpHarness {
         Ok(self.fallback_models())
     }
 
+    /// Pi's catalogue comes from `models.json`, which cc-switch rewrites while
+    /// Wu is running, so the picker has to re-read it rather than cache forever.
+    fn models_follow_config_file(&self) -> bool {
+        self.preset.id == HarnessId::Pi
+    }
+
     fn fallback_models(&self) -> Vec<Model> {
         self.preset
             .fallback_models

@@ -29,6 +29,9 @@ const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const USAGE_FORCED_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// How often a catalogue backed by a user-editable config file is re-read. Kept
+/// short so editing the config in cc-switch shows up without restarting Wu.
+const CONFIG_CATALOG_REFRESH: Duration = Duration::from_secs(3);
 const NEW_CHAT_TITLE: &str = n!("New chat");
 const FORKED_NOTICE: &str = n!("Forked from \"{title}\"");
 const SIDE_CHAT_NOTICE: &str = n!("Side chat of \"{title}\"");
@@ -2316,6 +2319,9 @@ struct ModelCatalog {
     models: Vec<Model>,
     fallback: Vec<Model>,
     loaded: bool,
+    /// When `models` was last read from a config file the user can edit, so a
+    /// picker opened later can pick up edits without a restart.
+    refreshed_at: Option<Instant>,
     _task: Option<Task<()>>,
 }
 
@@ -2733,6 +2739,34 @@ impl AgentStore {
         if catalog.loaded || catalog._task.is_some() {
             return;
         }
+        self.discover_models(kind, harness, cx);
+    }
+
+    /// Re-read a catalogue that comes from a config file the user edits while Wu
+    /// runs (Pi's `models.json`, which cc-switch rewrites). Without this the
+    /// picker would keep showing whatever was there at launch.
+    pub fn refresh_models_if_editable(&mut self, kind: AgentKind, cx: &mut Context<Self>) {
+        let harness = self.harness(kind);
+        if !harness.models_follow_config_file() {
+            return;
+        }
+        let stale = self.catalogs.get(&kind).is_none_or(|catalog| {
+            catalog._task.is_none()
+                && catalog
+                    .refreshed_at
+                    .is_none_or(|refreshed_at| refreshed_at.elapsed() >= CONFIG_CATALOG_REFRESH)
+        });
+        if stale {
+            self.discover_models(kind, harness, cx);
+        }
+    }
+
+    fn discover_models(
+        &mut self,
+        kind: AgentKind,
+        harness: Arc<dyn Harness>,
+        cx: &mut Context<Self>,
+    ) {
         let discovery = spawn_agent_work(cx, async move { harness.models().await });
         let task = cx.spawn(async move |this, cx| {
             let models = match discovery.await {
@@ -2760,6 +2794,7 @@ impl AgentStore {
                 catalog.fallback = fallback;
                 catalog.loaded = !models.is_empty();
                 catalog.models = models;
+                catalog.refreshed_at = Some(Instant::now());
                 catalog._task = None;
                 cx.notify();
             })

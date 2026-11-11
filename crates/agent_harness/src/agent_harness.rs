@@ -98,6 +98,12 @@ pub trait Harness: Send + Sync {
         &[]
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
+    /// Whether `models()` reads a config file that the user (or another app)
+    /// edits while the app runs. Cheap refreshes are then worth doing when the
+    /// picker opens, instead of waiting for a restart.
+    fn models_follow_config_file(&self) -> bool {
+        false
+    }
     fn model_context(&self) -> Result<Option<ModelContext>, HarnessError> {
         Ok(None)
     }

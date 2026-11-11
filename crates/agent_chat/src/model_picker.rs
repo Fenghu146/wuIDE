@@ -479,7 +479,12 @@ impl ModelPicker {
             editor
         });
         let kind = session.read(cx).kind();
-        store.update(cx, |store, cx| store.ensure_models(kind, cx));
+        store.update(cx, |store, cx| {
+            store.ensure_models(kind, cx);
+            // Pi's catalogue lives in a config file cc-switch edits, so re-read
+            // it whenever the picker opens instead of trusting the launch cache.
+            store.refresh_models_if_editable(kind, cx);
+        });
         let focus_handle = cx.focus_handle();
         let subscriptions = vec![
             cx.observe(&session, |_, _, cx| cx.notify()),
