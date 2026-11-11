@@ -27,9 +27,17 @@
     "name": "新建 Codex 对话",
     "description": "开始新的 Codex 对话。"
   },
+  "agent_chat::NewDeepSeekChat": {
+    "name": "新建 DeepSeek 对话",
+    "description": "开始新的 DeepSeek 对话。"
+  },
   "agent_chat::NewOpencodeChat": {
     "name": "新建 OpenCode 对话",
     "description": "开始新的 OpenCode 对话。"
+  },
+  "agent_chat::NewPiChat": {
+    "name": "新建 Pi 对话",
+    "description": "开始新的 Pi 对话。"
   },
   "agent_chat::RenameChat": {
     "name": "重命名对话",
