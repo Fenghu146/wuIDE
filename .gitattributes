@@ -1,5 +1,17 @@
 # Prevent GitHub from displaying comments within JSON files as errors.
 *.json linguist-language=JSON-with-Comments
 
+# Keep text files with LF in the working tree on every platform. With
+# core.autocrlf=true, Windows checkouts otherwise turn multi-line Rust strings
+# into CRLF and the i18n completeness test no longer matches the LF JSON locales.
+*.rs text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+script/** text eol=lf
+
 # Ensure the WSL script always has LF line endings, even on Windows
 crates/wu/resources/windows/zed.sh text eol=lf
