@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use auto_update::{AutoUpdater, release_notes_url};
+use auto_update::{AutoUpdateStatus, AutoUpdater, release_notes_url};
 use gpui::{
     App, DismissEvent, EventEmitter, FocusHandle, Focusable, TaskExt, Window, actions,
     prelude::*,
@@ -28,6 +28,7 @@ actions!(
 
 pub fn init(cx: &mut App) {
     notify_if_app_was_updated(cx);
+    notify_when_update_available(cx);
     cx.observe_new(|workspace: &mut Workspace, _window, cx| {
         workspace.register_action(|workspace, _: &ViewReleaseNotesLocally, window, cx| {
             view_release_notes_locally(workspace, window, cx);
@@ -141,6 +142,81 @@ impl Render for AnnouncementToastNotification {
 }
 
 struct UpdateNotification;
+
+struct UpdateAvailableNotification;
+
+/// Announces a release that an automatic check found, and only downloads it
+/// once the user asks for it.
+fn notify_when_update_available(cx: &mut App) {
+    let Some(updater) = AutoUpdater::get(cx) else {
+        return;
+    };
+
+    let mut announced_version: Option<Version> = None;
+    cx.observe(&updater, move |updater, cx| {
+        let status = updater.read(cx).status();
+        let AutoUpdateStatus::Available { version } = status else {
+            return;
+        };
+        // Polling runs every few hours; the same release must not be announced
+        // twice in a session, not even after the toast was dismissed.
+        if announced_version.as_ref() == Some(&version) {
+            return;
+        }
+        announced_version = Some(version.clone());
+        show_update_available(version, cx);
+    })
+    .detach();
+}
+
+fn show_update_available(version: Version, cx: &mut App) {
+    let Some(updater) = AutoUpdater::get(cx) else {
+        return;
+    };
+    let updater = updater.downgrade();
+    let app_name = ReleaseChannel::global(cx).display_name();
+    let message = t!(
+        "{app_name} {version} is available. Download and install it now?",
+        app_name = app_name,
+        version = version
+    );
+
+    show_app_notification(
+        NotificationId::unique::<UpdateAvailableNotification>(),
+        cx,
+        move |cx| {
+            cx.new(|cx| {
+                MessageNotification::new(message.clone(), cx)
+                    .primary_message(t!("Download and Install"))
+                    .primary_on_click({
+                        let updater = updater.clone();
+                        move |_window, cx| {
+                            if let Some(updater) = updater.upgrade() {
+                                updater.update(cx, |updater, cx| {
+                                    updater.install_available_update(cx)
+                                });
+                            }
+                            cx.emit(DismissEvent);
+                        }
+                    })
+                    .secondary_message(t!("Skip This Version"))
+                    .secondary_on_click({
+                        let updater = updater.clone();
+                        let version = version.clone();
+                        move |_window, cx| {
+                            if let Some(updater) = updater.upgrade() {
+                                updater.update(cx, |updater, cx| {
+                                    updater.skip_version(&version, cx).detach_and_log_err(cx);
+                                });
+                            }
+                            cx.emit(DismissEvent);
+                        }
+                    })
+                    .show_suppress_button(false)
+            })
+        },
+    );
+}
 
 fn show_update_notification(cx: &mut App) {
     let Some(updater) = AutoUpdater::get(cx) else {

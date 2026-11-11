@@ -4,6 +4,14 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+## 1.3.2 - 2026-11-11
+
+- Turn automatic updates back on, checking this project's own GitHub releases rather than the upstream project's.
+- Announce a new version and wait for **Download and Install** before replacing the app; **Skip This Version** stops a release you do not want from asking again until a higher one ships.
+- Fix installing an update on macOS by reading the mounted disk image's real volume, and on Linux by looking for the bundled `ide.app`.
+- Stop **Check for Updates** from reporting an error when a published release has no download that matches this build.
+- Show the CLI as `ide <path>` in the setting that describes how directories open from the command line.
+
 ## 1.3.1 - 2026-11-11
 
 - Show the application icon on the welcome and onboarding screens, and use the same "不打扰你的编辑器" tagline on both of them.

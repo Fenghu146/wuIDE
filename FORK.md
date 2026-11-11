@@ -33,10 +33,14 @@
   - `crates/wu/resources/Document.icns`
 - 欢迎页/引导页沿用的 `assets/images/wu_icon.png` 现在是 `app-icon.png` 的逐字节副本（`sha256` 相同），旧鹿头图已删除。仓库里仍以 Wu 命名的图形资源只剩 `assets/images/wu_icon.png`、`assets/images/wu_logo.svg`、`assets/icons/wu_mark.svg`（内容均已换新）与已无代码引用的 `assets/icons/wu.svg`。
 
-## 5. 关闭官方自动更新
+## 5. 自动更新指向本仓库的 release
 
-- `crates/auto_update/src/auto_update.rs` 的 `updates_enabled()` 返回 `false`：私人分叉自己发版，不跟随上游 `dstrml/wu` 的 release，避免官方更新覆盖本地修改。
-- 自动轮询不发请求；手动点“检查更新”会显示“无法检查更新”的提示，不再是一个点了没反应的哑入口。
+- 自动更新查的是 `https://api.github.com/repos/Fenghu146/wu/releases`，也就是本仓库自己发布的版本。上游 `dstrml/wu` 的 release（资产名还是 `Wu-*`）不再被考虑——否则会把本地改动覆盖回上游版本。因为客户端是匿名 HTTP，没有 token 机制，**这个仓库必须保持 public**：私有仓库的 release 匿名拉不到（404）。
+- 默认开启（`assets/settings/default.json` 里 `auto_update` 为 `true`）：启动时检查一次，之后每 12 小时一次；设置里关掉只会停止轮询，手动点“检查更新”仍可用。
+- 自动检查只发通知、不直接装：状态进 `AutoUpdateStatus::Available`，标题栏出现“有可用更新”按钮，同时弹一张带“下载并安装” / “跳过这个版本”的通知卡。点了才下载（有 digest 时校验 SHA-256）、覆盖当前安装，下次启动提示已更新。菜单里的“检查更新”算手动检查，一路装到底。
+- “跳过这个版本”写进 kvp 的 `auto-updater-skipped-version`，只有出现更高版本才会再提示；同一版本在一次会话里也不会重复弹卡。
+- 资产名与打包脚本对齐：`IDE-{arch}.dmg`、`ide-linux-{arch}.tar.gz`、`IDE-{arch}.exe`（`github_asset_name`）。改名后对不上会让 `release_asset` 直接报 “has no asset named …”。资产是在版本比对**之后**才找的，所以一个不比当前版本新的 release 即使没有对应资产，也不会让检查失败。
+- macOS 的挂载点改为解析 `hdiutil attach` 的输出，不再写死卷名：卷名取自 bundle 名，重命名成 IDE 之后写死的 `Wu` 会让 `rsync` 指向不存在的路径。Linux 同理，包内目录是 `ide.app` + `libexec/ide`。
 
 ## 6. 打包
 
@@ -52,7 +56,7 @@
 - 窗口标题、菜单、关于窗口、设置页、对话框、CLI 帮助、`user_agent`/系统信息里的产品名从 Wu 改为 **IDE**（macOS bundle 名为 `IDE` / `IDE Dev`）。
 - Windows 上真正落盘的可执行文件也叫 `IDE.exe`：`crates/wu/Cargo.toml` 的 `[[bin]] name` / `default-run` 改为 `IDE`，Windows 版本资源（ProductName / FileDescription）改为 IDE / IDE Dev。
 - `paths::APP_NAME` 改为 `IDE`，所以用户档案目录（设置、会话、日志）现在是 `%LOCALAPPDATA%\IDE`、`~/Library/Application Support/IDE`、`~/.config/ide`。**代价**：已经在用 Wu 的机器升级后是空档案，旧配置不会自动迁移；想保留旧档案就单独回退 `paths::APP_NAME` 那一行。
-- 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`）、Windows 安装目录 `{autopf}\IDE`（仅升级时沿用旧的 `{autopf}\Wu`）与安装包文件名 `Wu-*.exe` / `Wu-*.dmg`（发版脚本与下载链接依赖它们）。`base_keymap` 的显示名已改为 IDE，但存储值仍是 `Zed`，不影响旧设置。主题名不再是保留项，见下文。
+- 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名（Linux 上是 `ide` 的软链，Windows 上是 `ide.exe` 的副本）、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`，命令面板里因此仍显示 `wu:` 前缀）、Windows 安装目录 `{autopf}\IDE`（仅升级时沿用旧的 `{autopf}\Wu`）。`base_keymap` 的显示名已改为 IDE，但存储值仍是 `Zed`，不影响旧设置。主题名不再是保留项，见下文。
 - 界面标识统一：欢迎页/引导页 logo 用的是 `assets/images/wu_icon.png`，它与 `crates/wu/resources/app-icon.png` 是同一张图（逐字节相同），所以界面 logo 与安装包图标始终一致；欢迎页 tagline 统一为“不打扰你的编辑器”；DAP `client_name`、更新助手窗口标题、Appx COM surrogate 的 `DisplayName` 也改为 IDE。
 - 安装器侧跟进：`bundle-windows.ps1` 打包 `IDE.exe`，`zed.iss` 的 `AppExeName` 为 IDE；显示名（Add/Remove Programs、开始菜单、右键菜单）与 Linux `.desktop` 的 `Name` 也改为 IDE，但只改标签、不改 ID 与路径。
 - 打包链路全部跟着改名对齐：`bundle-mac` / `bundle-linux` / `check-translations` 用 `--bin IDE` 与 `release/IDE`，macOS 可执行文件为 `Contents/MacOS/IDE`（dSYM 也改名为 `IDE.dSYM`），`explorer_command_injector` 的 Appx 清单与右键菜单指向 `IDE.exe`，`uninstall.sh` 清 `IDE.app` 与 `~/.config/ide`、`~/.local/share/ide`。

@@ -35,6 +35,8 @@ use util::command::new_command;
 use workspace::Workspace;
 
 const SHOULD_SHOW_UPDATE_NOTIFICATION_KEY: &str = "auto-updater-should-show-updated-notification";
+/// The version the user chose to skip. It stays quiet until a higher one ships.
+const SKIPPED_VERSION_KEY: &str = "auto-updater-skipped-version";
 
 #[derive(Debug)]
 struct MissingDependencyError(String);
@@ -162,6 +164,11 @@ actions!(
 pub enum AutoUpdateStatus {
     Idle,
     Checking,
+    /// A newer release exists and is waiting for the user to approve the
+    /// download, so that installing always stays an explicit decision.
+    Available {
+        version: Version,
+    },
     Downloading {
         version: Version,
         /// Download progress as a fraction in the range `0.0..=1.0`, or `None`
@@ -177,8 +184,6 @@ pub enum AutoUpdateStatus {
     Errored {
         error: Arc<anyhow::Error>,
     },
-    /// This build does not update itself (see `updates_enabled`).
-    Disabled,
 }
 
 impl PartialEq for AutoUpdateStatus {
@@ -188,6 +193,10 @@ impl PartialEq for AutoUpdateStatus {
         match (self, other) {
             (AutoUpdateStatus::Idle, AutoUpdateStatus::Idle) => true,
             (AutoUpdateStatus::Checking, AutoUpdateStatus::Checking) => true,
+            (
+                AutoUpdateStatus::Available { version: v1 },
+                AutoUpdateStatus::Available { version: v2 },
+            ) => v1 == v2,
             (
                 AutoUpdateStatus::Downloading { version: v1, .. },
                 AutoUpdateStatus::Downloading { version: v2, .. },
@@ -203,7 +212,6 @@ impl PartialEq for AutoUpdateStatus {
             (AutoUpdateStatus::Errored { error: e1 }, AutoUpdateStatus::Errored { error: e2 }) => {
                 e1.to_string() == e2.to_string()
             }
-            (AutoUpdateStatus::Disabled, AutoUpdateStatus::Disabled) => true,
             _ => false,
         }
     }
@@ -213,13 +221,6 @@ impl AutoUpdateStatus {
     pub fn is_updated(&self) -> bool {
         matches!(self, Self::Updated { .. })
     }
-}
-
-/// Whether this build may replace itself with a downloaded release. This private
-/// fork publishes its own binaries, and upstream releases lack its changes, so
-/// following them would quietly roll the editor back.
-fn updates_enabled() -> bool {
-    false
 }
 
 pub struct AutoUpdater {
@@ -241,7 +242,7 @@ pub struct ReleaseAsset {
     pub digest: Option<String>,
 }
 
-const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/dstrml/wu/releases";
+const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/Fenghu146/wu/releases";
 
 #[derive(Deserialize)]
 struct GitHubRelease {
@@ -259,9 +260,9 @@ struct GitHubReleaseAsset {
 
 fn github_asset_name(asset: &str, os: &str, arch: &str) -> Result<String> {
     match (asset, os) {
-        ("zed", "macos") => Ok(format!("Wu-{arch}.dmg")),
-        ("zed", "linux") => Ok(format!("wu-linux-{arch}.tar.gz")),
-        ("zed", "windows") => Ok(format!("Wu-{arch}.exe")),
+        ("zed", "macos") => Ok(format!("IDE-{arch}.dmg")),
+        ("zed", "linux") => Ok(format!("ide-linux-{arch}.tar.gz")),
+        ("zed", "windows") => Ok(format!("IDE-{arch}.exe")),
         ("wu-remote-server", _) => Ok(format!("wu-remote-server-{os}-{arch}.gz")),
         _ => anyhow::bail!("no release asset for {asset} on {os}"),
     }
@@ -423,9 +424,9 @@ pub fn release_notes_url(cx: &mut App) -> Option<String> {
             let mut current_version = auto_updater.current_version.clone();
             current_version.pre = semver::Prerelease::EMPTY;
             current_version.build = semver::BuildMetadata::EMPTY;
-            format!("https://github.com/dstrml/wu/releases/tag/v{current_version}")
+            format!("https://github.com/Fenghu146/wu/releases/tag/v{current_version}")
         }
-        ReleaseChannel::Dev => "https://github.com/dstrml/wu/commits/main/".to_string(),
+        ReleaseChannel::Dev => "https://github.com/Fenghu146/wu/commits/main/".to_string(),
     };
     Some(url)
 }
@@ -580,18 +581,6 @@ impl AutoUpdater {
     }
 
     pub fn poll(&mut self, check_type: UpdateCheckType, cx: &mut Context<Self>) {
-        if !updates_enabled() {
-            // Automatic polling runs on an interval, so only answer an explicit
-            // check. Answering it keeps the menu entry from looking broken.
-            if check_type.is_manual() {
-                self.update_check_type = check_type;
-                self.dismissed_status = None;
-                self.status = AutoUpdateStatus::Disabled;
-                cx.notify();
-            }
-            return;
-        }
-
         if check_type.is_manual() {
             self.dismissed_status = None;
         }
@@ -607,7 +596,7 @@ impl AutoUpdater {
         cx.notify();
 
         self.pending_poll = Some(cx.spawn(async move |this, cx| {
-            let result = Self::update(this.upgrade()?, cx).await;
+            let result = Self::update(this.upgrade()?, check_type, cx).await;
             this.update(cx, |this, cx| {
                 this.pending_poll = None;
                 if let Err(error) = result {
@@ -638,6 +627,58 @@ impl AutoUpdater {
             })
             .ok()
         }));
+    }
+
+    /// Starts the download and install of the release announced by
+    /// [`AutoUpdateStatus::Available`]. The release metadata is fetched again so
+    /// that the download url and digest are fresh.
+    pub fn install_available_update(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.status, AutoUpdateStatus::Available { .. }) {
+            return;
+        }
+        self.poll(UpdateCheckType::Manual, cx);
+    }
+
+    /// Records `version` as skipped, so automatic checks stay quiet until a
+    /// higher release shows up.
+    pub fn skip_version(&mut self, version: &Version, cx: &mut Context<Self>) -> Task<Result<()>> {
+        if matches!(&self.status, AutoUpdateStatus::Available { version: available } if available == version)
+        {
+            self.status = AutoUpdateStatus::Idle;
+            cx.notify();
+        }
+
+        let kvp = KeyValueStore::global(cx);
+        let version = version.to_string();
+        cx.background_spawn(async move {
+            kvp.write_kvp(SKIPPED_VERSION_KEY.to_string(), version)
+                .await
+        })
+    }
+
+    async fn is_version_skipped(version: &Version, cx: &mut AsyncApp) -> bool {
+        let kvp = cx.update(|cx| KeyValueStore::global(cx));
+        match cx
+            .background_spawn(async move { kvp.read_kvp(SKIPPED_VERSION_KEY) })
+            .await
+        {
+            Ok(skipped) => Self::skipped_record_covers(skipped.as_deref(), version),
+            Err(error) => {
+                log::warn!("auto-update: could not read the skipped version: {error:#}");
+                false
+            }
+        }
+    }
+
+    fn skipped_record_covers(skipped: Option<&str>, candidate: &Version) -> bool {
+        let Some(skipped) = skipped else {
+            return false;
+        };
+        let Ok(skipped) = skipped.parse::<Version>() else {
+            log::warn!("auto-update: ignoring unparsable skipped version {skipped:?}");
+            return false;
+        };
+        skipped >= *candidate
     }
 
     pub fn current_version(&self) -> Version {
@@ -756,6 +797,15 @@ impl AutoUpdater {
         arch: &str,
         cx: &mut AsyncApp,
     ) -> Result<ReleaseAsset> {
+        let release = Self::fetch_release(this, version, cx).await?;
+        Self::release_asset(release, asset, os, arch)
+    }
+
+    async fn fetch_release(
+        this: &Entity<Self>,
+        version: Option<Version>,
+        cx: &mut AsyncApp,
+    ) -> Result<GitHubRelease> {
         let client = this.read_with(cx, |this, _| this.client.clone());
         let http_client = client.http_client();
 
@@ -780,14 +830,20 @@ impl AutoUpdater {
             String::from_utf8_lossy(&body),
         );
 
-        let release: GitHubRelease =
-            serde_json::from_slice(body.as_slice()).with_context(|| {
-                format!(
-                    "error deserializing release {:?}",
-                    String::from_utf8_lossy(&body),
-                )
-            })?;
+        serde_json::from_slice(body.as_slice()).with_context(|| {
+            format!(
+                "error deserializing release {:?}",
+                String::from_utf8_lossy(&body),
+            )
+        })
+    }
 
+    fn release_asset(
+        release: GitHubRelease,
+        asset: &str,
+        os: &str,
+        arch: &str,
+    ) -> Result<ReleaseAsset> {
         let asset_name = github_asset_name(asset, os, arch)?;
         let asset = release
             .assets
@@ -801,11 +857,7 @@ impl AutoUpdater {
             })?;
 
         Ok(ReleaseAsset {
-            version: release
-                .tag_name
-                .strip_prefix('v')
-                .unwrap_or(&release.tag_name)
-                .to_string(),
+            version: Self::tag_version(&release.tag_name).to_string(),
             url: asset.browser_download_url,
             digest: asset.digest.map(|digest| {
                 digest
@@ -816,16 +868,22 @@ impl AutoUpdater {
         })
     }
 
-    async fn update(this: Entity<Self>, cx: &mut AsyncApp) -> Result<()> {
-        let (client, installed_version, previous_status, release_channel) =
-            this.read_with(cx, |this, cx| {
-                (
-                    this.client.http_client(),
-                    this.current_version.clone(),
-                    this.status.clone(),
-                    ReleaseChannel::try_global(cx).unwrap_or(ReleaseChannel::Stable),
-                )
-            });
+    fn tag_version(tag_name: &str) -> &str {
+        tag_name.strip_prefix('v').unwrap_or(tag_name)
+    }
+
+    async fn update(
+        this: Entity<Self>,
+        check_type: UpdateCheckType,
+        cx: &mut AsyncApp,
+    ) -> Result<()> {
+        let (client, installed_version, previous_status) = this.read_with(cx, |this, _| {
+            (
+                this.client.http_client(),
+                this.current_version.clone(),
+                this.status.clone(),
+            )
+        });
 
         Self::check_dependencies()?;
 
@@ -837,16 +895,19 @@ impl AutoUpdater {
             cx.notify();
         });
 
-        let fetched_release_data =
-            Self::get_release_asset(&this, release_channel, None, "zed", OS, ARCH, cx).await?;
-        let fetched_version = fetched_release_data.clone().version;
+        // The release is read before the asset is looked up, so a release that
+        // is not newer (or predates the current asset names) never fails the
+        // check just because it is missing a file we would not download anyway.
+        let release = Self::fetch_release(&this, None, cx).await?;
+        let fetched_version = Self::tag_version(&release.tag_name).to_string();
         let newer_version = Self::check_if_fetched_version_is_newer(
             installed_version,
-            fetched_version,
+            fetched_version.clone(),
             previous_status.clone(),
         )?;
 
         let Some(newer_version) = newer_version else {
+            log::info!("Auto Update: {fetched_version} is not newer, nothing to do");
             this.update(cx, |this, cx| {
                 let status = match previous_status {
                     AutoUpdateStatus::Updated { .. } => previous_status,
@@ -857,6 +918,31 @@ impl AutoUpdater {
             });
             return Ok(());
         };
+
+        // An automatic check only announces the release: replacing the running
+        // app stays the user's call. A manual check means they already asked
+        // for it, so it goes all the way.
+        if !check_type.is_manual() {
+            let status = if Self::is_version_skipped(&newer_version, cx).await {
+                log::info!("Auto Update: {newer_version} was skipped, not announcing it");
+                match previous_status {
+                    // An update that is already staged still needs its restart prompt.
+                    AutoUpdateStatus::Updated { .. } => previous_status,
+                    _ => AutoUpdateStatus::Idle,
+                }
+            } else {
+                AutoUpdateStatus::Available {
+                    version: newer_version,
+                }
+            };
+            this.update(cx, |this, cx| {
+                this.status = status;
+                cx.notify();
+            });
+            return Ok(());
+        }
+
+        let fetched_release_data = Self::release_asset(release, "zed", OS, ARCH)?;
 
         this.update(cx, |this, cx| {
             this.status = AutoUpdateStatus::Downloading {
@@ -1264,12 +1350,12 @@ async fn install_release_linux(
     } else {
         String::default()
     };
-    let app_folder_name = format!("wu{}.app", suffix);
+    let app_folder_name = format!("ide{}.app", suffix);
 
     let from = extracted.join(&app_folder_name);
     let mut to = home_dir.join(".local");
 
-    let expected_suffix = format!("{}/libexec/wu-editor", app_folder_name);
+    let expected_suffix = format!("{}/libexec/ide", app_folder_name);
 
     if let Some(prefix) = running_app_path
         .to_str()
@@ -1306,10 +1392,6 @@ async fn install_release_macos(
         .file_name()
         .with_context(|| format!("invalid running app path {running_app_path:?}"))?;
 
-    let mount_path = temp_dir.path().join("Wu");
-    let mut mounted_app_path: OsString = mount_path.join(running_app_filename).into();
-
-    mounted_app_path.push("/");
     let mut cmd = new_command("hdiutil");
     cmd.args(["attach", "-nobrowse"])
         .arg(&downloaded_dmg)
@@ -1325,6 +1407,26 @@ async fn install_release_macos(
         "failed to mount: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
+
+    // The mounted volume is named after whatever the release bundle shipped,
+    // so the mount point has to come from `hdiutil` rather than a guess. It
+    // prints one tab-separated line per mounted filesystem, mount point last.
+    let mount_path = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split('\t').next_back())
+        .map(|mount_point| PathBuf::from(mount_point.trim()))
+        .rfind(|mount_point| mount_point.join(running_app_filename).exists())
+        .with_context(|| {
+            format!(
+                "no mounted volume in {downloaded_dmg:?} contains {}: {}",
+                running_app_filename.to_string_lossy(),
+                String::from_utf8_lossy(&output.stdout)
+            )
+        })?;
+
+    let mut mounted_app_path: OsString = mount_path.join(running_app_filename).into();
+
+    mounted_app_path.push("/");
 
     let unmounter = MacOsUnmounter {
         mount_path: mount_path.clone(),
@@ -1535,16 +1637,24 @@ mod tests {
                 let release_available = release_available.load(atomic::Ordering::Relaxed);
                 let dmg_rx = dmg_rx.clone();
                 async move {
-                if req.uri().path() == "/releases/stable/latest/asset" {
-                    if release_available {
-                        return Ok(Response::builder().status(200).body(
-                            r#"{"version":"0.100.1","url":"https://test.example/new-download"}"#.into()
-                        ).unwrap());
+                if req.uri().path() == "/repos/Fenghu146/wu/releases/latest" {
+                    let (tag_name, download_url) = if release_available {
+                        ("v0.100.1", "https://test.example/new-download")
                     } else {
-                        return Ok(Response::builder().status(200).body(
-                            r#"{"version":"0.100.0","url":"https://test.example/old-download"}"#.into()
-                        ).unwrap());
-                    }
+                        ("v0.100.0", "https://test.example/old-download")
+                    };
+                    let asset_name = github_asset_name("zed", OS, ARCH)?;
+                    let release = serde_json::json!({
+                        "tag_name": tag_name,
+                        "assets": [{
+                            "name": asset_name,
+                            "browser_download_url": download_url,
+                        }],
+                    });
+                    return Ok(Response::builder()
+                        .status(200)
+                        .body(release.to_string().into())
+                        .unwrap());
                 } else if req.uri().path() == "/new-download" {
                     return Ok(Response::builder().status(200).body({
                         let dmg_rx = dmg_rx.lock().take().unwrap();
@@ -1574,8 +1684,31 @@ mod tests {
         loop {
             cx.background_executor.timer(Duration::from_millis(0)).await;
             cx.run_until_parked();
+            let ready = auto_updater.read_with(cx, |updater, _| {
+                matches!(updater.status(), AutoUpdateStatus::Available { .. })
+                    && updater.pending_poll.is_none()
+            });
+            if ready {
+                break;
+            }
+        }
+        // An automatic check only announces the release; nothing is downloaded
+        // until the user approves it.
+        let status = auto_updater.read_with(cx, |updater, _| updater.status());
+        assert_eq!(
+            status,
+            AutoUpdateStatus::Available {
+                version: semver::Version::new(0, 100, 1),
+            }
+        );
+
+        auto_updater.update(cx, |updater, cx| updater.install_available_update(cx));
+
+        loop {
+            cx.background_executor.timer(Duration::from_millis(0)).await;
+            cx.run_until_parked();
             let status = auto_updater.read_with(cx, |updater, _| updater.status());
-            if !matches!(status, AutoUpdateStatus::Idle) {
+            if !matches!(status, AutoUpdateStatus::Available { .. }) {
                 break;
             }
         }
@@ -1734,6 +1867,39 @@ mod tests {
 
         let downloaded_len = std::fs::metadata(&target_path).unwrap().len();
         assert_eq!(downloaded_len, content_length as u64);
+    }
+
+    #[test]
+    fn test_verify_digest() {
+        const EMPTY_SHA256: &str =
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        assert!(verify_digest(Sha256::new(), Some(EMPTY_SHA256), "https://test.example/a").is_ok());
+        assert!(
+            verify_digest(
+                Sha256::new(),
+                Some(&EMPTY_SHA256.to_uppercase()),
+                "https://test.example/a"
+            )
+            .is_ok()
+        );
+        assert!(verify_digest(Sha256::new(), Some("deadbeef"), "https://test.example/a").is_err());
+        // Releases published before GitHub reported digests still update.
+        assert!(verify_digest(Sha256::new(), None, "https://test.example/a").is_ok());
+    }
+
+    #[test]
+    fn test_skipped_version_stays_quiet_until_a_higher_one_ships() {
+        let candidate = Version::new(1, 2, 3);
+
+        assert!(AutoUpdater::skipped_record_covers(Some("1.2.3"), &candidate));
+        assert!(AutoUpdater::skipped_record_covers(Some("1.2.4"), &candidate));
+        assert!(!AutoUpdater::skipped_record_covers(Some("1.2.2"), &candidate));
+        assert!(!AutoUpdater::skipped_record_covers(None, &candidate));
+        assert!(!AutoUpdater::skipped_record_covers(
+            Some("not-a-version"),
+            &candidate
+        ));
     }
 
     #[test]

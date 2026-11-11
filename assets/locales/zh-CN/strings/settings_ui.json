@@ -311,7 +311,7 @@
   "Horizontal Split Direction": "水平拆分方向",
   "Hover Popover": "悬停弹窗",
   "How Git hunks are displayed visually in the editor.": "Git 差异块在编辑器中的显示样式。",
-  "How `wu <path>` opens directories when no flag is specified.": "未指定参数时 `wu <path>` 打开文件夹的方式。",
+  "How `ide <path>` opens directories when no flag is specified.": "未指定参数时 `ide <path>` 打开文件夹的方式。",
   "How and when the scrollbar should be displayed.": "滚动条的显示方式和时机。",
   "How commit dates are shown in the Git Graph.": "提交日期在 Git 图谱中的显示方式。",
   "How entry statuses are displayed.": "条目状态的显示方式。",

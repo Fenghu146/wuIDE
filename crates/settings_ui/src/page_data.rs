@@ -222,7 +222,7 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: n!("CLI Default Open Behavior"),
-                description: n!("How `wu <path>` opens directories when no flag is specified."),
+                description: n!("How `ide <path>` opens directories when no flag is specified."),
                 field: Box::new(SettingField {
                     json_path: Some("cli_default_open_behavior"),
                     pick: |settings_content| {

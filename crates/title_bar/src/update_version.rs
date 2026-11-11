@@ -41,7 +41,10 @@ impl UpdateVersion {
     pub fn update_simulation(&mut self, cx: &mut Context<Self>) {
         let next_state = match self.status {
             AutoUpdateStatus::Idle => AutoUpdateStatus::Checking,
-            AutoUpdateStatus::Checking => AutoUpdateStatus::Downloading {
+            AutoUpdateStatus::Checking => AutoUpdateStatus::Available {
+                version: Version::new(1, 99, 0),
+            },
+            AutoUpdateStatus::Available { .. } => AutoUpdateStatus::Downloading {
                 version: Version::new(1, 99, 0),
                 progress: Some(0.5),
             },
@@ -55,7 +58,6 @@ impl UpdateVersion {
                 error: Arc::new(anyhow!("Network timeout")),
             },
             AutoUpdateStatus::Errored { .. } => AutoUpdateStatus::Idle,
-            AutoUpdateStatus::Disabled => AutoUpdateStatus::Idle,
         };
 
         self.status = next_state;
@@ -79,6 +81,12 @@ impl UpdateVersion {
         cx.notify()
     }
 
+    fn start_update(&mut self, cx: &mut Context<Self>) {
+        if let Some(auto_updater) = AutoUpdater::get(cx) {
+            auto_updater.update(cx, |auto_updater, cx| auto_updater.install_available_update(cx));
+        }
+    }
+
     fn version_tooltip_message(version: &Version) -> String {
         UpdateButton::version_tooltip_message(version)
     }
@@ -92,6 +100,15 @@ impl Render for UpdateVersion {
         match &self.status {
             AutoUpdateStatus::Checking if self.update_check_type.is_manual() => {
                 UpdateButton::checking().into_any_element()
+            }
+            AutoUpdateStatus::Available { version } => {
+                let tooltip = Self::version_tooltip_message(version);
+                UpdateButton::new(IconName::ArrowCircle, t!("Update available"))
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(|this, _, _window, cx| this.start_update(cx)))
+                    .with_dismiss()
+                    .on_dismiss(cx.listener(|this, _, _window, cx| this.dismiss(cx)))
+                    .into_any_element()
             }
             AutoUpdateStatus::Downloading { version, progress } => {
                 let rendered_version = version.clone();
@@ -128,14 +145,6 @@ impl Render for UpdateVersion {
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(workspace::OpenLog), cx);
                     })
-                    .on_dismiss(cx.listener(|this, _, _window, cx| this.dismiss(cx)))
-                    .into_any_element()
-            }
-            // `updates_enabled()` is false in this build, so an explicit check
-            // reports that it cannot be served instead of silently doing nothing.
-            AutoUpdateStatus::Disabled => {
-                UpdateButton::new(IconName::Info, t!("Could not check for updates"))
-                    .with_dismiss()
                     .on_dismiss(cx.listener(|this, _, _window, cx| this.dismiss(cx)))
                     .into_any_element()
             }
