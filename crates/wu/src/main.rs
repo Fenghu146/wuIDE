@@ -1424,7 +1424,7 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "wu", disable_version_flag = true, max_term_width = 100)]
+#[command(name = "IDE", disable_version_flag = true, max_term_width = 100)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///
