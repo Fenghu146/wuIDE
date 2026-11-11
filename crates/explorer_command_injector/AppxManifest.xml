@@ -68,7 +68,7 @@
         </desktop4:Extension>
         <com:Extension Category="windows.comServer">
           <com:ComServer>
-            <com:SurrogateServer DisplayName="Wu">
+            <com:SurrogateServer DisplayName="IDE">
               <com:Class Id="1e6daf2f-4a3b-4d29-9ea7-ed82888c16a2" Path="zed_explorer_command_injector.dll" ThreadingModel="STA"/>
             </com:SurrogateServer>
           </com:ComServer>

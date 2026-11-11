@@ -20,7 +20,7 @@ use crate::{
 const LIGHT_THEMES: [&str; 3] = ["Wu Light", "Catppuccin Latte", "One Light"];
 const DARK_THEMES: [&str; 3] = ["Wu Dark", "Catppuccin Mocha", "One Dark"];
 const FAMILY_NAMES: [SharedString; 3] = [
-    SharedString::new_static("Wu"),
+    SharedString::new_static("IDE"),
     SharedString::new_static("Catppuccin"),
     SharedString::new_static("One"),
 ];
@@ -237,7 +237,7 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
         ToggleButtonGroup::two_rows(
             "base_keymap_selection",
             [
-                ToggleButtonWithIcon::new("Wu", IconName::Wu, |_, _, cx| {
+                ToggleButtonWithIcon::new("IDE", IconName::Wu, |_, _, cx| {
                     write_keymap_base(BaseKeymap::Zed, cx);
                 }),
                 ToggleButtonWithIcon::new("VS Code", IconName::EditorVsCode, |_, _, cx| {

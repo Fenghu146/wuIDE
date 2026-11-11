@@ -10333,6 +10333,8 @@ mod tests {
             claude_code: Some(false),
             codex: Some(false),
             opencode: None,
+            dsh: None,
+            pi: None,
         };
         keep_one_agent_shown(&mut agents, |agents| &mut agents.opencode);
         assert_eq!(agents.opencode, None);

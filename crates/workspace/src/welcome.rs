@@ -431,7 +431,7 @@ impl Render for WelcomePage {
                             )
                             .child(
                                 v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new(t!("The editor for what's next"))
+                                    Label::new(t!("The editor that doesn't get in your way"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted)
                                         .italic(),

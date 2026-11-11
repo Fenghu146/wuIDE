@@ -104,7 +104,6 @@
   "Suppress": "不再显示",
   "Suppress with shift-click": "按住 Shift 点击可不再显示",
   "Task spawn failed: {error}": "任务启动失败：{error}",
-  "The editor for what's next": "面向未来的编辑器",
   "Themes…": "主题…",
   "This buffer contains unsaved edits. Do you want to save it?": "此缓冲区包含未保存的编辑。是否保存？",
   "This file has been deleted on disk since you started editing it. Do you want to recreate it?": "开始编辑后，此文件已在磁盘上被删除。是否重新创建？",

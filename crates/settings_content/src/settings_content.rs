@@ -499,7 +499,7 @@ pub enum BaseKeymapContent {
 
 impl strum::VariantNames for BaseKeymapContent {
     const VARIANTS: &'static [&'static str] = &[
-        "Wu",
+        "IDE",
         "VSCode",
         "JetBrains",
         "Sublime Text",

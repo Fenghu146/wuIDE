@@ -6157,13 +6157,15 @@ mod translation_tests {
     const UNTRANSLATED_SETTING_VALUES: &[&str] = &[
         "Atom",
         "Cursor",
+        "DeepSeek",
         "Emacs",
         "English",
+        "IDE",
         "JetBrains",
+        "Pi",
         "Sublime Text",
         "TextMate",
         "VSCode",
-        "Wu",
         "简体中文",
     ];
 
