@@ -140,7 +140,8 @@ if [[ -f "${agents_src}/dsh-acp-linux-${arch_suffix}" ]]; then
   cp "${agents_src}/dsh-acp-linux-${arch_suffix}" "${agents_dst}/dsh-acp"
   chmod +x "${agents_dst}/dsh-acp"
 else
-  echo "cargo::warning=Missing ${agents_src}/dsh-acp-linux-${arch_suffix}; the DeepSeek agent will not be available in this bundle."
+  echo "error: missing ${agents_src}/dsh-acp-linux-${arch_suffix}; the DeepSeek agent would not be available in this bundle" >&2
+  exit 1
 fi
 if [[ -f "${agents_src}/node" ]]; then
   mkdir -p "${agents_dst}"
@@ -158,7 +159,8 @@ if [[ -d "${agents_src}/node_modules" ]]; then
     find "${agents_dst}/node_modules/.bin" -type f ! -name '*.cmd' ! -name '*.ps1' -exec chmod +x {} +
   fi
 else
-  echo "cargo::warning=Missing ${agents_src}/node_modules; the Pi agent will not be available in this bundle."
+  echo "error: missing ${agents_src}/node_modules; the Pi agent would not be available in this bundle" >&2
+  exit 1
 fi
 cp "${target_dir}/${target_triple}/release/cli" "${wu_dir}/bin/wu"
 

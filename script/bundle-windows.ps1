@@ -82,6 +82,11 @@ function PrepareForBundle {
     if (Test-Path "$workspace\crates\wu\resources\agents\node_modules") {
         Copy-Item -Path "$workspace\crates\wu\resources\agents\node_modules" -Destination "$innoDir\agents" -Recurse -Force
     }
+    foreach ($required in @("dsh-acp.exe", "node.exe", "node_modules")) {
+        if (-not (Test-Path "$innoDir\agents\$required")) {
+            throw "Missing agents\$required; the bundle would ship without a working DeepSeek or Pi agent."
+        }
+    }
     New-Item -Path "$innoDir\make_appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\bin" -ItemType Directory -Force

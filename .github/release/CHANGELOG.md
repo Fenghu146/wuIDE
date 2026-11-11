@@ -4,6 +4,8 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+## 1.3.0 - 2026-11-11
+
 - Add the DeepSeek and Pi agents, each with a visibility toggle in settings.
 - Pick a model and reasoning effort for Pi from the model picker, re-reading Pi's catalogue when it changes on disk.
 - Rename the app to IDE in window titles, the app menu, dialogs, CLI help and the macOS bundle name.
