@@ -74,7 +74,7 @@ fn build_application() -> Application {
 }
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
-    let message = "Wu failed to launch";
+    let message = "IDE failed to launch";
     let error_details = errors
         .into_iter()
         .flat_map(|(kind, paths)| {
@@ -156,7 +156,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("Wu failed to launch")
+                    Notification::new("IDE failed to launch")
                         .body(Some(
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
@@ -324,7 +324,7 @@ fn main() {
             client::os_info::os_name(),
             client::os_info::os_version(),
         );
-        println!("Wu System Specs (from CLI):\n{}", system_specs);
+        println!("IDE System Specs (from CLI):\n{}", system_specs);
         return;
     }
 
@@ -480,7 +480,7 @@ fn main() {
         handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
 
         let user_agent = format!(
-            "Wu/{} ({}; {})",
+            "IDE/{} ({}; {})",
             AppVersion::global(cx),
             std::env::consts::OS,
             std::env::consts::ARCH

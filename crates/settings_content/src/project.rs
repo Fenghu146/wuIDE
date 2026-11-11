@@ -173,7 +173,7 @@ pub struct WorktreeSettingsContent {
     /// }
     /// ```
     ///
-    /// Use `"..."` to add patterns without repeating Wu’s defaults. In project
+    /// Use `"..."` to add patterns without repeating IDE’s defaults. In project
     /// settings, it extends the user or parent configuration value. Omit
     /// `"..."` to replace the inherited list.
     ///
@@ -219,7 +219,7 @@ pub struct LspSettings {
     /// Consult the documentation for the specific language server to see which settings are supported.
     pub settings: Option<serde_json::Value>,
     /// If the server supports sending tasks over LSP extensions,
-    /// this setting can be used to enable or disable them in Wu.
+    /// this setting can be used to enable or disable them in IDE.
     /// Default: true
     #[serde(default = "default_true")]
     pub enable_lsp_tasks: bool,
@@ -740,7 +740,7 @@ pub struct DiagnosticsSettingsContent {
     /// Default: true
     pub include_warnings: Option<bool>,
 
-    /// Settings for using LSP pull diagnostics mechanism in Wu.
+    /// Settings for using LSP pull diagnostics mechanism in IDE.
     pub lsp_pull_diagnostics: Option<LspPullDiagnosticsSettingsContent>,
 
     /// Settings for showing inline diagnostics.
@@ -797,9 +797,9 @@ pub struct InlineDiagnosticsSettingsContent {
 pub struct NodeBinarySettings {
     /// The path to the Node binary.
     pub path: Option<String>,
-    /// The path to the npm binary Wu should use (defaults to `.path/../npm`).
+    /// The path to the npm binary IDE should use (defaults to `.path/../npm`).
     pub npm_path: Option<String>,
-    /// If enabled, Wu will download its own copy of Node.
+    /// If enabled, IDE will download its own copy of Node.
     pub ignore_system_version: Option<bool>,
 }
 

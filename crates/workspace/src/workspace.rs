@@ -9867,10 +9867,10 @@ async fn confirm_quit_warning(
             window.prompt(
                 PromptLevel::Warning,
                 &warning,
-                Some(&t!("Closing Wu now stops it.")),
+                Some(&t!("Closing IDE now stops it.")),
                 &[
                     PromptButton::cancel(t!("Cancel")),
-                    PromptButton::new(t!("Close Wu")),
+                    PromptButton::new(t!("Close IDE")),
                 ],
                 cx,
             )

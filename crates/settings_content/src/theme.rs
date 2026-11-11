@@ -176,7 +176,7 @@ impl TryFrom<&ThemeColor> for gpui::Rgba {
 #[with_fallible_options]
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct ThemeSettingsContent {
-    /// The language of Wu's interface. `system` follows your system language.
+    /// The language of IDE's interface. `system` follows your system language.
     ///
     /// Default: system
     pub ui_language: Option<UiLanguage>,
@@ -223,7 +223,7 @@ pub struct ThemeSettingsContent {
     #[serde(skip_serializing)]
     #[schemars(skip)]
     pub markdown_preview_theme: Option<ThemeSelection>,
-    /// The name of the Wu theme to use.
+    /// The name of the IDE theme to use.
     pub theme: Option<ThemeSelection>,
     /// The name of the icon theme to use.
     pub icon_theme: Option<IconThemeSelection>,
@@ -421,7 +421,7 @@ pub enum ThemeAppearanceMode {
     System,
 }
 
-/// The language of Wu's interface.
+/// The language of IDE's interface.
 #[derive(
     Debug,
     Default,

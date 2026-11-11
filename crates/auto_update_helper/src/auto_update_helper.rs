@@ -124,7 +124,7 @@ mod windows_impl {
             MessageBoxW(
                 None,
                 &HSTRING::from(content),
-                &HSTRING::from(i18n::t!("Error: Wu update failed.").as_str()),
+                &HSTRING::from(i18n::t!("Error: IDE update failed.").as_str()),
                 MB_ICONERROR | MB_SYSTEMMODAL,
             )
         };

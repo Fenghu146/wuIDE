@@ -376,7 +376,7 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            &t!("Wu was installed via a package manager."),
+            &t!("IDE was installed via a package manager."),
             Some(&message),
             &[PromptButton::ok(t!("OK"))],
             cx,

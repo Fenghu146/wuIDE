@@ -237,7 +237,7 @@ search = { workspace = true, features = ["test-support"] }
 [package.metadata.bundle-dev]
 icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
 identifier = "me.farshed.Wu-Dev"
-name = "Wu Dev"
+name = "IDE Dev"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["wu"]
@@ -245,7 +245,7 @@ osx_url_schemes = ["wu"]
 [package.metadata.bundle-stable]
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
 identifier = "me.farshed.Wu"
-name = "Wu"
+name = "IDE"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["wu"]
