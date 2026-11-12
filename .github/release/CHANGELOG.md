@@ -13,6 +13,12 @@ All notable user-facing changes to Wu are listed here, newest first.
 - Move the profile directory to a unique name, `WuIDE`, so it cannot collide with another application called IDE. An existing `IDE`, `ide`, `Wu` or `wu` profile is copied over on first launch, so settings, sessions and agent data survive the rename.
 - Stop checking for updates by default. The release metadata this fork fetches lives in a private repository, so the check can never succeed.
 - Add `SYNC.md` and `script/sync-upstream` to record where this fork diverged from upstream and what merging the next upstream release will touch.
+- Fix the Git panel going stale after running git commands outside Wu. (from upstream)
+- Fix new files ignoring the `line_ending` setting. (from upstream)
+- Fix a console window opening on Windows when an agent starts. (from upstream)
+- Fix OpenCode questions not showing a picker. (from upstream)
+- Fix Wu crashing on startup on ARM Linux. (from upstream)
+- List models in the model picker in the same order as the underlying agent. (from upstream)
 
 ## 1.3.2 - 2026-11-11
 
