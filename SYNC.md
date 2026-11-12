@@ -8,10 +8,13 @@
 | --- | --- |
 | 共同祖先 | `41b71ce4`（2026-11-11，上游 `Bump to 1.2.2`） |
 | 上游领先 | 0 个 commit —— 已同步到上游最新 |
-| 本分叉领先 | 34 个 commit |
+| 本分叉领先 | 35 个 commit |
 | 同步标记 | `sync/upstream-41b71ce4`（上一次是 `sync/upstream-12c1985`） |
+| `upstream` remote | 已配置（2026-11-12） |
 
 最近一次合并：2026-11-12，把上游 9 个 commit 合入，冲突 4 个文件。
+
+2026-11-12 再次检查：上游 `main` 仍然停在 `41b71ce4`，没有新 commit，无需合并。
 
 查看实时状态：
 
@@ -57,6 +60,29 @@ git tag -a sync/upstream-$(git rev-parse --short upstream/main) -m 'Merged upstr
 git checkout --theirs Cargo.lock   # 或手工删掉冲突标记
 cargo check                        # 让 Cargo 重新解析
 ```
+
+## 上游的 Zed 同步 PR（不要合）
+
+上游把「同步 Zed 上游版本」做成 PR，而不是直接推 `main`。截至 2026-11-12，有两个这样的 PR：
+
+| PR | 标题 | 状态 |
+| --- | --- | --- |
+| [#42](https://github.com/dstrml/wu/pull/42) | Sync Zed v1.27.0 | closed，**未合并** |
+| [#28](https://github.com/dstrml/wu/pull/28) | Sync Zed v1.26.2 | closed，**未合并** |
+
+两个 PR 的作者都在描述里写了同一句话：
+
+> Some files were committed with conflict markers. Check out this branch, resolve them, amend, and push.
+
+也就是**它们带着未解决的冲突标记**，上游自己也没接受。实测合 PR#42 会产生 109 个冲突文件，
+其中大量是 `crates/gpui/`、`crates/editor/` 这类上游同步过来的大改动，而本分叉只改了其中少数几处。
+
+判断原则：
+
+- **不要**把 `refs/pull/*/head` 合进本分叉。它们是上游内部的候选分支，上游还没接受。
+- `script/sync-upstream` 只看 `upstream/main`，这是本分叉跟进上游的唯一来源。
+- 想看上游有没有在准备 Zed 同步，看 PR 列表和 `script/UPSTREAM_VERSION` 的值变化即可。
+  2026-11-12 双方都是 `v1.22.0`；PR#42 会把它提到 `v1.27.0`。
 
 ## 已知冲突的解法（2026-11-12 合并实测）
 
@@ -124,6 +150,13 @@ fn agent_logo(kind: AgentKind) -> IconName {
    cargo test -p agent_harness -p paths
    cargo clippy -p agent_harness -p paths
    ```
+
+   `cargo clippy` 要带 `--all-targets --all-features -- --deny warnings`，和 `script/clippy` 一致。
+   不带这些参数时 `-p agent_harness` 的 lib target 不会被检查到。
+
+   上游 `crates/agent_harness/src/usage.rs` 里的 `read_claude_credentials()` 在 Linux 上会触发
+   `clippy::redundant_clone`（macOS 的 keychain 分支要用 `config_dir`，Linux 上不用）。
+   本分叉已改成按 `as_deref()` 分支取值，两边都干净。
 
 上游那些修复通常值得拿，比如 `Fix segfault on linux aarch64`、`Spawn console programs with CREATE_NO_WINDOW on windows`、`Fix model list order`。遇到与本分叉功能冲突时，优先保留上游的修复、把自己的改动挪到旁边。
 

@@ -168,10 +168,12 @@ pub(crate) fn claude_keychain_service(config_dir: Option<&Path>) -> String {
 /// Keychain first, matching Claude Code's own precedence.
 async fn read_claude_credentials() -> Result<Option<Value>, String> {
     let config_dir = env_dir("CLAUDE_CONFIG_DIR");
-    let file = config_dir
-        .clone()
-        .unwrap_or_else(|| crate::executable::home_or_current_dir().join(".claude"))
-        .join(".credentials.json");
+    let file = match config_dir.as_deref() {
+        Some(dir) => dir.join(".credentials.json"),
+        None => crate::executable::home_or_current_dir()
+            .join(".claude")
+            .join(".credentials.json"),
+    };
     #[cfg(target_os = "macos")]
     {
         let service = claude_keychain_service(config_dir.as_deref());
