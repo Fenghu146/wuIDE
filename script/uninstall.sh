@@ -1,7 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-# Uninstalls IDE that was installed using the install.sh script
+# Uninstalls IDE that was installed using the install.sh script.
+#
+# Data directories are listed for every name this fork has used, so an install
+# from before the WuIDE rename is cleaned up as well.
 
 check_remaining_installations() {
     platform="$(uname -s)"
@@ -22,6 +25,7 @@ prompt_remove_preferences() {
     case "$response" in
         [nN]|[nN][oO])
             rm -rf "$HOME/.config/ide"
+            rm -rf "$HOME/.config/wuide"
             echo "Preferences removed."
             ;;
         *)
@@ -86,15 +90,18 @@ linux() {
     # Remove the database directory for this channel
     rm -rf "$HOME/.local/share/ide/db/0-$db_suffix"
     rm -rf "$HOME/.local/share/wu/db/0-$db_suffix"
+    rm -rf "$HOME/.local/share/wuide/db/0-$db_suffix"
 
     # Remove socket file
     rm -f "$HOME/.local/share/ide/ide-$db_suffix.sock"
     rm -f "$HOME/.local/share/ide/wu-$db_suffix.sock"
+    rm -f "$HOME/.local/share/wuide/wuide-$db_suffix.sock"
 
     # Remove the entire data directory if no installations remain
     if check_remaining_installations; then
         rm -rf "$HOME/.local/share/ide"
         rm -rf "$HOME/.local/share/wu"
+        rm -rf "$HOME/.local/share/wuide"
         prompt_remove_preferences
     fi
 
@@ -125,6 +132,7 @@ macos() {
     # Remove the database directory for this channel
     rm -rf "$HOME/Library/Application Support/IDE/db/0-$db_suffix"
     rm -rf "$HOME/Library/Application Support/Wu/db/0-$db_suffix"
+    rm -rf "$HOME/Library/Application Support/WuIDE/db/0-$db_suffix"
 
     # Remove app-specific files and directories
     rm -rf "$HOME/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/$app_id.sfl"*
@@ -137,8 +145,10 @@ macos() {
     if check_remaining_installations; then
         rm -rf "$HOME/Library/Application Support/IDE"
         rm -rf "$HOME/Library/Application Support/Wu"
+        rm -rf "$HOME/Library/Application Support/WuIDE"
         rm -rf "$HOME/Library/Logs/IDE"
         rm -rf "$HOME/Library/Logs/Wu"
+        rm -rf "$HOME/Library/Logs/WuIDE"
 
         prompt_remove_preferences
     fi

@@ -1417,7 +1417,12 @@
   "word_diff_enabled": true,
   // Automatically update IDE. This setting may be ignored on Linux if
   // installed through a package manager.
-  "auto_update": true,
+  //
+  // Off by default in this fork: releases are published from a private
+  // repository, so the release metadata the updater fetches is not reachable
+  // anonymously, and a failed manual check surfaces an error in the title bar.
+  // Turn it on if the repository is ever made public.
+  "auto_update": false,
   // How to render LSP `textDocument/documentColor` colors in the editor.
   //
   // Possible values:

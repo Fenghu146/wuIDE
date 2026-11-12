@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Report how this fork has diverged from upstream, and what upstream has that
+# this fork does not. Run it before deciding to merge.
+#
+# Usage:
+#   script/sync-upstream           # summary plus upstream's commits
+#   script/sync-upstream --fetch   # fetch upstream first
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [[ "${1:-}" == "--fetch" ]]; then
+    git fetch upstream
+fi
+
+if ! git rev-parse --verify --quiet upstream/main >/dev/null; then
+    echo "error: no upstream/main. Add the remote first:" >&2
+    echo "  git remote add upstream https://github.com/dstrml/wu.git" >&2
+    echo "  git fetch upstream" >&2
+    exit 1
+fi
+
+base=$(git merge-base upstream/main HEAD)
+behind=$(git rev-list --count "HEAD..upstream/main")
+ahead=$(git rev-list --count "upstream/main..HEAD")
+
+echo "Common ancestor: $(git log -1 --format='%h %ad %s' --date=short "$base")"
+echo "Upstream commits not in this fork: $behind"
+echo "Fork commits not upstream:         $ahead"
+echo
+
+if [[ "$behind" -eq 0 ]]; then
+    echo "This fork already contains everything in upstream/main."
+    exit 0
+fi
+
+echo "=== Upstream commits this fork is missing ==="
+git log --oneline "HEAD..upstream/main"
+echo
+echo "=== Files upstream touched, grouped by area ==="
+git diff --name-only "$base" upstream/main | grep -v '^crates/wu/resources/agents/node_modules/' |
+    cut -d/ -f1-2 | sort | uniq -c | sort -rn
+echo
+echo "=== Files touched by both sides (likely conflicts) ==="
+comm -12 \
+    <(git diff --name-only "$base" upstream/main | sort) \
+    <(git diff --name-only "$base" HEAD | sort) |
+    grep -v '^crates/wu/resources/agents/node_modules/' | head -40
+echo
+echo "To merge:"
+echo "  git fetch upstream && git merge upstream/main"
+echo "  git tag -a sync/upstream-\$(git rev-parse --short upstream/main) -m 'Merged upstream'"
+echo
+echo "The rename touches crates/paths, the bundle scripts and assets/locales;"
+echo "see FORK.md for the list of places each change lives."

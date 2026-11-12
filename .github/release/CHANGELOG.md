@@ -10,6 +10,9 @@ All notable user-facing changes to Wu are listed here, newest first.
 - Record which version of each bundled runtime is checked in, and how to verify it, in `agents/VERSIONS.md`.
 - Give the release workflow read-only default permissions and hand write access only to the job that publishes.
 - Replace the upstream ReadMe and install guide with documentation for this fork: correct download names, unsigned-build instructions, update behaviour, the list of outbound requests, and licensing.
+- Move the profile directory to a unique name, `WuIDE`, so it cannot collide with another application called IDE. An existing `IDE`, `ide`, `Wu` or `wu` profile is copied over on first launch, so settings, sessions and agent data survive the rename.
+- Stop checking for updates by default. The release metadata this fork fetches lives in a private repository, so the check can never succeed.
+- Add `SYNC.md` and `script/sync-upstream` to record where this fork diverged from upstream and what merging the next upstream release will touch.
 
 ## 1.3.2 - 2026-11-11
 

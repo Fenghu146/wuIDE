@@ -1395,6 +1395,23 @@ pub(crate) async fn restorable_workspace_locations(
 }
 
 fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
+    // Copy a profile left behind by an older directory name before creating the
+    // new one, so an upgrade keeps its settings, sessions and agent data.
+    if let Some(previous) = paths::migrate_legacy_data_dir() {
+        log::info!(
+            "migrated profile data from {} to {}",
+            previous.display(),
+            paths::data_dir().display()
+        );
+    }
+    if let Some(previous) = paths::migrate_legacy_config_dir() {
+        log::info!(
+            "migrated settings from {} to {}",
+            previous.display(),
+            paths::config_dir().display()
+        );
+    }
+
     [
         paths::config_dir(),
         paths::extensions_dir(),
@@ -1442,9 +1459,9 @@ struct Args {
     /// Sets a custom directory for all user data (e.g., database, extensions, logs).
     ///
     /// This overrides the default platform-specific data directory location.
-    /// On macOS, the default is `~/Library/Application Support/Wu`.
-    /// On Linux/FreeBSD, the default is `$XDG_DATA_HOME/wu`.
-    /// On Windows, the default is `%LOCALAPPDATA%\Wu`.
+    /// On macOS, the default is `~/Library/Application Support/WuIDE`.
+    /// On Linux/FreeBSD, the default is `$XDG_DATA_HOME/wuide`.
+    /// On Windows, the default is `%LOCALAPPDATA%\WuIDE`.
     #[arg(long, value_name = "DIR", verbatim_doc_comment)]
     user_data_dir: Option<String>,
 

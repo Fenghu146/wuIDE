@@ -84,7 +84,7 @@ IDE 不做统计上报、不发崩溃报告、不采集使用遥测。它确实�
 
 ## 构建
 
-IDE 的构建方式和 Zed 一样。请看 [Zed 开发文档](https://zed.dev/docs/development)，以及 [FORK.md](./FORK.md) 里分叉相关的打包说明（内置智能体运行时、图标与打包脚本）。
+IDE 的构建方式和 Zed 一样。请看 [Zed 开发文档](https://zed.dev/docs/development)、[FORK.md](./FORK.md) 里分叉相关的打包说明（内置智能体运行时、图标与打包脚本），以及 [SYNC.md](./SYNC.md) 里跟进上游的方式。
 
 ## 许可证
 

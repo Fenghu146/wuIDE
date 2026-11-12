@@ -99,9 +99,9 @@ IDE ships the runtimes its built-in agents need, so none of them require Node or
 
 The per-user data directories are, by platform:
 
-- macOS — `~/Library/Application Support/Wu/agents`
-- Windows — `%LOCALAPPDATA%\Wu\agents`
-- Linux — `$XDG_DATA_HOME/wu/agents`, falling back to `~/.local/share/wu/agents`
+- macOS — `~/Library/Application Support/WuIDE/agents`
+- Windows — `%LOCALAPPDATA%\WuIDE\agents`
+- Linux — `$XDG_DATA_HOME/wuide/agents`, falling back to `~/.local/share/wuide/agents`
 
 Set `WU_AGENT_DATA_DIR` to put them somewhere else.
 

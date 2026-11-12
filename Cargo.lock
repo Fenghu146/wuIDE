@@ -207,6 +207,7 @@ dependencies = [
  "i18n",
  "libc",
  "log",
+ "paths",
  "security-framework",
  "semver",
  "serde",
@@ -8386,6 +8387,7 @@ dependencies = [
  "const_format",
  "dirs",
  "ignore",
+ "tempfile",
  "util",
 ]
 

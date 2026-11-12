@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# Build this fork on macOS with rustc 1.97.1.
+#
+# Why this exists: rustc 1.97.1 on macOS 27 writes a proc-macro dylib that dyld
+# refuses to load ("mis-aligned LINKEDIT string pool") when debug info is
+# stripped. Every crate that uses such a macro then fails with
+# "can't find crate for `sqlez_macros`". Passing `-C strip=none` avoids it. The
+# bundle scripts strip the release binaries anyway, so this only affects local
+# debug builds and does not change anything that gets shipped.
+#
+# Usage:
+#   script/build-macos check -p agent_harness
+#   script/build-macos test -p paths
+#   script/build-macos build -p wu --bin IDE
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# The project config sets these same flags for aarch64-apple-darwin; repeating
+# them here is required because target rustflags replace rather than append.
+export RUSTFLAGS="${RUSTFLAGS:-} -C symbol-mangling-version=v0 --cfg tokio_unstable -C strip=none"
+
+exec cargo "$@"

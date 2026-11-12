@@ -94,11 +94,11 @@ struct Args {
     classic: bool,
     /// Sets a custom directory for all user data (e.g., database, extensions, logs).
     /// This overrides the default platform-specific data directory location:
-    #[cfg_attr(target_os = "macos", doc = "`~/Library/Application Support/IDE`.")]
-    #[cfg_attr(target_os = "windows", doc = "`%LOCALAPPDATA%\\IDE`.")]
+    #[cfg_attr(target_os = "macos", doc = "`~/Library/Application Support/WuIDE`.")]
+    #[cfg_attr(target_os = "windows", doc = "`%LOCALAPPDATA%\\WuIDE`.")]
     #[cfg_attr(
         not(any(target_os = "windows", target_os = "macos")),
-        doc = "`$XDG_DATA_HOME/ide`."
+        doc = "`$XDG_DATA_HOME/wuide`."
     )]
     #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     user_data_dir: Option<String>,

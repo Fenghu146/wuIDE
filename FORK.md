@@ -37,7 +37,7 @@
 ## 5. 自动更新指向本仓库的 release
 
 - 自动更新查的是 `https://api.github.com/repos/Fenghu146/wu/releases`，也就是本仓库自己发布的版本。上游 `dstrml/wu` 的 release（资产名还是 `Wu-*`）不再被考虑——否则会把本地改动覆盖回上游版本。因为客户端是匿名 HTTP，没有 token 机制，**这个仓库必须保持 public**：私有仓库的 release 匿名拉不到（404）。
-- 默认开启（`assets/settings/default.json` 里 `auto_update` 为 `true`）：启动时检查一次，之后每 12 小时一次；设置里关掉只会停止轮询，手动点“检查更新”仍可用。
+- **默认关闭**（`assets/settings/default.json` 里 `auto_update` 为 `false`）。因为这个仓库是私有的，更新器匿名拉 release 元数据会 404；自动检查失败是静默的，但手动点“检查更新”会在标题栏留下一个红色错误按钮。要启用就把 `auto_update` 改回 `true`，前提是仓库已经公开。
 - 自动检查只发通知、不直接装：状态进 `AutoUpdateStatus::Available`，标题栏出现“有可用更新”按钮，同时弹一张带“下载并安装” / “跳过这个版本”的通知卡。点了才下载（有 digest 时校验 SHA-256）、覆盖当前安装，下次启动提示已更新。菜单里的“检查更新”算手动检查，一路装到底。
 - “跳过这个版本”写进 kvp 的 `auto-updater-skipped-version`，只有出现更高版本才会再提示；同一版本在一次会话里也不会重复弹卡。
 - 资产名与打包脚本对齐：`IDE-{arch}.dmg`、`ide-linux-{arch}.tar.gz`、`IDE-{arch}.exe`（`github_asset_name`）。改名后对不上会让 `release_asset` 直接报 “has no asset named …”。资产是在版本比对**之后**才找的，所以一个不比当前版本新的 release 即使没有对应资产，也不会让检查失败。
@@ -57,13 +57,14 @@
 
 - 窗口标题、菜单、关于窗口、设置页、对话框、CLI 帮助、`user_agent`/系统信息里的产品名从 Wu 改为 **IDE**（macOS bundle 名为 `IDE` / `IDE Dev`）。
 - Windows 上真正落盘的可执行文件也叫 `IDE.exe`：`crates/wu/Cargo.toml` 的 `[[bin]] name` / `default-run` 改为 `IDE`，Windows 版本资源（ProductName / FileDescription）改为 IDE / IDE Dev。
-- `paths::APP_NAME` 改为 `IDE`，所以用户档案目录（设置、会话、日志）现在是 `%LOCALAPPDATA%\IDE`、`~/Library/Application Support/IDE`、`~/.config/ide`。**代价**：已经在用 Wu 的机器升级后是空档案，旧配置不会自动迁移；想保留旧档案就单独回退 `paths::APP_NAME` 那一行。
+- `paths::APP_NAME` 改为 `WuIDE`（显示名仍是 IDE）。用唯一内部名而不是产品名，是为了避免和别的也叫 IDE 的软件撞数据目录。所以用户档案目录是 `%LOCALAPPDATA%\WuIDE`、`~/Library/Application Support/WuIDE`、`~/.config/wuide`。
+- 改名不会丢档案：`crates/paths/src/paths.rs` 的 `migrate_legacy_data_dir` / `migrate_legacy_config_dir` 会在新目录还空的时候，把旧目录（`LEGACY_DATA_DIR_NAMES`，依次试 `IDE` / `ide` / `Wu` / `wu`）的内容**复制**过来（源目录保留，方便回退），由 `crates/wu/src/main.rs` 的 `init_paths()` 在启动时调用一次。只复制，不移动；新目录已有文件时不覆盖。
 - 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名（Linux 上是 `ide` 的软链，Windows 上是 `ide.exe` 的副本）、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`，命令面板里因此仍显示 `wu:` 前缀）、Windows 安装目录 `{autopf}\IDE`（仅升级时沿用旧的 `{autopf}\Wu`）。`base_keymap` 的显示名已改为 IDE，但存储值仍是 `Zed`，不影响旧设置。主题名不再是保留项，见下文。
 - 界面标识统一：欢迎页/引导页 logo 用的是 `assets/images/wu_icon.png`，它与 `crates/wu/resources/app-icon.png` 是同一张图（逐字节相同），所以界面 logo 与安装包图标始终一致；欢迎页 tagline 统一为“不打扰你的编辑器”；DAP `client_name`、更新助手窗口标题、Appx COM surrogate 的 `DisplayName` 也改为 IDE。
 - 安装器侧跟进：`bundle-windows.ps1` 打包 `IDE.exe`，`zed.iss` 的 `AppExeName` 为 IDE；显示名（Add/Remove Programs、开始菜单、右键菜单）与 Linux `.desktop` 的 `Name` 也改为 IDE，但只改标签、不改 ID 与路径。
 - 打包链路全部跟着改名对齐：`bundle-mac` / `bundle-linux` / `check-translations` 用 `--bin IDE` 与 `release/IDE`，macOS 可执行文件为 `Contents/MacOS/IDE`（dSYM 也改名为 `IDE.dSYM`），`explorer_command_injector` 的 Appx 清单与右键菜单指向 `IDE.exe`，`uninstall.sh` 清 `IDE.app` 与 `~/.config/ide`、`~/.local/share/ide`。
 - `wu` CLI 会先找 `IDE.exe`，再回退到 `Wu.exe`，所以改名之前安装的机器也能用。
-- 智能体的运行期目录仍按旧名：`acp.rs` 里各 agent 的数据根目录还是 `Wu`/`wu`（`WU_AGENT_DATA_DIR` 可覆盖），所以 Pi/DeepSeek 的凭据与插件不会因改名失效。
+- 智能体的运行期目录也跟着 `paths::APP_NAME` 走（`acp.rs` 的 `agent_data_root` 用 `paths::APP_NAME` / `APP_NAME_LOWERCASE`，不再写死 `Wu`/`wu`），所以改名后 Pi 和 DeepSeek 的凭据与插件目录跟主档案保持一致，不会一个改了另一个没改。
 - 仍然叫 Wu 的还有：命令行里的 `wu`（安装目录里的 `bin/wu.exe` / `bin/wu` 是 `ide` 的兼容副本）、`wu://` URL scheme、crate 名、AppId 与单实例互斥体、数据目录里的 `wu-<channel>.sock` 与 `.wu_server` / `.wu_wsl_server`。发版文件名（`IDE-*.dmg`、`ide-linux-*.tar.gz`、`IDE-x86_64.exe`）与 Linux bundle 内的 `libexec/ide` 已经是 IDE；安装目录也只在升级时沿用旧的 `{autopf}\Wu`。
 - 主题与图标主题名已随 IDE 改名：`assets/themes/wu/wu.json` 里是 `IDE Dark` / `IDE Light` / `IDE Dark Translucent`，用户设置中的旧名由 `crates/theme_settings/src/settings.rs` 的 `migrate_theme_name` 和 `crates/theme/src/registry.rs` 的 `ThemeRegistry::get` 兜底迁移；图标主题是 `Symbols Dark` / `Symbols Light`（`assets/icon_themes/symbols/icon_theme.json`，`assets/settings/default.json` 默认用它们），代码内置的兜底图标主题名是 `IDE Classic`（`crates/theme/src/icon_theme.rs` 的 `DEFAULT_ICON_THEME_NAME`），`Wu Classic` / `Wu (Default)` 只作为 legacy 常量存在，由 `ThemeRegistry::get_icon_theme` 映射过来。
 - 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它与 `assets/icons/wu.svg` 的 `viewBox`（`205 1 1053 1551`）和文件结构一致，已是同一套人物剪影，不再是鹿头轮廓。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。

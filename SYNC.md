@@ -1,0 +1,108 @@
+# 跟进上游
+
+本仓库是 [dstrml/wu](https://github.com/dstrml/wu) 的分叉。这份文档记录跟进方式、当前进度和冲突高发区。
+
+## 当前状态
+
+| 项目 | 值 |
+| --- | --- |
+| 共同祖先 | `12c1985`（2026-11-09，上游 `Bump to 1.2.1`） |
+| 上游领先 | 9 个 commit（最新 `41b71ce4`，`Bump to 1.2.2`） |
+| 本分叉领先 | 32 个 commit |
+| 同步标记 | `sync/upstream-12c1985` |
+
+查看实时状态：
+
+```sh
+script/sync-upstream          # 汇总 + 上游缺失的 commit + 冲突高发文件
+script/sync-upstream --fetch  # 先 fetch 再汇总
+```
+
+## 一次性配置
+
+```sh
+git remote add upstream https://github.com/dstrml/wu.git
+git fetch upstream
+```
+
+## 每次跟进
+
+```sh
+script/sync-upstream --fetch   # 先看要合什么、可能冲突在哪
+git merge upstream/main
+git tag -a sync/upstream-$(git rev-parse --short upstream/main) -m 'Merged upstream'
+```
+
+用 `merge` 不要用 `rebase`：分叉已经 32 个 commit，rebase 会重写历史，出事时看不出边界，也失去 `sync/*` 标记的对照意义。
+
+## 冲突高发区
+
+按改动密度排序，这些文件两边都动过，合并时最可能冲突：
+
+| 区域 | 为什么冲突 |
+| --- | --- |
+| `crates/agent_harness/` | 本分叉在这里加了 ACP 驱动（`acp.rs`），上游同时在改 `claude.rs` / `codex.rs` |
+| `crates/agent_chat/` | 本分叉加了 DeepSeek / Pi 两种智能体，上游在改会话与模型选择 |
+| `crates/wu/Cargo.toml` | 本分叉改了 `[[bin]] name = "IDE"` 与 bundle 元数据 |
+| `assets/locales/zh-CN/` | 本分叉补了大量中文翻译，上游也在加 |
+| `script/bundle-linux` | 两边都在改打包流程 |
+| `Cargo.lock` | 必然冲突；冲突时删掉自己的那半，合并后跑 `cargo check` 让 Cargo 重算 |
+| `.github/release/CHANGELOG.md` | 两边都在顶部加条目 |
+
+`Cargo.lock` 冲突的处理：
+
+```sh
+git checkout --theirs Cargo.lock   # 或手工删掉冲突标记
+cargo check                        # 让 Cargo 重新解析
+```
+
+## 合并后要检查的事
+
+1. **`paths::APP_NAME`** 是否还是 `"WuIDE"`。上游不会动这一行，但如果合并时整块取了上游版本，改名会失效。
+2. **`LEGACY_DATA_DIR_NAMES`** 是否还在 `crates/paths/src/paths.rs` 里，以及 `init_paths()` 里的两次 `migrate_legacy_*` 调用是否还在。
+3. **`auto_update` 默认值**是否还是 `false`（`assets/settings/default.json`）。
+4. **三个打包脚本**是否还带许可证复制逻辑（`LICENSE-GPL` / `LICENSE-APACHE` / `NOTICE` / `agents/licenses/`）。
+5. **ACP 驱动**：`crates/agent_harness/src/acp.rs` 是否还在，`HarnessId::{Dsh, Pi}` 的穷举 match 是否还完整。
+6. 跑一遍：
+
+   ```sh
+   cargo check -p agent_harness -p paths
+   cargo test -p agent_harness -p paths
+   cargo clippy -p agent_harness -p paths
+   ```
+
+上游那些修复通常值得拿，比如 `Fix segfault on linux aarch64`、`Spawn console programs with CREATE_NO_WINDOW on windows`、`Fix model list order`。遇到与本分叉功能冲突时，优先保留上游的修复、把自己的改动挪到旁边。
+
+## 版本号
+
+本分叉的版本号（`crates/wu/Cargo.toml`）目前是 `1.3.2`，上游是 `1.2.2`。两条线已经交叉，所以**不要用版本号判断谁新**——用上面的 `script/sync-upstream` 和 `sync/*` 标记。
+
+版本号也**不能**加 build metadata（`1.3.2+wu.1`）：Windows 安装器的 `VersionInfoVersion` 要求纯数字 `x.y.z.w`，加了会让打包失败。要区分分叉，用 git tag 而不是 crate 版本。
+
+发版时用 `v<version>` 打 tag，`release.yml` 会校验 tag 与 `crates/wu/Cargo.toml` 一致，并检查 `.github/release/CHANGELOG.md` 里有对应条目。
+
+## 上游远程现在指向哪里
+
+`origin` 是本仓库（`Fenghu146/wu`），`upstream` 是 `dstrml/wu`。`git push` 默认推 `origin`，不会误推到上游。
+
+## 本机构建环境的一个坑（macOS 27 + rustc 1.97.1）
+
+直接 `cargo build` 可能报：
+
+```
+error[E0463]: can't find crate for `sqlez_macros`
+```
+
+这不是代码问题，也不是 `Cargo.lock` 问题。原因是 rustc 1.97.1 在 macOS 27 上生成的 proc-macro dylib，一旦被 strip 掉 debug info，dyld 会拒绝加载，报 `mis-aligned LINKEDIT string pool`，于是所有用到该宏的 crate 都"找不到 crate"。
+
+绕过方式是用 `script/build-macos` 代替 `cargo`：
+
+```sh
+script/build-macos check -p db --lib
+script/build-macos test -p agent_harness
+script/build-macos build -p wu --bin IDE
+```
+
+它只是额外传了 `-C strip=none`。打包脚本本来就会 strip 发布产物（`bundle-mac` 里的 `strip -x`、`bundle-linux` 里的 `llvm-objcopy`），所以这个绕过只影响本地 debug 构建，不会让发出去的二进制变大。
+
+另外，`cargo build -p wu` 还需要完整 Xcode（Metal 工具链），只有 Command Line Tools 会在 `gpui_apple` 的 shader 编译处失败：`xcrun: error: unable to find utility "metal"`。`cargo check` 不受影响。

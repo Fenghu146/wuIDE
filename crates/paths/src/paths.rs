@@ -1,4 +1,4 @@
-//! Paths to locations used by Wu.
+//! Paths to locations used by WuIDE.
 
 use anyhow::Context as _;
 use std::env;
@@ -15,8 +15,10 @@ pub const EDITORCONFIG_NAME: &str = ".editorconfig";
 /// The application name, used to derive platform-specific data, config, cache,
 /// and state directory paths.
 ///
-/// Forks should change this to avoid colliding with Zed's user data.
-pub const APP_NAME: &str = "IDE";
+/// Forks should change this to avoid colliding with Zed's user data. This fork
+/// uses its own name rather than the product name so that its profile cannot
+/// collide with another application that happens to be called IDE.
+pub const APP_NAME: &str = "WuIDE";
 
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on
 /// Linux/FreeBSD and the macOS `~/.config` fallback.
@@ -54,16 +56,16 @@ static CUSTOM_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The resolved data directory, combining custom override or platform defaults.
 /// This is set once and cached for subsequent calls.
-/// On macOS, this is `~/Library/Application Support/Wu`.
-/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/wu`.
-/// On Windows, this is `%LOCALAPPDATA%\Wu`.
+/// On macOS, this is `~/Library/Application Support/WuIDE`.
+/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/wuide`.
+/// On Windows, this is `%LOCALAPPDATA%\WuIDE`.
 static CURRENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The resolved config directory, combining custom override or platform defaults.
 /// This is set once and cached for subsequent calls.
-/// On macOS, this is `~/.config/wu`.
-/// On Linux/FreeBSD, this is `$XDG_CONFIG_HOME/wu`.
-/// On Windows, this is `%APPDATA%\Wu`.
+/// On macOS, this is `~/.config/wuide`.
+/// On Linux/FreeBSD, this is `$XDG_CONFIG_HOME/wuide`.
+/// On Windows, this is `%APPDATA%\WuIDE`.
 static CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Returns the relative path to the wu_server directory on the ssh host.
@@ -145,7 +147,7 @@ pub fn custom_data_dir_instance_hash() -> Option<u64> {
     Some(hash)
 }
 
-/// Returns the path to the configuration directory used by Wu.
+/// Returns the path to the configuration directory used by WuIDE.
 pub fn config_dir() -> &'static PathBuf {
     CONFIG_DIR.get_or_init(|| {
         if let Some(custom_dir) = CUSTOM_DATA_DIR.get() {
@@ -167,7 +169,11 @@ pub fn config_dir() -> &'static PathBuf {
     })
 }
 
-/// Returns the path to the data directory used by Wu.
+/// Returns the path to the data directory used by WuIDE.
+///
+/// On macOS, this is `~/Library/Application Support/WuIDE`.
+/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/wuide`.
+/// On Windows, this is `%LOCALAPPDATA%\WuIDE`.
 pub fn data_dir() -> &'static PathBuf {
     CURRENT_DATA_DIR.get_or_init(|| {
         if let Some(custom_dir) = CUSTOM_DATA_DIR.get() {
@@ -216,7 +222,7 @@ pub fn state_dir() -> &'static PathBuf {
     })
 }
 
-/// Returns the path to the temp directory used by Wu.
+/// Returns the path to the temp directory used by WuIDE.
 pub fn temp_dir() -> &'static PathBuf {
     static TEMP_DIR: OnceLock<PathBuf> = OnceLock::new();
     TEMP_DIR.get_or_init(|| {
@@ -257,19 +263,19 @@ pub fn logs_dir() -> &'static PathBuf {
     })
 }
 
-/// Returns the path to the Wu server directory on this SSH host.
+/// Returns the path to the WuIDE server directory on this SSH host.
 pub fn remote_server_state_dir() -> &'static PathBuf {
     static REMOTE_SERVER_STATE: OnceLock<PathBuf> = OnceLock::new();
     REMOTE_SERVER_STATE.get_or_init(|| data_dir().join("server_state"))
 }
 
-/// Returns the path to the `Wu.log` file.
+/// Returns the path to the `WuIDE.log` file.
 pub fn log_file() -> &'static PathBuf {
     static LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
     LOG_FILE.get_or_init(|| logs_dir().join(format!("{}.log", APP_NAME)))
 }
 
-/// Returns the path to the `Wu.log.old` file.
+/// Returns the path to the `WuIDE.log.old` file.
 pub fn old_log_file() -> &'static PathBuf {
     static OLD_LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
     OLD_LOG_FILE.get_or_init(|| logs_dir().join(format!("{}.log.old", APP_NAME)))
@@ -279,6 +285,79 @@ pub fn old_log_file() -> &'static PathBuf {
 pub fn database_dir() -> &'static PathBuf {
     static DATABASE_DIR: OnceLock<PathBuf> = OnceLock::new();
     DATABASE_DIR.get_or_init(|| data_dir().join("db"))
+}
+
+/// Directory names this fork used before settling on [`APP_NAME`], newest first.
+///
+/// Renaming `APP_NAME` starts every profile from scratch, which silently drops
+/// settings, sessions and the agent data directories. `migrate_legacy_profile`
+/// copies an old profile into place the first time the new name is used.
+const LEGACY_DATA_DIR_NAMES: &[&str] = &["IDE", "ide", "Wu", "wu"];
+
+/// Copy a profile written under an older [`APP_NAME`] into the current data
+/// directory, if the current one is still empty.
+///
+/// Returns the directory that was migrated from. Only the data directory is
+/// moved: settings live in the config directory, which is migrated separately
+/// by [`migrate_legacy_config_dir`].
+pub fn migrate_legacy_data_dir() -> Option<PathBuf> {
+    let current = data_dir();
+    if custom_data_dir().is_some() || directory_has_entries(current) {
+        return None;
+    }
+    let parent = current.parent()?;
+    for name in LEGACY_DATA_DIR_NAMES {
+        let candidate = parent.join(name);
+        if candidate != *current && directory_has_entries(&candidate) {
+            return copy_dir_contents(&candidate, current)
+                .ok()
+                .map(|()| candidate);
+        }
+    }
+    None
+}
+
+/// Copy settings written under an older [`APP_NAME`] into the current config
+/// directory, if the current one is still empty.
+pub fn migrate_legacy_config_dir() -> Option<PathBuf> {
+    let current = config_dir();
+    if custom_data_dir().is_some() || directory_has_entries(current) {
+        return None;
+    }
+    let parent = current.parent()?;
+    for name in LEGACY_DATA_DIR_NAMES {
+        let candidate = parent.join(name);
+        if candidate != *current && directory_has_entries(&candidate) {
+            return copy_dir_contents(&candidate, current)
+                .ok()
+                .map(|()| candidate);
+        }
+    }
+    None
+}
+
+fn directory_has_entries(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+/// Recursively copy `from` into `to`, leaving the source in place. The old
+/// profile is kept rather than moved so that a downgrade still finds its data.
+fn copy_dir_contents(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_contents(&source, &target)?;
+        } else if !target.exists() {
+            std::fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Returns the path to the crashes directory, if it exists for the current platform.
@@ -693,4 +772,55 @@ pub fn global_gitignore_path() -> Option<PathBuf> {
     GLOBAL_GITIGNORE_PATH
         .get_or_init(::ignore::gitignore::gitconfig_excludes_path)
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_dir_contents_copies_nested_files() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let nested = source.path().join("db");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("settings.json"), "{}").unwrap();
+        std::fs::write(source.path().join("top.txt"), "hello").unwrap();
+
+        copy_dir_contents(source.path(), target.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("top.txt")).unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("db").join("settings.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn copy_dir_contents_leaves_existing_files_alone() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("keep.txt"), "new").unwrap();
+        std::fs::write(target.path().join("keep.txt"), "old").unwrap();
+
+        copy_dir_contents(source.path(), target.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("keep.txt")).unwrap(),
+            "old",
+            "an existing file in the new profile must win over the old one"
+        );
+    }
+
+    #[test]
+    fn directory_has_entries_ignores_empty_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!directory_has_entries(dir.path()));
+        std::fs::write(dir.path().join("file"), "").unwrap();
+        assert!(directory_has_entries(dir.path()));
+        assert!(!directory_has_entries(&dir.path().join("missing")));
+    }
 }

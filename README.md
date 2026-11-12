@@ -84,7 +84,7 @@ If you want the editor to stop talking to the extension registry, set `"server_u
 
 ## Building
 
-IDE builds the same way Zed does. See the [Zed development docs](https://zed.dev/docs/development), and [FORK.md](./FORK.md) for the fork-specific packaging notes (bundled agent runtimes, icon and bundle scripts).
+IDE builds the same way Zed does. See the [Zed development docs](https://zed.dev/docs/development), [FORK.md](./FORK.md) for the fork-specific packaging notes (bundled agent runtimes, icon and bundle scripts), and [SYNC.md](./SYNC.md) for how this fork tracks upstream.
 
 ## Licensing
 

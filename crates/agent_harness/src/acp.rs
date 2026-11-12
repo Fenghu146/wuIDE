@@ -473,8 +473,9 @@ async fn drive(
     }
 }
 
-/// Writable per-user directory where Wu keeps each agent's isolated plugins,
-/// credentials and session state. Overridable for tests via `WU_AGENT_DATA_DIR`.
+/// Writable per-user directory where the editor keeps each agent's isolated
+/// plugins, credentials and session state. Overridable for tests via
+/// `WU_AGENT_DATA_DIR`.
 fn agent_data_root(program: &Path) -> PathBuf {
     if let Some(dir) = std::env::var_os("WU_AGENT_DATA_DIR") {
         return PathBuf::from(dir);
@@ -482,7 +483,7 @@ fn agent_data_root(program: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(dir).join("Wu").join("agents");
+            return PathBuf::from(dir).join(paths::APP_NAME).join("agents");
         }
     }
     #[cfg(target_os = "macos")]
@@ -491,18 +492,20 @@ fn agent_data_root(program: &Path) -> PathBuf {
             return PathBuf::from(home)
                 .join("Library")
                 .join("Application Support")
-                .join("Wu")
+                .join(paths::APP_NAME)
                 .join("agents");
         }
     }
     if let Some(dir) = std::env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(dir).join("wu").join("agents");
+        return PathBuf::from(dir)
+            .join(paths::APP_NAME_LOWERCASE)
+            .join("agents");
     }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("wu")
+            .join(paths::APP_NAME_LOWERCASE)
             .join("agents");
     }
     program
