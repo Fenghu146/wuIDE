@@ -931,6 +931,7 @@ impl AutoUpdater {
                     _ => AutoUpdateStatus::Idle,
                 }
             } else {
+                log::info!("Auto Update: announcing {newer_version}");
                 AutoUpdateStatus::Available {
                     version: newer_version,
                 }
