@@ -32,6 +32,7 @@
   - `crates/wu/resources/windows/app-icon.ico`、`app-icon-dev.ico`
   - `crates/wu/resources/Document.icns`
 - 欢迎页/引导页沿用的 `assets/images/wu_icon.png` 现在是 `app-icon.png` 的逐字节副本（`sha256` 相同），旧鹿头图已删除。仓库里仍以 Wu 命名的图形资源只剩 `assets/images/wu_icon.png`、`assets/images/wu_logo.svg`、`assets/icons/wu_mark.svg`（内容均已换新）与已无代码引用的 `assets/icons/wu.svg`。
+- **来源与授权**：这套图标是作者从公开分享渠道保存的插画，来源方并未授予再分发许可。仓库因此不能作为可公开分发的软件看待：要么保持 private 自用，要么在公开之前把图标换成自己拥有权利的图（`app-icon*.png`、`windows/app-icon*.ico`、`Document.icns`、`assets/images/wu_icon.png` 这 7 个文件一起换）。
 
 ## 5. 自动更新指向本仓库的 release
 
@@ -44,12 +45,13 @@
 
 ## 6. 打包
 
-- `script/bundle-windows.ps1`：把 `crates/wu/resources/agents/*.exe` 与 `node_modules/` 复制进安装包；`crates/wu/resources/windows/zed.iss` 增加 `agents\*` 条目。
+- `script/bundle-windows.ps1`：把 `crates/wu/resources/agents/*.exe`、`node_modules/` 与 `licenses/` 复制进安装包；`crates/wu/resources/windows/zed.iss` 增加 `agents\*`、`LICENSE.txt`、`NOTICE` 条目。
 - `script/bundle-mac`：把对应架构的 `dsh-acp-darwin-*` 复制到 `Contents/Resources/agents/dsh-acp`。
 - `script/bundle-linux`：把 `dsh-acp-linux-*` 复制到 `libexec/agents/dsh-acp`，并带上 `node` 与 `node_modules/`。
 - `script/fetch-node`：macOS / Linux 打包时下载固定版本（当前 `24.22.1`，与仓库里的 `node.exe` 对齐）的官方 Node，并按 `SHASUMS256.txt` 校验；Windows 直接使用仓库里的 `node.exe`。
 - 三个平台的打包脚本都会在缺少 `dsh-acp` 或 `node_modules/` 时直接失败，避免发出一个“设置里能看到智能体、点开却起不来”的包；缺少 `node` 只警告，因为 macOS/Linux 可以退回到 `PATH` 里的系统 Node。
 - 运行期在 exe 同级的 `agents/`、`resources/agents/`、macOS `Contents/Resources/agents/`、Linux `libexec/agents/` 中查找内置二进制。
+- 许可证随包分发（GPL 要求）：三个平台的脚本都把 `LICENSE-GPL`、`LICENSE-APACHE`、`NOTICE` 放进包里（macOS `Contents/Resources/`、Linux `share/licenses/`、Windows 安装目录），Windows 安装器还用拼好的 `LICENSE.txt` 作为 `LicenseFile` 在安装前展示。内置运行时的许可证在 `crates/wu/resources/agents/licenses/`，版本与校验方式记在 `agents/VERSIONS.md`，缺文件时打包直接失败。
 
 ## 7. 产品名称改为 IDE
 
@@ -65,14 +67,16 @@
 - 仍然叫 Wu 的还有：命令行里的 `wu`（安装目录里的 `bin/wu.exe` / `bin/wu` 是 `ide` 的兼容副本）、`wu://` URL scheme、crate 名、AppId 与单实例互斥体、数据目录里的 `wu-<channel>.sock` 与 `.wu_server` / `.wu_wsl_server`。发版文件名（`IDE-*.dmg`、`ide-linux-*.tar.gz`、`IDE-x86_64.exe`）与 Linux bundle 内的 `libexec/ide` 已经是 IDE；安装目录也只在升级时沿用旧的 `{autopf}\Wu`。
 - 主题与图标主题名已随 IDE 改名：`assets/themes/wu/wu.json` 里是 `IDE Dark` / `IDE Light` / `IDE Dark Translucent`，用户设置中的旧名由 `crates/theme_settings/src/settings.rs` 的 `migrate_theme_name` 和 `crates/theme/src/registry.rs` 的 `ThemeRegistry::get` 兜底迁移；图标主题是 `Symbols Dark` / `Symbols Light`（`assets/icon_themes/symbols/icon_theme.json`，`assets/settings/default.json` 默认用它们），代码内置的兜底图标主题名是 `IDE Classic`（`crates/theme/src/icon_theme.rs` 的 `DEFAULT_ICON_THEME_NAME`），`Wu Classic` / `Wu (Default)` 只作为 legacy 常量存在，由 `ThemeRegistry::get_icon_theme` 映射过来。
 - 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它与 `assets/icons/wu.svg` 的 `viewBox`（`205 1 1053 1551`）和文件结构一致，已是同一套人物剪影，不再是鹿头轮廓。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。
-- `README.md` 仍是上游文案（下载链接指向上游 release），改名前后的产品说明请看本文件。
+- `README.md` / `README.zh-CN.md` / `docs/INSTALL.md` 已改成本分叉的文案：正确的下载资产名、未签名构建的处理方式与 SHA-256 核对步骤、更新机制、出站请求清单、许可证与源码获取方式，并链接回本文件。
 
 ## 已知限制
 
 - **Pi 的 Node 运行时**：Windows 使用入库的 `node.exe`；macOS / Linux 由 `script/fetch-node` 在打包时下载对应架构的官方 Node（`crates/wu/resources/agents/node` 被 `.gitignore` 忽略）并校验 SHA256，因此打包机需要能访问 `nodejs.org`。打包脚本在缺少 `node`、`dsh-acp` 或 `node_modules` 时都会失败，不再发出缺少智能体的包。
 - 仓库直接提交了 `crates/wu/resources/agents/` 下的运行时（`node_modules` 约 16k 个文件、`node.exe` 约 90MB）。这样做是因为打包脚本不做 `npm install`；如果要瘦身，需要先把“构建时下载/安装运行时”接进 `bundle-*` 与 CI，并重写 git 历史。
 - **DeepSeek** 需要 `DEEPSEEK_API_KEY`（或 `dsh-acp --api-key`）；当前通过环境变量传入，后续可在设置页补充输入框。
-- Pi 每次启动都会从 `~/.pi/agent` 镜像模型、凭据和设置；若本机没有 Pi 配置，则需要在终端执行一次 `pi` 登录/配置，或用 cc-switch 写入一份。
+- Pi 每次启动都会从 `~/.pi/agent` 镜像模型、凭据和设置；若本机没有 Pi 配置，则需要在终端执行一次 `pi` 登录/配置，或用 cc-switch 写入一份。因为每次都会重新镜像，在 IDE 里换的模型会被全局 Pi 默认值覆盖回去。
+- Pi 的隔离 `$HOME`（`Wu/agents/pi-home`）里存着 API 凭据和完整会话记录，现在目录是 `0700`、文件是 `0600`（`acp.rs` 的 `restrict_to_owner`）。在修复之前它跟 umask 走，默认是 `0755`/`0644`，同机其他用户可读。
+- **自动更新只校验完整性，不校验身份**：客户端比对的是 GitHub 为资产发布的 SHA-256 digest，能发现传输损坏，但不能证明文件是谁构建的。任何能向本仓库发 release 的人（token 泄露、CI 被投毒）都能把代码推到所有安装上。
 
 ## 构建（Windows）
 

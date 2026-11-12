@@ -4,6 +4,13 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+- Keep the isolated Pi home private: its directories are now `0700` and the credentials and transcripts inside it `0600`, so other accounts on the same machine can no longer read them.
+- Ship `LICENSE-GPL`, `LICENSE-APACHE` and `NOTICE` with every bundle, and show the license in the Windows installer, so a distributed build carries the terms it is licensed under.
+- Bundle the licenses of the redistributed agent runtimes (Node.js, `dsh-acp`, `pi-acp`, `pi-coding-agent`) next to them.
+- Record which version of each bundled runtime is checked in, and how to verify it, in `agents/VERSIONS.md`.
+- Give the release workflow read-only default permissions and hand write access only to the job that publishes.
+- Replace the upstream ReadMe and install guide with documentation for this fork: correct download names, unsigned-build instructions, update behaviour, the list of outbound requests, and licensing.
+
 ## 1.3.2 - 2026-11-11
 
 - Turn automatic updates back on, checking this project's own GitHub releases rather than the upstream project's.

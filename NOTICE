@@ -1,0 +1,59 @@
+IDE
+===
+
+This product is a modified fork. It is not the original work of the projects it
+derives from, and none of them endorse it.
+
+Upstream chain
+--------------
+
+  Zed            https://github.com/zed-industries/zed
+                 Copyright 2022 - 2025 Zed Industries, Inc.
+                 Licensed under GPL-3.0-or-later and Apache-2.0
+                 (Apache-2.0 components are marked in their crate manifests.)
+
+  Wu             https://github.com/dstrml/wu
+                 Copyright 2026 Wu
+                 A memory-focused fork of Zed, licensed under
+                 GPL-3.0-or-later with Apache-2.0 components.
+
+  IDE (this fork)
+                 Modifications made on top of Wu: the product is renamed, the
+                 built-in agent list changed, a generic ACP driver and bundled
+                 DeepSeek and Pi agent runtimes were added, agent processes are
+                 started on demand instead of staying resident, and the icons
+                 were replaced. See FORK.md for the complete list.
+
+Modification notice
+-------------------
+
+As required by GPL-3.0 section 5(a) and Apache-2.0 section 4(b), this notice
+records that the files in this repository have been modified from their
+upstream versions, and that the changes are documented in FORK.md.
+
+The copyright notices of the upstream projects above are retained in
+LICENSE-GPL, LICENSE-APACHE, and in the individual crate manifests.
+
+Bundled third-party runtimes
+----------------------------
+
+These are redistributed inside the application bundle, with their license texts
+placed next to them in the bundled `agents` directory:
+
+  Node.js                              MIT (plus the licenses of its
+                                       own dependencies)
+  @brokkai/dsh-acp                     MIT, Copyright BrokkAi
+                                       https://github.com/BrokkAi/dsh-acp
+  pi-acp                               MIT, Copyright svkozak
+                                       https://github.com/svkozak/pi-acp
+  @earendil-works/pi-coding-agent      MIT
+                                       https://github.com/earendil-works/pi-coding-agent
+
+The complete list of Rust crate licenses is generated at build time by
+`script/generate-licenses` and bundled as `licenses.md`.
+
+Assets
+------
+
+Theme and icon licenses are recorded in assets/themes/LICENSES and
+assets/icons/LICENSES. Icons added by this fork are recorded there as well.

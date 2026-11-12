@@ -1,1 +1,1 @@
-See [ReadMe](https://github.com/Fenghu146/wu#download) for installation instructions.
+See the [ReadMe](https://github.com/Fenghu146/wu#download) for installation instructions, including how to handle the unsigned macOS and Windows builds. This is a modified fork of [dstrml/wu](https://github.com/dstrml/wu); what changed is in [FORK.md](https://github.com/Fenghu146/wu/blob/main/FORK.md).

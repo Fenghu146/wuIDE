@@ -4,7 +4,7 @@ on:
     tags:
       - v*
 permissions:
-  contents: write
+  contents: read
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
@@ -151,6 +151,10 @@ jobs:
     # finished macOS and Windows build the way it used to.
     if: always() && needs.bundle_mac.result == 'success' && needs.bundle_windows.result == 'success'
     runs-on: ubuntu-24.04
+    # Only the publishing job needs to write; the build jobs above it run
+    # third-party code and must not hold a token that can create releases.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Fetch tags for the changelog link

@@ -31,6 +31,10 @@ WizardStyle=modern
 
 CloseApplications=force
 
+; GPL requires the terms to be shown and shipped with the binary. The bundle
+; script assembles this file from LICENSE-GPL, LICENSE-APACHE and NOTICE.
+LicenseFile={#ResourcesDir}\LICENSE.txt
+
 #if GetEnv("ZED_SIGN_BUNDLE") != ""
 SignTool=Defaultsign
 #endif
@@ -68,6 +72,8 @@ Name: "{app}"; AfterInstall: DisableAppDirInheritance
 Source: "{#ResourcesDir}\{#AppExeName}.exe"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
 Source: "{#ResourcesDir}\bin\*"; DestDir: "{code:GetInstallDir}\bin"; Flags: ignoreversion
 Source: "{#ResourcesDir}\agents\*"; DestDir: "{code:GetInstallDir}\agents"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#ResourcesDir}\LICENSE.txt"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
+Source: "{#ResourcesDir}\NOTICE"; DestDir: "{code:GetInstallDir}"; Flags: ignoreversion
 Source: "{#ResourcesDir}\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "{#ResourcesDir}\appx\*"; DestDir: "{app}\appx";  BeforeInstall: RemoveAppxPackage; AfterInstall: AddAppxPackage; Flags: ignoreversion; Check: IsWindows11OrLater
 #ifexist ResourcesDir + "\amd_ags_x64.dll"

@@ -87,6 +87,12 @@ function PrepareForBundle {
             throw "Missing agents\$required; the bundle would ship without a working DeepSeek or Pi agent."
         }
     }
+    if (Test-Path "$workspace\crates\wu\resources\agents\licenses") {
+        Copy-Item -Path "$workspace\crates\wu\resources\agents\licenses" -Destination "$innoDir\agents\licenses" -Recurse -Force
+    }
+    else {
+        throw "Missing crates\wu\resources\agents\licenses; bundled runtimes would ship without their licenses."
+    }
     New-Item -Path "$innoDir\make_appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\appx" -ItemType Directory -Force
     New-Item -Path "$innoDir\bin" -ItemType Directory -Force
@@ -97,6 +103,26 @@ function PrepareForBundle {
 
 function GenerateLicenses {
     . $PSScriptRoot/generate-licenses.ps1
+}
+
+# Inno Setup shows this file before installing, and copies NOTICE next to the
+# binary. Both are GPL obligations, so a missing source file is a hard error.
+function AssembleLicenseFiles {
+    $licensePath = "$innoDir\LICENSE.txt"
+    $parts = @("LICENSE-GPL", "LICENSE-APACHE")
+    New-Item -Path $licensePath -ItemType File -Value "" -Force | Out-Null
+    foreach ($part in $parts) {
+        $source = Join-Path $workspace $part
+        if (-not (Test-Path $source)) {
+            throw "Missing $part; the installer would ship without its license terms."
+        }
+        Add-Content -Path $licensePath -Value (Get-Content $source -Raw)
+        Add-Content -Path $licensePath -Value "`n`n----------------------------------------------------------------------`n"
+    }
+    if (-not (Test-Path (Join-Path $workspace "NOTICE"))) {
+        throw "Missing NOTICE; the installer would ship without its attribution notice."
+    }
+    Copy-Item -Path (Join-Path $workspace "NOTICE") -Destination "$innoDir\NOTICE" -Force
 }
 
 function BuildWuAndItsFriends {
@@ -284,6 +310,7 @@ function BuildInstaller {
 Push-Location $workspace
 PrepareForBundle
 GenerateLicenses
+AssembleLicenseFiles
 BuildWuAndItsFriends
 BuildRemoteServer
 MakeAppx

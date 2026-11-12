@@ -529,14 +529,25 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
         log::warn!("failed to prepare Pi home {home:?}: {error}");
         return None;
     }
+    // This directory holds the user's API credentials and full transcripts of
+    // every conversation, so keep it owner-only. The default umask leaves it at
+    // 0755, which is world-readable.
+    for dir in [&home, &home.join(".pi"), &agent_dir, &acp_dir] {
+        if let Err(error) = restrict_to_owner(dir) {
+            log::warn!("failed to restrict permissions on {dir:?}: {error}");
+        }
+    }
 
     let settings_path = agent_dir.join("settings.json");
     if let Some(source_agent) = source_pi_agent_dir() {
         for name in ["auth.json", "models.json", "models-store.json"] {
             let from = source_agent.join(name);
             if from.is_file() {
-                if let Err(error) = std::fs::copy(&from, &agent_dir.join(name)) {
+                let to = agent_dir.join(name);
+                if let Err(error) = std::fs::copy(&from, &to) {
                     log::warn!("failed to sync Pi {name:?}: {error}");
+                } else if let Err(error) = restrict_to_owner(&to) {
+                    log::warn!("failed to restrict permissions on {to:?}: {error}");
                 }
             }
         }
@@ -563,6 +574,21 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
         log::warn!("failed to configure the Pi model provider: {error}");
     }
 
+    // Every write above created the file with the ambient umask.
+    for name in [
+        "settings.json",
+        "auth.json",
+        "models.json",
+        "models-store.json",
+    ] {
+        let path = agent_dir.join(name);
+        if path.is_file()
+            && let Err(error) = restrict_to_owner(&path)
+        {
+            log::warn!("failed to restrict permissions on {path:?}: {error}");
+        }
+    }
+
     Some((home, agent_dir))
 }
 
@@ -573,6 +599,19 @@ fn isolated_pi_settings(source: &Value) -> Value {
         object.remove("enabledModels");
     }
     settings
+}
+
+/// Keep a file or directory inside the Pi home readable only by its owner.
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if path.is_dir() { 0o700 } else { 0o600 };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn source_pi_agent_dir() -> Option<PathBuf> {
@@ -1389,6 +1428,7 @@ fn find_program(name: &str) -> Option<PathBuf> {
 }
 
 fn program_file_names(name: &str) -> Vec<String> {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut names = vec![name.to_owned()];
     #[cfg(windows)]
     {
@@ -1425,6 +1465,26 @@ fn bundled_dirs() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_home_permissions_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("pi-home").join(".pi").join("agent");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("auth.json");
+        std::fs::write(&file, "{}").unwrap();
+
+        restrict_to_owner(&nested).unwrap();
+        restrict_to_owner(&file).unwrap();
+
+        let dir_mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        let file_mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "session transcripts would be world-readable");
+        assert_eq!(file_mode, 0o600, "credentials would be world-readable");
+    }
 
     #[test]
     fn permission_response_allows_under_full_access() {

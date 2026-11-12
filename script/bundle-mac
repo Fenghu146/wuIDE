@@ -166,6 +166,32 @@ else
     exit 1
 fi
 
+# Redistributed third-party runtimes keep their own licenses next to them.
+licenses_src="crates/wu/resources/agents/licenses"
+if [[ -d "${licenses_src}" ]]; then
+    mkdir -p "${agents_dst}/licenses"
+    cp -R "${licenses_src}/." "${agents_dst}/licenses/"
+else
+    echo "error: missing ${licenses_src}; bundled runtimes would ship without their licenses" >&2
+    exit 1
+fi
+
+# GPL requires the license texts to travel with the binary, and the app bundle
+# has no other place to put them: licenses.md is compiled into the executable.
+resources_dir="${app_path}/Contents/Resources"
+mkdir -p "${resources_dir}"
+for file in LICENSE-GPL LICENSE-APACHE NOTICE; do
+    if [[ -f "${file}" ]]; then
+        cp "${file}" "${resources_dir}/${file}"
+    else
+        echo "error: missing ${file}; the bundle would be missing its license terms" >&2
+        exit 1
+    fi
+done
+if [[ -f assets/licenses.md ]]; then
+    cp assets/licenses.md "${resources_dir}/licenses.md"
+fi
+
 # DocumentTypes.plist references CFBundleTypeIconFile "Document", so the bundle must contain Document.icns.
 # We use the app icon as a placeholder document icon for now.
 document_icon_source="crates/wu/resources/Document.icns"

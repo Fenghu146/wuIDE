@@ -169,6 +169,27 @@ fi
 cp "${target_dir}/${target_triple}/release/cli" "${ide_dir}/bin/ide"
 ln -sf ide "${ide_dir}/bin/wu"
 
+# Redistributed third-party runtimes keep their own licenses next to them.
+licenses_src="crates/wu/resources/agents/licenses"
+if [[ -d "${licenses_src}" ]]; then
+  mkdir -p "${agents_dst}/licenses"
+  cp -R "${licenses_src}/." "${agents_dst}/licenses/"
+else
+  echo "error: missing ${licenses_src}; bundled runtimes would ship without their licenses" >&2
+  exit 1
+fi
+
+# GPL requires the license texts to travel with the binary.
+mkdir -p "${ide_dir}/share/licenses"
+for file in LICENSE-GPL LICENSE-APACHE NOTICE; do
+  if [[ -f "${file}" ]]; then
+    cp "${file}" "${ide_dir}/share/licenses/${file}"
+  else
+    echo "error: missing ${file}; the bundle would be missing its license terms" >&2
+    exit 1
+  fi
+done
+
 # Libs
 # Bundle libstdc++ so older supported systems can run binaries built with our
 # toolchain even when their system libstdc++.so.6 lacks required GLIBCXX symbols.
