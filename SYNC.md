@@ -6,10 +6,12 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 共同祖先 | `12c1985`（2026-11-09，上游 `Bump to 1.2.1`） |
-| 上游领先 | 9 个 commit（最新 `41b71ce4`，`Bump to 1.2.2`） |
-| 本分叉领先 | 32 个 commit |
-| 同步标记 | `sync/upstream-12c1985` |
+| 共同祖先 | `41b71ce4`（2026-11-11，上游 `Bump to 1.2.2`） |
+| 上游领先 | 0 个 commit —— 已同步到上游最新 |
+| 本分叉领先 | 34 个 commit |
+| 同步标记 | `sync/upstream-41b71ce4`（上一次是 `sync/upstream-12c1985`） |
+
+最近一次合并：2026-11-12，把上游 9 个 commit 合入，冲突 4 个文件。
 
 查看实时状态：
 
@@ -55,6 +57,58 @@ git tag -a sync/upstream-$(git rev-parse --short upstream/main) -m 'Merged upstr
 git checkout --theirs Cargo.lock   # 或手工删掉冲突标记
 cargo check                        # 让 Cargo 重新解析
 ```
+
+## 已知冲突的解法（2026-11-12 合并实测）
+
+这 4 个文件每次合并大概率还会冲突，按下面的方式解：
+
+### `crates/wu/Cargo.toml` 与 `Cargo.lock`
+
+只冲突 `version` 那一行。**保留本分叉的版本号**（当前 `1.3.2`）。本分叉版本线已经越过上游（`1.2.2`），取上游会让版本倒退，`release.yml` 的 tag 校验也会对不上。
+
+`Cargo.lock` 其余部分让 Cargo 重新解析：
+
+```sh
+# 解完冲突标记后
+script/build-macos check -p wu --bin IDE
+```
+
+### `script/bundle-linux`
+
+冲突在构建 IDE 二进制的那一行。两边都要保留：
+
+- 本分叉的 `--bin IDE`（上游是 `--bin wu`）
+- 上游的 aarch64 ICF 保护（`icf_args`），否则 ARM Linux 上会启动崩溃
+
+```sh
+icf_args=()
+if [[ "$(uname -m)" != "aarch64" ]]; then
+    icf_args=(-C llvm-args=-addrsig -C link-arg=-Wl,--icf=safe)
+fi
+cargo --config .cargo/bundle-config.toml rustc --release --target "${target_triple}" \
+    --package wu --bin IDE -- -C linker="$CC" -C link-arg=-fuse-ld=lld ${icf_args[@]+"${icf_args[@]}"}
+```
+
+### `crates/agent_chat/src/agent_panel.rs`
+
+上游把每个智能体的图标和色调抽成了 `agent_logo(kind)` / `agent_tint(kind)` 两个函数。**采用上游的函数化写法，但要把 DeepSeek 和 Pi 补进这两个函数**——上游版本不认识它们，直接取上游会编译失败（match 不穷尽）。
+
+```rust
+fn agent_logo(kind: AgentKind) -> IconName {
+    match kind {
+        AgentKind::Claude => IconName::AgentClaude,
+        AgentKind::Codex => IconName::AgentCodex,
+        AgentKind::Opencode | AgentKind::DeepSeek => IconName::AgentOpencode,
+        AgentKind::Pi => IconName::AgentPi,
+    }
+}
+```
+
+同理，任何上游新抽出来的 `match AgentKind` 辅助函数，都要检查是否覆盖了 5 个变体。
+
+### `.github/release/CHANGELOG.md`
+
+上游会加一个 `## 1.2.x` 小节，但本分叉的版本线里没有这个号。把上游的条目放进 `## Unreleased`，并标注 `(from upstream)`，不要引入一个本分叉永远不会发布的版本号。
 
 ## 合并后要检查的事
 
