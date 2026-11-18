@@ -1,5 +1,6 @@
 [build]
-jobs = 4
+# 16 logical cores / 31GB RAM；留少量余量给链接与系统
+jobs = 14
 # v0 mangling scheme provides more detailed backtraces around closures
 rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
 
