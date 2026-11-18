@@ -20,9 +20,7 @@ load-grammars = [
 
 [dependencies]
 anyhow.workspace = true
-async-compression.workspace = true
 async-fs.workspace = true
-async-tar.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 collections.workspace = true

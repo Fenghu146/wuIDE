@@ -43,7 +43,6 @@ text.workspace = true
 theme.workspace = true
 tree-sitter = { workspace = true, features = ["wasm"] }
 ztracing.workspace = true
-tracing.workspace = true
 util.workspace = true
 unicode-segmentation.workspace = true
 
@@ -61,5 +60,3 @@ text = { workspace = true, features = ["test-support"] }
 util = { workspace = true, features = ["test-support"] }
 zlog.workspace = true
 
-[package.metadata.cargo-shear]
-ignored = ["tracing"]

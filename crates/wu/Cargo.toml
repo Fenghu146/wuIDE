@@ -103,7 +103,6 @@ gpui_platform = { workspace = true, features = [
 gpui_tokio.workspace = true
 i18n.workspace = true
 image = { workspace = true, optional = true }
-spin = "0.10.0"
 itertools.workspace = true
 rayon.workspace = true
 semver.workspace = true
@@ -140,15 +139,12 @@ outline_panel.workspace = true
 parking_lot.workspace = true
 paths.workspace = true
 picker.workspace = true
-profiling.workspace = true
 project.workspace = true
 project_panel.workspace = true
 project_symbols.workspace = true
-proto.workspace = true
 recent_projects.workspace = true
 release_channel.workspace = true
 remote.workspace = true
-reqwest.workspace = true
 reqwest_client.workspace = true
 rope.workspace = true
 search.workspace = true
@@ -172,10 +168,8 @@ theme_extension.workspace = true
 theme_selector.workspace = true
 theme_settings.workspace = true
 time.workspace = true
-time_format.workspace = true
 title_bar.workspace = true
 toolchain_selector.workspace = true
-tracing.workspace = true
 ui.workspace = true
 ui_prompt.workspace = true
 url.workspace = true
@@ -250,5 +244,3 @@ osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["ide", "wu"]
 
-[package.metadata.cargo-shear]
-ignored = ["profiling", "tracing"]
