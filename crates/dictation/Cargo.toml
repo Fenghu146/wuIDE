@@ -29,4 +29,5 @@ sha2.workspace = true
 
 [dev-dependencies]
 http_client = { workspace = true, features = ["test-support"] }
+reqwest_client.workspace = true
 tempfile.workspace = true

@@ -2945,6 +2945,7 @@ dependencies = [
  "log",
  "ort",
  "parakeet-rs",
+ "reqwest_client",
  "rubato",
  "sha2",
  "tempfile",

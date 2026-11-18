@@ -46,16 +46,22 @@ const MODEL_FILES: &[ModelFile] = &[
 ];
 const VERIFIED_MARKER_FILE: &str = "verified";
 
-const ONNX_RUNTIME_VERSION: &str = "1.28.3";
+const ONNX_RUNTIME_VERSION: &str = "1.28.0";
 
 pub(crate) enum ArchiveFormat {
-    TarGz,
     Zip,
+    // All pinned runtimes currently ship as wheels (zip). Tarball extraction
+    // stays so a future source can use it without reintroducing the code.
+    #[cfg_attr(not(test), allow(dead_code))]
+    TarGz,
 }
 
 pub(crate) struct OnnxRuntime {
     os: &'static str,
     arch: &'static str,
+    /// Full URL of the runtime archive. PyPI wheel URLs embed a hash-prefix
+    /// directory, so the URL cannot be derived from the archive name.
+    archive_url: &'static str,
     archive: ModelFile,
     archive_format: ArchiveFormat,
     library_path_in_archive: &'static str,
@@ -66,81 +72,86 @@ const ONNX_RUNTIMES: &[OnnxRuntime] = &[
     OnnxRuntime {
         os: "macos",
         arch: "aarch64",
+        archive_url: "https://files.pythonhosted.org/packages/9c/12/3807e2b17d9eb71d3cb78ed2ba76869b05c637c9b9d6112e636098b0c97a/onnxruntime-1.28.0-cp313-cp313-macosx_14_0_arm64.whl",
         archive: ModelFile {
-            name: "onnxruntime-osx-arm64-1.28.3.tgz",
-            size: 33_057_743,
-            sha256: "c436bd9f47dbce6f6311ccc21de97f829b3c862c09d24aa321958cb72f0a1d32",
+            name: "onnxruntime-1.28.0-cp313-cp313-macosx_14_0_arm64.whl",
+            size: 19_141_759,
+            sha256: "31410f544674f534c2f27348af52ef81682ca9c8719154bf4d48f0ef23823b1e",
         },
-        archive_format: ArchiveFormat::TarGz,
-        library_path_in_archive: "onnxruntime-osx-arm64-1.28.3/lib/libonnxruntime.1.28.3.dylib",
+        archive_format: ArchiveFormat::Zip,
+        library_path_in_archive: "onnxruntime/capi/libonnxruntime.1.28.0.dylib",
         library: ModelFile {
-            name: "libonnxruntime.1.28.3.dylib",
-            size: 39_350_024,
-            sha256: "0c8707e83b3389849d03a3264308e905169b94b546f84df6bf662649bd89c3bb",
+            name: "libonnxruntime.1.28.0.dylib",
+            size: 30_509_592,
+            sha256: "bb37d233002cf57b52ae315e3f00904d0e6d6261da27809372ee0e27ec9046fd",
         },
     },
     OnnxRuntime {
         os: "linux",
         arch: "x86_64",
+        archive_url: "https://files.pythonhosted.org/packages/78/b6/8c5396e7894e77c5a7d1e026f3acb9dd39c4b5644e412e37a0055eaa3bc5/onnxruntime-1.28.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
         archive: ModelFile {
-            name: "onnxruntime-linux-x64-1.28.3.tgz",
-            size: 9_130_098,
-            sha256: "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c",
+            name: "onnxruntime-1.28.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            size: 19_214_329,
+            sha256: "54fa221d669282bd8f582708ce4c96010a7e9fb0661f9006b37fe2fedafb73fe",
         },
-        archive_format: ArchiveFormat::TarGz,
-        library_path_in_archive: "onnxruntime-linux-x64-1.28.3/lib/libonnxruntime.so.1.28.3",
+        archive_format: ArchiveFormat::Zip,
+        library_path_in_archive: "onnxruntime/capi/libonnxruntime.so.1.28.0",
         library: ModelFile {
-            name: "libonnxruntime.so.1.28.3",
-            size: 24_301_616,
-            sha256: "5a1ce74e56e8c4b278d5a9e9d12b7192d9f70811084dde9616da4fa1710efc5a",
+            name: "libonnxruntime.so.1.28.0",
+            size: 24_272_944,
+            sha256: "aa4079d18f4ea7a5f3a94d80cd4bbe0f2740436626622d64d793803a20381083",
         },
     },
     OnnxRuntime {
         os: "linux",
         arch: "aarch64",
+        archive_url: "https://files.pythonhosted.org/packages/c0/23/b46045c3bf67a9cf54c12f5df0f018a422c65fbb9d6072b10071bebfaae2/onnxruntime-1.28.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
         archive: ModelFile {
-            name: "onnxruntime-linux-aarch64-1.28.3.tgz",
-            size: 8_123_797,
-            sha256: "6c6b1ae96d7b0be9f555092857c6a4f2b0b5587a5298d732d9e52e8253038ce7",
+            name: "onnxruntime-1.28.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+            size: 17_049_339,
+            sha256: "f649dd6f6452d12a8059888aa489fe519e062e18793dac72b9efa0f9fdb64135",
         },
-        archive_format: ArchiveFormat::TarGz,
-        library_path_in_archive: "onnxruntime-linux-aarch64-1.28.3/lib/libonnxruntime.so.1.28.3",
+        archive_format: ArchiveFormat::Zip,
+        library_path_in_archive: "onnxruntime/capi/libonnxruntime.so.1.28.0",
         library: ModelFile {
-            name: "libonnxruntime.so.1.28.3",
+            name: "libonnxruntime.so.1.28.0",
             size: 20_657_248,
-            sha256: "c17d9c3b522c69594ef2b077d7f27a92ff0635d9df0c68c8997b7cad7bf71c61",
+            sha256: "23a37c2994bc273e1d59a4f49af6cba5bf1cfbc29f04907ec27df375aba50a7d",
         },
     },
     OnnxRuntime {
         os: "windows",
         arch: "x86_64",
+        archive_url: "https://files.pythonhosted.org/packages/56/f1/51225c202edba4dfc94e1ea03f3d78f1aaf307da75fd792c0ce1946b2514/onnxruntime-1.28.0-cp313-cp313-win_amd64.whl",
         archive: ModelFile {
-            name: "onnxruntime-win-x64-1.28.3.zip",
-            size: 78_606_946,
-            sha256: "1d6fab48e85f948436af7c8c971d2c145cf224e2c444755dec894f8b0de11a83",
+            name: "onnxruntime-1.28.0-cp313-cp313-win_amd64.whl",
+            size: 13_755_033,
+            sha256: "1a1a19175464665c9b8d50bc916f216cc0b569110045b7bbca8f9f290b186f58",
         },
         archive_format: ArchiveFormat::Zip,
-        library_path_in_archive: "onnxruntime-win-x64-1.28.3/lib/onnxruntime.dll",
+        library_path_in_archive: "onnxruntime/capi/onnxruntime.dll",
         library: ModelFile {
             name: "onnxruntime.dll",
-            size: 15_828_832,
-            sha256: "4d2774a5f64e4a230b16b74b167171e92f65b0683c19680c1d04fb284b92a6e2",
+            size: 17_766_712,
+            sha256: "e23e1d0cef90ba2f10f48056fb8276b11c7fc714d1295aa4423c5ecd7a77a013",
         },
     },
     OnnxRuntime {
         os: "windows",
         arch: "aarch64",
+        archive_url: "https://files.pythonhosted.org/packages/f4/db/f59f715edfdd96a051f32b5ef0e680a20a8755d4ecd75f63090e960e347a/onnxruntime-1.28.0-cp313-cp313-win_arm64.whl",
         archive: ModelFile {
-            name: "onnxruntime-win-arm64-1.28.3.zip",
-            size: 79_730_664,
-            sha256: "76d5e5a23fb7fdbc2ca0c3214bad1b58b2a41016c7052e74e60ed8004bea71b1",
+            name: "onnxruntime-1.28.0-cp313-cp313-win_arm64.whl",
+            size: 13_454_175,
+            sha256: "cfab507abe09d6ffeb817eee07944d452fdc0b00fdcef34cab4db10a45e378c7",
         },
         archive_format: ArchiveFormat::Zip,
-        library_path_in_archive: "onnxruntime-win-arm64-1.28.3/lib/onnxruntime.dll",
+        library_path_in_archive: "onnxruntime/capi/onnxruntime.dll",
         library: ModelFile {
             name: "onnxruntime.dll",
-            size: 15_918_944,
-            sha256: "20bcd3d4718376ef449d9520ec074d3c73938655e74f42c410de0e5aab6a8ed5",
+            size: 17_510_752,
+            sha256: "080cb4b705c34afc4abdfda507b343f6856f09bdb0711080d2a17092b70192d0",
         },
     },
 ];
@@ -207,10 +218,7 @@ pub async fn download_model(http_client: Arc<dyn HttpClient>, data_directory: &P
             )
         },
         runtime,
-        &format!(
-            "https://github.com/microsoft/onnxruntime/releases/download/v{ONNX_RUNTIME_VERSION}/{}",
-            runtime.archive.name
-        ),
+        runtime.archive_url,
         &installed_marker(),
     )
     .await
@@ -636,6 +644,7 @@ mod tests {
         OnnxRuntime {
             os: "test",
             arch: "test",
+            archive_url: RUNTIME_URL,
             archive: file_for("runtime.archive", archive),
             archive_format,
             library_path_in_archive: LIBRARY_PATH_IN_ARCHIVE,
@@ -712,6 +721,10 @@ mod tests {
                 && runtime
                     .library_path_in_archive
                     .ends_with(runtime.library.name)
+                && runtime
+                    .archive_url
+                    .starts_with("https://files.pythonhosted.org/packages/")
+                && runtime.archive_url.ends_with(runtime.archive.name)
         }));
         assert_eq!(
             model_download_size(),
@@ -855,5 +868,51 @@ mod tests {
         assert_eq!(progress(0, 0).fraction(), 0.0);
         assert_eq!(progress(50, 100).fraction(), 0.5);
         assert_eq!(progress(150, 100).fraction(), 1.0);
+    }
+
+    #[test]
+    #[ignore = "exercises the network"]
+    fn pinned_runtime_archives_are_reachable() {
+        let http_client = reqwest_client::ReqwestClient::new();
+        block_on(async {
+            for runtime in ONNX_RUNTIMES {
+                let response = http_client
+                    .get(runtime.archive_url, AsyncBody::empty(), true)
+                    .await
+                    .unwrap();
+                assert!(
+                    response.status().is_success(),
+                    "{}: {}",
+                    runtime.archive_url,
+                    response.status()
+                );
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "downloads the runtime for this platform"]
+    fn current_platform_runtime_installs_from_pypi() {
+        let Some(runtime) = current_onnx_runtime() else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let http_client = reqwest_client::ReqwestClient::new();
+        block_on(install(
+            &http_client,
+            directory.path(),
+            &[],
+            |_| unreachable!(),
+            runtime,
+            runtime.archive_url,
+            &installed_marker(),
+        ))
+        .unwrap();
+        assert!(is_installed(
+            directory.path(),
+            &[],
+            runtime,
+            &installed_marker()
+        ));
     }
 }
