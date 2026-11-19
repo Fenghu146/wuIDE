@@ -926,6 +926,50 @@ impl ChatView {
         }
     }
 
+    /// Replaces the composer with the project conventions (AGENTS.md), ready
+    /// for the user to review and send. Notifies the user when the project has
+    /// no conventions file yet.
+    fn insert_conventions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let roots = self
+            .project
+            .read(cx)
+            .visible_worktrees(cx)
+            .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+            .collect::<Vec<_>>();
+        let gather = repo_wiki::conventions::conventions_task(roots, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let docs = gather.await;
+            this.update_in(cx, |this, window, cx| {
+                let Some(markdown) = repo_wiki::conventions::conventions_markdown(&docs) else {
+                    let message = t!(
+                        "No project conventions found. Create an AGENTS.md at the project root, or use the repo map panel to add one."
+                    )
+                    .to_string();
+                    this.workspace
+                        .update(cx, |workspace, cx| {
+                            workspace.show_toast(
+                                Toast::new(NotificationId::unique::<ChatView>(), message).autohide(),
+                                cx,
+                            )
+                        })
+                        .log_err();
+                    return;
+                };
+                this.composer.update(cx, |editor, cx| {
+                    let existing = editor.text(cx);
+                    let combined = if existing.trim().is_empty() {
+                        markdown
+                    } else {
+                        format!("{existing}\n\n{markdown}")
+                    };
+                    editor.set_text(combined.as_str(), window, cx);
+                });
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
     fn glide_to_bottom(&mut self, cx: &mut Context<Self>) {
         let start = self.scroll_top();
         self._glide = cx.spawn(async move |this, cx| {

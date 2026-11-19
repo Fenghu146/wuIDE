@@ -42,6 +42,7 @@ mermaid_render.workspace = true
 paths.workspace = true
 picker.workspace = true
 project.workspace = true
+repo_wiki.workspace = true
 resvg.workspace = true
 serde.workspace = true
 serde_json.workspace = true

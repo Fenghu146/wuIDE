@@ -1,0 +1,6 @@
+{
+  "repo_map_panel::ToggleFocus": {
+    "name": "切换焦点",
+    "description": "切换仓库地图面板的焦点。"
+  }
+}

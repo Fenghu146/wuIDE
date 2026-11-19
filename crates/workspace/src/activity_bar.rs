@@ -49,7 +49,7 @@ pub(crate) fn bar_width(window: &Window, cx: &App) -> Pixels {
 
 /// Entries are shown in this order by `Panel::panel_key()` until the user drags
 /// them around. Panels not listed come after, in dock order (left dock first).
-const DEFAULT_ORDER: [&str; 7] = [
+const DEFAULT_ORDER: [&str; 8] = [
     "ProjectPanel",
     "RemotePanel",
     "SearchPanel",
@@ -57,6 +57,7 @@ const DEFAULT_ORDER: [&str; 7] = [
     "OutlinePanel",
     "DebugPanel",
     "AgentPanel",
+    "RepoMapPanel",
 ];
 
 const ORDER_KEY: &str = "activity_bar_order";

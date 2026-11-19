@@ -1,0 +1,7 @@
+{
+  "Create AGENTS.md": "创建 AGENTS.md",
+  "Failed to create {path}: {error}": "创建 {path} 失败：{error}",
+  "No project is open": "没有打开的项目",
+  "Open AGENTS.md": "打开 AGENTS.md",
+  "{count} files · {size}": "{count} 个文件 · {size}"
+}

@@ -643,6 +643,7 @@ impl ChatView {
             },
             AppCommand::Resume => window.dispatch_action(Box::new(ToggleFocus), cx),
             AppCommand::Stop => self.session.update(cx, |session, cx| session.stop(cx)),
+            AppCommand::Conventions => self.insert_conventions(window, cx),
             AppCommand::Settings | AppCommand::Diff | AppCommand::Files | AppCommand::Terminal => {
                 let Some(name) = command.action_name() else {
                     return;

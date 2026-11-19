@@ -89,10 +89,11 @@ pub(crate) enum AppCommand {
     Files,
     Terminal,
     Stop,
+    Conventions,
 }
 
 impl AppCommand {
-    const ALL: [AppCommand; 8] = [
+    const ALL: [AppCommand; 9] = [
         AppCommand::Model,
         AppCommand::New,
         AppCommand::Resume,
@@ -101,6 +102,7 @@ impl AppCommand {
         AppCommand::Files,
         AppCommand::Terminal,
         AppCommand::Stop,
+        AppCommand::Conventions,
     ];
 
     fn name(self) -> &'static str {
@@ -113,6 +115,7 @@ impl AppCommand {
             AppCommand::Files => "files",
             AppCommand::Terminal => "terminal",
             AppCommand::Stop => "stop",
+            AppCommand::Conventions => "conventions",
         }
     }
 
@@ -126,6 +129,7 @@ impl AppCommand {
             AppCommand::Files => t!("IDE: open project files"),
             AppCommand::Terminal => t!("IDE: open a terminal"),
             AppCommand::Stop => t!("IDE: stop the agent"),
+            AppCommand::Conventions => t!("IDE: attach the project conventions (AGENTS.md)"),
         }
     }
 
@@ -136,7 +140,11 @@ impl AppCommand {
             AppCommand::Diff => Some("git_panel::ToggleFocus"),
             AppCommand::Files => Some("project_panel::ToggleFocus"),
             AppCommand::Terminal => Some("terminal_panel::ToggleFocus"),
-            AppCommand::Model | AppCommand::New | AppCommand::Resume | AppCommand::Stop => None,
+            AppCommand::Model
+            | AppCommand::New
+            | AppCommand::Resume
+            | AppCommand::Stop
+            | AppCommand::Conventions => None,
         }
     }
 }
