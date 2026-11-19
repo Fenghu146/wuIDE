@@ -337,6 +337,7 @@ impl<'a> Iterator for InlayChunks<'a> {
                 let mut highlight_style = match inlay.id {
                     InlayId::Hint(_) => self.highlight_styles.inlay_hint,
                     InlayId::DebuggerValue(_) => self.highlight_styles.inlay_hint,
+                    InlayId::Prediction(_) => self.highlight_styles.inlay_hint,
                     InlayId::ReplResult(_) => {
                         let text = inlay.text().to_string();
                         renderer = Some(ChunkRenderer {

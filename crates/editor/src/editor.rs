@@ -29,6 +29,7 @@ pub mod hover_links;
 pub mod hover_popover;
 mod indent_guides;
 mod inlays;
+mod predictions;
 pub mod items;
 mod jsx_tag_auto_close;
 mod linked_editing_ranges;
@@ -130,6 +131,7 @@ use document_colors::LspColorData;
 use document_links::LspDocumentLinks;
 use editor_settings::{GoToDefinitionFallback, Minimap as MinimapSettings};
 use element::{LineWithInvisibles, PositionMap};
+use fs::Fs;
 use futures::{
     FutureExt,
     future::{self, Shared},
@@ -259,6 +261,7 @@ use crate::{
         InlineValueCache,
         inlay_hints::{LspInlayHintData, inlay_hint_settings},
     },
+    predictions::EditPredictionData,
     runnables::{ResolvedTasks, RunnableData, RunnableTaskStatus, RunnableTasks},
     scroll::ScrollOffset,
     selections_collection::resolve_selections_wrapping_blocks,
@@ -672,19 +675,6 @@ impl MinimapVisibility {
                 toggle_override,
             } => setting_configuration ^ toggle_override,
             _ => false,
-        }
-    }
-
-    fn toggle_visibility(&self) -> Self {
-        match *self {
-            Self::Enabled {
-                toggle_override,
-                setting_configuration,
-            } => Self::Enabled {
-                setting_configuration,
-                toggle_override: !toggle_override,
-            },
-            Self::Disabled => Self::Disabled,
         }
     }
 }
@@ -1133,6 +1123,7 @@ pub struct Editor {
     use_document_folding_ranges: bool,
     refresh_folding_ranges_task: Task<()>,
     inlay_hints: Option<LspInlayHintData>,
+    pub(crate) edit_predictions: EditPredictionData,
     folding_newlines: Task<()>,
     select_next_is_case_sensitive: Option<bool>,
     pub lookup_key: Option<Box<dyn Any + Send + Sync>>,
@@ -2437,6 +2428,7 @@ impl Editor {
             use_document_folding_ranges: false,
             refresh_folding_ranges_task: Task::ready(()),
             inlay_hints: None,
+            edit_predictions: EditPredictionData::new(),
             next_color_inlay_id: 0,
             post_scroll_update: Task::ready(()),
             linked_edit_ranges: Default::default(),
@@ -5100,6 +5092,9 @@ impl Editor {
             return;
         }
         if self.read_only(cx) {
+            return;
+        }
+        if !self.has_visible_completions_menu() && self.accept_edit_prediction(cx) {
             return;
         }
         let mut selections = self.selections.all_adjusted(&self.display_snapshot(cx));
@@ -8385,8 +8380,30 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) {
-        if self.supports_minimap(cx) {
-            self.set_minimap_visibility(self.minimap_visibility.toggle_visibility(), window, cx);
+        if !self.supports_minimap(cx) {
+            return;
+        }
+        let show = if self.minimap_visibility.visible() {
+            ShowMinimap::Never
+        } else {
+            ShowMinimap::Always
+        };
+        self.set_minimap_visibility(
+            MinimapVisibility::Enabled {
+                setting_configuration: show != ShowMinimap::Never,
+                toggle_override: false,
+            },
+            window,
+            cx,
+        );
+        // Persist the choice so it survives restarts; the visibility is applied
+        // above so this editor reacts without waiting for the settings store to
+        // reload. Test contexts have no global Fs, so there only the in-memory
+        // visibility change applies.
+        if let Some(fs) = <dyn Fs>::try_global(cx) {
+            update_settings_file(fs, cx, move |setting, _| {
+                setting.editor.minimap.get_or_insert_default().show = Some(show);
+            });
         }
     }
 
@@ -9722,6 +9739,7 @@ impl Editor {
                             InlayHintRefreshReason::BufferEdited(buffer_id),
                             cx,
                         );
+                        self.refresh_edit_predictions(cx);
                     }
 
                     self.detect_buffer_language(buffer_id, cx);

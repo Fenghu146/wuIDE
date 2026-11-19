@@ -426,6 +426,8 @@ pub enum InlayId {
     Hint(usize),
     Color(usize),
     ReplResult(usize),
+    // Edit predictions
+    Prediction(usize),
 }
 
 impl InlayId {
@@ -435,6 +437,7 @@ impl InlayId {
             Self::Hint(id) => *id,
             Self::Color(id) => *id,
             Self::ReplResult(id) => *id,
+            Self::Prediction(id) => *id,
         }
     }
 }

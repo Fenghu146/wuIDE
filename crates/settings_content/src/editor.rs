@@ -165,6 +165,11 @@ pub struct EditorSettingsContent {
     /// Default: nothing is enabled
     pub search: Option<SearchSettingsContent>,
 
+    /// Inline edit predictions (ghost text) from an OpenAI-compatible endpoint.
+    ///
+    /// Default: disabled
+    pub edit_predictions: Option<EditPredictionsContent>,
+
     /// Whether to automatically show a signature help pop-up or not.
     ///
     /// Default: false
@@ -991,6 +996,46 @@ pub enum DiffViewStyle {
     /// Show diffs in a split view.
     #[default]
     Split,
+}
+
+/// Settings for inline edit predictions from an OpenAI-compatible endpoint.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct EditPredictionsContent {
+    /// Whether to request edit predictions and show them as ghost text.
+    ///
+    /// Default: false
+    pub enabled: Option<bool>,
+
+    /// An OpenAI-compatible chat completions endpoint, for example
+    /// "https://api.deepseek.com/chat/completions" for DeepSeek or
+    /// "http://localhost:11434/v1/chat/completions" for Ollama.
+    /// Predictions are disabled when this is empty.
+    ///
+    /// Default: ""
+    pub endpoint: Option<String>,
+
+    /// The model to request, for example "deepseek-chat".
+    ///
+    /// Default: ""
+    pub model: Option<String>,
+
+    /// The API key sent as a bearer token. Leave empty for servers that
+    /// don't require authentication, like a local Ollama instance.
+    ///
+    /// Default: ""
+    pub api_key: Option<String>,
+
+    /// How long to wait after the last keystroke before a prediction is
+    /// requested, in milliseconds.
+    ///
+    /// Default: 350
+    pub debounce: Option<DelayMs>,
+
+    /// The maximum number of tokens to generate per prediction.
+    ///
+    /// Default: 176
+    pub max_tokens: Option<u32>,
 }
 
 /// Default options for buffer and project search items.

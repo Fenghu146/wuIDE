@@ -813,6 +813,27 @@
     // Start searching as you type in project search, without pressing Enter.
     "search_on_type": true,
   },
+  // Inline edit predictions (ghost text) requested from an OpenAI-compatible
+  // endpoint. Disabled by default: set "enabled" to true and fill in "endpoint"
+  // (for example "https://api.deepseek.com/chat/completions" for DeepSeek or
+  // "http://localhost:11434/v1/chat/completions" for a local Ollama) to use.
+  "edit_predictions": {
+    // Whether to request edit predictions and show them as ghost text.
+    "enabled": false,
+    // An OpenAI-compatible chat completions endpoint. Predictions are disabled
+    // when this is empty.
+    "endpoint": "",
+    // The model to request, for example "deepseek-chat".
+    "model": "",
+    // The API key sent as a bearer token. Leave empty for servers that don't
+    // require authentication, like a local Ollama instance.
+    "api_key": "",
+    // How long to wait after the last keystroke before a prediction is
+    // requested, in milliseconds.
+    "debounce": 350,
+    // The maximum number of tokens to generate per prediction.
+    "max_tokens": 176,
+  },
   // When to populate a new search's query based on the text under the cursor.
   // This setting can take the following three values:
   //

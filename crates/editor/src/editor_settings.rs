@@ -1,14 +1,15 @@
 use core::num;
+use std::sync::Arc;
 
 use gpui::App;
 use language::CursorShape;
 use project::project_settings::DiagnosticSeverity;
 pub use settings::{
     CodeLens, CompletionDetailAlignment, CompletionMenuItemKind, CurrentLineHighlight, DelayMs,
-    DiffViewStyle, DisplayIn, DocumentColorsRenderMode, DoubleClickInMultibuffer, GitGutterWidth,
-    GoToDefinitionFallback, GoToDefinitionScrollStrategy, MinimapThumb, MinimapThumbBorder,
-    MultiCursorModifier, OpenResultsIn, ScrollBeyondLastLine, ScrollbarDiagnostics,
-    SeedQuerySetting, ShowMinimap, SnippetSortOrder,
+    DiffViewStyle, DisplayIn, DocumentColorsRenderMode, DoubleClickInMultibuffer,
+    GitGutterWidth, GoToDefinitionFallback, GoToDefinitionScrollStrategy, MinimapThumb,
+    MinimapThumbBorder, MultiCursorModifier, OpenResultsIn, ScrollBeyondLastLine,
+    ScrollbarDiagnostics, SeedQuerySetting, ShowMinimap, SnippetSortOrder,
 };
 use settings::{RegisterSetting, RelativeLineNumbers, Settings};
 use ui::scrollbars::ShowScrollbar;
@@ -51,6 +52,7 @@ pub struct EditorSettings {
     pub double_click_in_multibuffer: DoubleClickInMultibuffer,
     pub search_wrap: bool,
     pub search: SearchSettings,
+    pub edit_predictions: EditPredictionsSettings,
     pub auto_signature_help: bool,
     pub language_detection: bool,
     pub show_signature_help_after_edits: bool,
@@ -194,6 +196,18 @@ pub struct SearchSettings {
     pub search_on_type: bool,
 }
 
+/// Resolved settings for inline edit predictions from an OpenAI-compatible
+/// endpoint.
+#[derive(Clone, Debug)]
+pub struct EditPredictionsSettings {
+    pub enabled: bool,
+    pub endpoint: Arc<str>,
+    pub model: Arc<str>,
+    pub api_key: Arc<str>,
+    pub debounce: DelayMs,
+    pub max_tokens: u32,
+}
+
 impl EditorSettings {}
 
 impl Settings for EditorSettings {
@@ -293,6 +307,17 @@ impl Settings for EditorSettings {
                 regex: search.regex.unwrap(),
                 center_on_match: search.center_on_match.unwrap(),
                 search_on_type: search.search_on_type.unwrap(),
+            },
+            edit_predictions: {
+                let edit_predictions = editor.edit_predictions.unwrap();
+                EditPredictionsSettings {
+                    enabled: edit_predictions.enabled.unwrap(),
+                    endpoint: edit_predictions.endpoint.unwrap_or_default().into(),
+                    model: edit_predictions.model.unwrap_or_default().into(),
+                    api_key: edit_predictions.api_key.unwrap_or_default().into(),
+                    debounce: edit_predictions.debounce.unwrap(),
+                    max_tokens: edit_predictions.max_tokens.unwrap(),
+                }
             },
             auto_signature_help: editor.auto_signature_help.unwrap(),
             language_detection: editor.language_detection.unwrap(),
