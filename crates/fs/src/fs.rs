@@ -263,6 +263,11 @@ impl dyn Fs {
         GlobalFs::global(cx).0.clone()
     }
 
+    /// Returns the global [`Fs`], if one has been set.
+    pub fn try_global(cx: &App) -> Option<Arc<Self>> {
+        cx.try_global::<GlobalFs>().map(|fs| fs.0.clone())
+    }
+
     /// Sets the global [`Fs`].
     pub fn set_global(fs: Arc<Self>, cx: &mut App) {
         cx.set_global(GlobalFs(fs));

@@ -6,6 +6,7 @@ use std::{
 
 use clock::Global;
 use collections::{HashMap, HashSet};
+use fs::Fs;
 use futures::future::join_all;
 use gpui::{App, Entity, Pixels, Task, TaskExt};
 use itertools::Itertools;
@@ -20,6 +21,7 @@ use project::{
     InlayHintTooltip, InvalidationStrategy, LspAction, ResolveState,
     lsp_store::{CacheInlayHints, ResolvedHint},
 };
+use settings::update_settings_file;
 use text::{Bias, BufferId};
 use ui::{Context, Window};
 use util::debug_panic;
@@ -328,10 +330,22 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.refresh_inlay_hints(
-            InlayHintRefreshReason::Toggle(!self.inlay_hints_enabled()),
-            cx,
-        );
+        let enabled = !self.inlay_hints_enabled();
+        self.refresh_inlay_hints(InlayHintRefreshReason::Toggle(enabled), cx);
+        // Persist the toggle so it survives restarts; the refresh above keeps this
+        // session responsive while the settings write lands. Test contexts have no
+        // global Fs, so there the session-only toggle still applies.
+        if let Some(fs) = <dyn Fs>::try_global(cx) {
+            update_settings_file(fs, cx, move |setting, _| {
+                setting
+                    .project
+                    .all_languages
+                    .defaults
+                    .inlay_hints
+                    .get_or_insert_default()
+                    .enabled = Some(enabled);
+            });
+        }
     }
 
     pub fn inlay_hints_enabled(&self) -> bool {
