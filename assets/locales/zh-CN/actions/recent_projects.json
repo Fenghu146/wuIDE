@@ -7,5 +7,9 @@
   },
   "recent_projects::ToggleActionsMenu": {
     "name": "切换操作菜单"
+  },
+  "remote_panel::ToggleFocus": {
+    "description": "聚焦或隐藏远程资源管理器侧边栏。",
+    "name": "切换远程资源管理器"
   }
 }

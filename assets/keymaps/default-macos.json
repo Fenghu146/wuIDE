@@ -476,6 +476,7 @@
       "alt-cmd-o": "projects::OpenRecent",
       "ctrl-r": "projects::OpenRecent",
       "ctrl-cmd-o": ["projects::OpenRemote", { "from_existing_connection": false }],
+      "ctrl-cmd-r": "remote_panel::ToggleFocus",
       "ctrl-cmd-shift-o": ["projects::OpenRemote", { "from_existing_connection": true }],
       "cmd-ctrl-b": "branches::OpenRecent",
       "cmd-ctrl-w": "git::Worktree",

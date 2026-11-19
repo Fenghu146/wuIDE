@@ -1,5 +1,6 @@
 pub mod disconnected_overlay;
 mod remote_connections;
+mod remote_panel;
 mod remote_servers;
 pub mod sidebar_recent_projects;
 mod ssh_config;
@@ -33,6 +34,7 @@ use picker::{
     highlighted_match_with_paths::{HighlightedMatch, HighlightedMatchWithPaths},
 };
 use project::{Worktree, git_store::Repository};
+pub use remote_panel::{RemotePanel, ToggleFocus as ToggleRemotePanel};
 pub use remote_connections::RemoteSettings;
 pub use remote_servers::RemoteServerProjects;
 use settings::{DefaultOpenBehavior, Settings, WorktreeId};

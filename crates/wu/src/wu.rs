@@ -634,6 +634,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
         let agent_panel = agent_chat::AgentPanel::load(workspace_handle.clone(), cx.clone());
         let chat_panel = agent_chat::ChatPanel::load(workspace_handle.clone(), cx.clone());
+        let remote_panel = recent_projects::RemotePanel::load(workspace_handle.clone(), cx.clone());
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
@@ -658,6 +659,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(remote_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(agent_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(chat_panel, workspace_handle.clone(), cx.clone()),
         );
@@ -678,6 +680,14 @@ fn register_actions(
 ) {
     workspace
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &recent_projects::ToggleRemotePanel,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                workspace.toggle_panel_focus::<recent_projects::RemotePanel>(window, cx);
+            },
+        )
         .register_action(
             |workspace: &mut Workspace,
              _: &AskAgentAboutSelection,
