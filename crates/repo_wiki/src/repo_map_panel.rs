@@ -382,6 +382,10 @@ impl RepoMapPanel {
                             cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.refresh(cx);
                                 this.symbol_maps.clear();
+                                // The new symbol task replaces (and cancels) the
+                                // previous one, so its in-flight markers must go
+                                // with it or those worktrees would never rebuild.
+                                this.building.clear();
                                 this.request_symbol_maps(window, cx);
                             }),
                         ),
