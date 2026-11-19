@@ -3,5 +3,7 @@
   "Failed to create {path}: {error}": "创建 {path} 失败：{error}",
   "No project is open": "没有打开的项目",
   "Open AGENTS.md": "打开 AGENTS.md",
-  "{count} files · {size}": "{count} 个文件 · {size}"
+  "Scanning symbols…": "正在扫描符号…",
+  "{count} files · {size}": "{count} 个文件 · {size}",
+  "{count} symbols": "{count} 个符号"
 }

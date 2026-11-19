@@ -1,6 +1,6 @@
-# Wiki P0 交接文档：约定管线 + 仓库地图面板
+# Wiki 交接文档：约定管线 + 仓库地图（P0）+ 符号级地图与上下文注入（P1）
 
-> 分支 `wiki-p0` ｜ worktree `D:\wuIDE-main\wuIDE-wiki-p0` ｜ 基线 `d890f9b4`（main）
+> 分支 `wiki-p0` ｜ worktree `D:\wuIDE-main\wuIDE-wiki-p0` ｜ 基线 `d890f9b4` → 已 rebase 到 `c02f07c7`（main）
 > 主回话（RemotePanel）的工作未被触碰；本分支独立开发、独立验证。
 
 ## 一、这个 P0 做了什么
@@ -81,13 +81,42 @@ c02f07c7  Add a Remote Explorer panel to the sidebar   (main)
 4. **无文件系统事件订阅**：结构在面板激活/手动刷新时重建，编辑过程中不自动跟随 fs 变化。
 5. **`script/check-translations` 全量动作校验**需要先构建 IDE 二进制（`--dump-all-actions`）；本分支已按格式补全 actions JSON 与 namespaces，i18n 字符串测试全绿，但**合并后请跑一次完整脚本确认**。
 
+## 五点五、P1 追加内容（符号级仓库地图 + 上下文注入）
+
+### 做了什么
+
+1. **符号级 repo map（`repo_wiki/src/symbol_map.rs`）**
+   - 直接用 grammar 的 **outline query**（与大纲面板同一套查询，`Grammar.outline_config`）在**原生 tree-sitter** 上解析，不经过 Buffer/GPUI，全程后台线程。
+   - 每个文件提取定义（名字/类型/行号）+ 标识符提及集合；用「A 提到了 B 定义的标识符」建跨文件引用图，跑 24 轮 **PageRank** 排序。
+   - 预算三道闸：单文件 ≤256KB、单次最多 **900 个文件**、单次累计 ≤24MB。超限文件计入 `stats.too_large`。
+   - 选片策略是**按顶层目录分桶轮转**（桶内按体积降序），避免「只取路径排序前 900 个」导致地图只描述仓库的字母序一角。
+   - `repo_wiki::symbol_map::symbol_map_task(project, cx)` 返回可取消的 `Task<SymbolMap>`。
+
+2. **面板接入**：文件行可展开显示定义列表（名字/kind/行号）、显示 `N 个符号` 与 PageRank 占比；标题行显示「正在扫描符号…」；工作树刷新按钮会重建符号表。点一下展开、双击开文件（浏览地图不抢编辑器焦点）。
+
+3. **统一上下文注入语义**：`/conventions` 与新增的 `/repo-map` **都只写进输入框、绝不自动发送**——用户在发送前能看见 agent 到底拿到了什么。两条命令都支持**行内展开**：消息里单独一行写 `/repo-map`，发送时该行被替换为生成的 markdown，其余文字原样保留。
+
+### 未做（诚实记录）
+
+- **系统提示词级注入未做**：本仓库的 5 个 harness 都是外部 CLI，`RunRequest` 里没有 system prompt 字段，`claude.rs` 也没接 `--append-system-prompt`。要真做系统级注入得逐 harness 加 CLI 参数，属于新功能而非接线，故 P1 用「可审阅的输入框注入」替代。
+- **无磁盘缓存**：每次面板激活/命令都会重新解析，切分支后需要重新扫描（约数秒）。缓存到 KV（key: 路径+mtime）留待 P2。
+- **符号类型是 tree-sitter 节点名**（`function_item` 等），未映射到统一图标/分类。
+
+### 验证
+
+- `cargo test -p repo_wiki`：**16/16**（含新增：真实 Rust 源文件提取定义、真实目录端到端构建、分桶选片、字节预算）。
+- 端到端实测：对 `path/src` + `repo_wiki/src` + `text/src` 真实构建通过，0.32s。
+- `cargo test -p agent_chat`：17 个预存失败不变，通过数 108 → **111**（新增 3 个上下文命令测试）。
+- `cargo test -p i18n`：12/12。
+- `cargo check -p wu` + `clippy`：0 错误 0 警告。
+
 ## 六、后续路线（已在调研报告中论证）
 
-- **P1**：tree-sitter 符号级 repo map（先评估上游 Zed repomap 可移植性）+ `/conventions` 行内展开 + 智能体上下文注入（`RunRequest` 层）。
-- **P2**：LLM wiki 生成（按需、按 git commit 增量、导出入库为 markdown，与 AGENTS.md 共用注入管线）。
+- ~~**P1**：tree-sitter 符号级 repo map + `/conventions` 行内展开 + 上下文注入~~ → 已完成（见五点五），其中「`RunRequest` 系统提示词注入」因 harness 无该字段而未做。
+- **P2**：LLM wiki 生成（按需、按 git commit 增量、导出入库为 markdown，与 AGENTS.md 共用注入管线）+ 符号表磁盘缓存（key: 路径+mtime，需处理缓存失效）。
 - 合并后建议在 `SYNC.md` 登记：`repo_wiki` 为 fork 自有 crate（低冲突面），活动栏/wu.rs 注册点为共享冲突区。
 
 ## 七、构建产物说明
 
-- worktree 本地 `target/`（未共享 `D:\cargo-target`，避免与主回话构建互锁/串指纹）。
-- 合并完成后整个 `D:\wuIDE-main\wuIDE-wiki-p0` 目录（含 target）可删除；`git worktree remove` 前先 `git merge`/`cherry-pick`。
+- **更正（P1 期间实测）**：`CARGO_TARGET_DIR=D:\cargo-target` 由环境变量全局指定，本 worktree 与主回话**共用同一个 target 目录**（`.cargo/config.toml` 里没有单独覆盖）。P0 文档此前写的“worktree 本地 target”是错的。共用没有造成问题（cargo 有锁），但意味着两边并行构建会互相等待，且切换分支时增量编译会失效。
+- worktree 目录内没有独立 target（共用上面的全局目录），所以 `D:\wuIDE-main\wuIDE-wiki-p0` 只有一个 git 检出的大小。合并后可直接 `git worktree remove ../wuIDE-wiki-p0`（先确认分支已合并或打 tag）。

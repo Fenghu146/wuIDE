@@ -4,7 +4,7 @@
 //! in memory; no indexing, no background services.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -26,6 +26,7 @@ use workspace::{
 };
 
 use crate::conventions::{AGENTS_FILE_NAME, AGENTS_TEMPLATE};
+use crate::symbol_map::{self, SourceFile, SymbolMap};
 
 actions!(
     repo_map_panel,
@@ -52,8 +53,38 @@ pub struct RepoMapPanel {
     scroll_handle: ScrollHandle,
     structures: Vec<WorktreeStructure>,
     expanded: HashSet<Arc<str>>,
+    /// Symbol maps per worktree, built on demand on a background thread.
+    symbol_maps: HashMap<WorktreeId, SymbolIndex>,
+    /// Worktrees whose symbol build is in flight.
+    building: HashSet<WorktreeId>,
     active: bool,
     _refresh_task: Task<()>,
+    _symbol_task: Task<()>,
+}
+
+/// A symbol map plus a path index, so rendering a file row does not scan the
+/// whole map.
+struct SymbolIndex {
+    map: SymbolMap,
+    by_rel: HashMap<Arc<RelPath>, usize>,
+}
+
+impl SymbolIndex {
+    fn new(map: SymbolMap) -> Self {
+        let by_rel = map
+            .files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (file.rel.clone(), index))
+            .collect();
+        Self { map, by_rel }
+    }
+
+    fn file(&self, rel: &Arc<RelPath>) -> Option<&crate::symbol_map::FileSymbols> {
+        self.by_rel
+            .get(rel)
+            .and_then(|index| self.map.files.get(*index))
+    }
 }
 
 struct WorktreeStructure {
@@ -121,6 +152,15 @@ enum Row {
         name: Arc<str>,
         size: u64,
         depth: usize,
+        expanded: bool,
+        symbol_count: usize,
+        rank: Option<f32>,
+    },
+    Symbol {
+        depth: usize,
+        kind: Arc<str>,
+        name: Arc<str>,
+        row: u32,
     },
 }
 
@@ -137,8 +177,11 @@ impl RepoMapPanel {
                     scroll_handle: ScrollHandle::new(),
                     structures: Vec::new(),
                     expanded: HashSet::default(),
+                    symbol_maps: HashMap::default(),
+                    building: HashSet::default(),
                     active: false,
                     _refresh_task: Task::ready(()),
+                    _symbol_task: Task::ready(()),
                 };
                 panel.refresh(cx);
                 panel
@@ -239,6 +282,50 @@ impl RepoMapPanel {
         });
     }
 
+    /// Starts background symbol builds for worktrees that do not have one yet.
+    fn request_symbol_maps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        let project = workspace.read(cx).project().clone();
+        let fs = project.read(cx).fs().clone();
+        let languages = project.read(cx).languages().clone();
+
+        let mut jobs: Vec<(WorktreeId, Vec<SourceFile>)> = Vec::new();
+        for structure in &self.structures {
+            if self.symbol_maps.contains_key(&structure.worktree_id)
+                || self.building.contains(&structure.worktree_id)
+            {
+                continue;
+            }
+            let mut sources = Vec::new();
+            collect_sources(&structure.root, &structure.root_path, &mut sources);
+            if !sources.is_empty() {
+                jobs.push((structure.worktree_id, sources));
+            }
+        }
+        if jobs.is_empty() {
+            return;
+        }
+        for (worktree_id, _) in &jobs {
+            self.building.insert(*worktree_id);
+        }
+        cx.notify();
+
+        self._symbol_task = cx.spawn_in(window, async move |this, cx| {
+            for (worktree_id, sources) in jobs {
+                let map = symbol_map::build(sources, fs.clone(), languages.clone()).await;
+                this.update_in(cx, |panel, _window, cx| {
+                    panel.building.remove(&worktree_id);
+                    panel.symbol_maps
+                        .insert(worktree_id, SymbolIndex::new(map));
+                    cx.notify();
+                })
+                .log_err();
+            }
+        });
+    }
+
     fn visible_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         for (index, structure) in self.structures.iter().enumerate() {
@@ -251,6 +338,7 @@ impl RepoMapPanel {
             push_dir_rows(
                 &self.expanded,
                 structure.worktree_id,
+                self.symbol_maps.get(&structure.worktree_id),
                 &structure.root,
                 0,
                 &mut rows,
@@ -265,6 +353,7 @@ impl RepoMapPanel {
                 let Some(structure) = self.structures.get(*index) else {
                     return div().into_any_element();
                 };
+                let building = self.building.contains(&structure.worktree_id);
                 h_flex()
                     .id(("worktree-header", ix))
                     .px_2()
@@ -275,19 +364,25 @@ impl RepoMapPanel {
                             Label::new(structure.root_name.clone()).size(LabelSize::Small),
                         )
                         .child(
-                            Label::new(t!(
-                                "{count} files · {size}",
-                                count = structure.total_files,
-                                size = format_size(structure.total_size)
-                            ))
+                            Label::new(if building {
+                                t!("Scanning symbols…")
+                            } else {
+                                t!(
+                                    "{count} files · {size}",
+                                    count = structure.total_files,
+                                    size = format_size(structure.total_size)
+                                )
+                            })
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                         ),
                     )
                     .child(
                         IconButton::new(("refresh", ix), IconName::RotateCcw).on_click(
-                            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                            cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.refresh(cx);
+                                this.symbol_maps.clear();
+                                this.request_symbol_maps(window, cx);
                             }),
                         ),
                     )
@@ -410,37 +505,112 @@ impl RepoMapPanel {
                 name,
                 size,
                 depth,
+                expanded,
+                symbol_count,
+                rank,
+            } => {
+                let has_symbols = *symbol_count > 0;
+                let key = rel.display(PathStyle::Unix).into_owned();
+                h_flex()
+                    .id(("file", ix))
+                    .px_2()
+                    .py_0p5()
+                    .pl(px(22. + *depth as f32 * 14.))
+                    .gap_1()
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().colors().element_hover))
+                    .when(has_symbols, |this| {
+                        this.child(
+                            Icon::new(if *expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(IconSize::Small),
+                        )
+                    })
+                    .child(
+                        Label::new(name.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(div().flex_1())
+                    .when(has_symbols, |this| {
+                        this.child(
+                            Label::new(t!(
+                                "{count} symbols",
+                                count = *symbol_count
+                            ))
+                            .size(LabelSize::Small)
+                            .color(Color::Placeholder),
+                        )
+                    })
+                    .child(
+                        Label::new(format_size(*size))
+                            .size(LabelSize::Small)
+                            .color(Color::Placeholder),
+                    )
+                    .on_click(cx.listener({
+                        let project_path = ProjectPath {
+                            worktree_id: *worktree_id,
+                            path: rel.clone(),
+                        };
+                        let key = key;
+                        move |this, event: &ClickEvent, window, cx| {
+                            // A plain click toggles the definition list once the
+                            // file has one; opening the file stays on double
+                            // click so browsing the map never steals the editor.
+                            if has_symbols && event.click_count() == 1 {
+                                if this.expanded.contains(key.as_str()) {
+                                    this.expanded.remove(key.as_str());
+                                } else {
+                                    this.expanded.insert(Arc::from(key.as_str()));
+                                }
+                                cx.notify();
+                                return;
+                            }
+                            this.workspace
+                                .update(cx, |workspace, cx| {
+                                    workspace
+                                        .open_path(project_path.clone(), None, true, window, cx)
+                                        .detach_and_log_err(cx);
+                                })
+                                .log_err();
+                        }
+                    }))
+                    .when_some(*rank, |this, rank| {
+                        this.child(
+                            Label::new(format!("{:.1}%", rank * 100.))
+                                .size(LabelSize::Small)
+                                .color(Color::Placeholder),
+                        )
+                    })
+                    .into_any_element()
+            }
+            Row::Symbol {
+                depth,
+                kind,
+                name,
+                row,
             } => h_flex()
-                .id(("file", ix))
+                .id(("symbol", ix))
                 .px_2()
                 .py_0p5()
-                .pl(px(22. + *depth as f32 * 14.))
+                .pl(px(34. + *depth as f32 * 14.))
                 .gap_1()
-                .cursor_pointer()
-                .hover(|this| this.bg(cx.theme().colors().element_hover))
-                .on_click(cx.listener({
-                    let project_path = ProjectPath {
-                        worktree_id: *worktree_id,
-                        path: rel.clone(),
-                    };
-                    move |this, _: &ClickEvent, window, cx| {
-                        this.workspace
-                            .update(cx, |workspace, cx| {
-                                workspace
-                                    .open_path(project_path.clone(), None, true, window, cx)
-                                    .detach_and_log_err(cx);
-                            })
-                            .log_err();
-                    }
-                }))
                 .child(
                     Label::new(name.clone())
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
+                .child(
+                    Label::new(kind.clone())
+                        .size(LabelSize::Small)
+                        .color(Color::Placeholder),
+                )
                 .child(div().flex_1())
                 .child(
-                    Label::new(format_size(*size))
+                    Label::new(format!(":{}", row + 1))
                         .size(LabelSize::Small)
                         .color(Color::Placeholder),
                 )
@@ -449,10 +619,26 @@ impl RepoMapPanel {
     }
 }
 
-/// Walks the tree, emitting only the rows within expanded directories.
+/// Flattens a directory tree into the file list the symbol builder consumes.
+fn collect_sources(node: &DirNode, root_path: &Path, out: &mut Vec<SourceFile>) {
+    for dir in &node.dirs {
+        collect_sources(dir, root_path, out);
+    }
+    for file in &node.files {
+        out.push(SourceFile {
+            rel: file.rel.clone(),
+            abs_path: root_path.join(file.rel.as_std_path()),
+            size: file.size,
+        });
+    }
+}
+
+/// Walks the tree, emitting only the rows within expanded directories, plus
+/// the definitions of any expanded file.
 fn push_dir_rows(
     expanded: &HashSet<Arc<str>>,
     worktree_id: WorktreeId,
+    symbols: Option<&SymbolIndex>,
     node: &DirNode,
     depth: usize,
     rows: &mut Vec<Row>,
@@ -468,17 +654,34 @@ fn push_dir_rows(
             expanded: is_expanded,
         });
         if is_expanded {
-            push_dir_rows(expanded, worktree_id, dir, depth + 1, rows);
+            push_dir_rows(expanded, worktree_id, symbols, dir, depth + 1, rows);
         }
     }
     for file in &node.files {
+        // Forward slashes so the key matches on every platform.
+        let key = file.rel.display(PathStyle::Unix).into_owned();
+        let is_expanded = expanded.contains(key.as_str());
+        let file_symbols = symbols.and_then(|index| index.file(&file.rel));
         rows.push(Row::File {
             worktree_id,
             rel: file.rel.clone(),
             name: file.name.clone(),
             size: file.size,
             depth: depth + 1,
+            expanded: is_expanded,
+            symbol_count: file_symbols.map_or(0, |file| file.symbols.len()),
+            rank: file_symbols.map(|file| file.rank),
         });
+        if is_expanded && let Some(file_symbols) = file_symbols {
+            for symbol in &file_symbols.symbols {
+                rows.push(Row::Symbol {
+                    depth: depth + 2,
+                    kind: symbol.kind.clone(),
+                    name: symbol.name.clone(),
+                    row: symbol.row,
+                });
+            }
+        }
     }
 }
 
@@ -525,9 +728,10 @@ impl Panel for RepoMapPanel {
         self.active
     }
 
-    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         if active && !self.active {
             self.refresh(cx);
+            self.request_symbol_maps(window, cx);
         }
         self.active = active;
     }

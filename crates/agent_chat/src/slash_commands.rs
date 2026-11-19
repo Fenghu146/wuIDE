@@ -90,10 +90,11 @@ pub(crate) enum AppCommand {
     Terminal,
     Stop,
     Conventions,
+    RepoMap,
 }
 
 impl AppCommand {
-    const ALL: [AppCommand; 9] = [
+    const ALL: [AppCommand; 10] = [
         AppCommand::Model,
         AppCommand::New,
         AppCommand::Resume,
@@ -103,6 +104,7 @@ impl AppCommand {
         AppCommand::Terminal,
         AppCommand::Stop,
         AppCommand::Conventions,
+        AppCommand::RepoMap,
     ];
 
     fn name(self) -> &'static str {
@@ -116,6 +118,7 @@ impl AppCommand {
             AppCommand::Terminal => "terminal",
             AppCommand::Stop => "stop",
             AppCommand::Conventions => "conventions",
+            AppCommand::RepoMap => "repo-map",
         }
     }
 
@@ -130,6 +133,7 @@ impl AppCommand {
             AppCommand::Terminal => t!("IDE: open a terminal"),
             AppCommand::Stop => t!("IDE: stop the agent"),
             AppCommand::Conventions => t!("IDE: attach the project conventions (AGENTS.md)"),
+            AppCommand::RepoMap => t!("IDE: attach the ranked repository map"),
         }
     }
 
@@ -144,7 +148,8 @@ impl AppCommand {
             | AppCommand::New
             | AppCommand::Resume
             | AppCommand::Stop
-            | AppCommand::Conventions => None,
+            | AppCommand::Conventions
+            | AppCommand::RepoMap => None,
         }
     }
 }
@@ -331,6 +336,90 @@ pub(crate) fn app_command_for_text(text: &str, items: &[CommandItem]) -> Option<
     })
 }
 
+/// Context injectors that expand a chat message in place: the IDE replaces
+/// the command line with the generated content, so the user reviews what will
+/// be sent instead of trusting an invisible side channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContextCommand {
+    Conventions,
+    RepoMap,
+}
+
+impl ContextCommand {
+    /// Only tests need the name; the UI shows translated command descriptions.
+    #[cfg(test)]
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Conventions => "conventions",
+            Self::RepoMap => "repo-map",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "conventions" => Some(Self::Conventions),
+            "repo-map" => Some(Self::RepoMap),
+            _ => None,
+        }
+    }
+}
+
+/// A context command found in a message, covering the whole line it starts.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ContextCommandCall {
+    pub command: ContextCommand,
+    pub range: Range<usize>,
+}
+
+/// Finds context commands that start a line, so they can be expanded in place.
+///
+/// `/usr/bin` and other leading slashes are left alone, matching the rule used
+/// for extension commands.
+pub(crate) fn context_command_calls(text: &str) -> Vec<ContextCommandCall> {
+    let mut calls = Vec::new();
+    let mut line_start = 0;
+    for line in text.split('\n') {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = &line[indent..];
+        if let Some(name) = trimmed
+            .strip_prefix('/')
+            .map(|rest| {
+                let name_len = rest
+                    .bytes()
+                    .take_while(|byte| is_command_name_byte(*byte))
+                    .count();
+                &rest[..name_len]
+            })
+            .filter(|name| !name.is_empty())
+            && let Some(command) = ContextCommand::from_name(name)
+            && trimmed[1 + name.len()..].strip_prefix('/').is_none()
+            && trimmed[1 + name.len()..].trim().is_empty()
+        {
+            calls.push(ContextCommandCall {
+                command,
+                range: line_start + indent..line_start + line.len(),
+            });
+        }
+        line_start += line.len() + 1;
+    }
+    calls
+}
+
+/// Replaces a context command line with its generated content.
+pub(crate) fn replace_context_command_call(
+    text: &str,
+    call: &ContextCommandCall,
+    output: &str,
+) -> String {
+    let start = call.range.start.min(text.len());
+    let end = call.range.end.max(start).min(text.len());
+    let mut result = String::with_capacity(text.len() + output.len());
+    result.push_str(&text[..start]);
+    result.push_str(output.trim_end());
+    result.push_str(&text[end..]);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +480,42 @@ mod tests {
             description: "Runs in the example extension".into(),
             requires_argument: false,
         }
+    }
+
+    #[test]
+    fn context_commands_are_found_only_on_their_own_line() {
+        let calls = context_command_calls(
+            "explain this
+/repo-map
+/conventions please
+/usr/bin/env
+what /repo-map means",
+        );
+        let names: Vec<&str> = calls.iter().map(|call| call.command.name()).collect();
+        assert_eq!(names, ["repo-map"]);
+        assert_eq!(calls[0].range, 13..22);
+    }
+
+    #[test]
+    fn context_commands_accept_indentation() {
+        let calls = context_command_calls("  /conventions");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].command, ContextCommand::Conventions);
+        assert_eq!(calls[0].range, 2..14);
+    }
+
+    #[test]
+    fn replacing_a_context_command_keeps_the_rest_of_the_message() {
+        let text = "look here
+/repo-map
+and explain";
+        let calls = context_command_calls(text);
+        let replaced = replace_context_command_call(text, &calls[0], "## Repository map
+- a");
+        assert_eq!(replaced, "look here
+## Repository map
+- a
+and explain");
     }
 
     #[test]

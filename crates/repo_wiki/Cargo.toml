@@ -19,11 +19,19 @@ fs.workspace = true
 futures.workspace = true
 gpui.workspace = true
 i18n.workspace = true
+language.workspace = true
 log.workspace = true
 path.workspace = true
 paths.workspace = true
 project.workspace = true
+streaming-iterator.workspace = true
+tree-sitter.workspace = true
 ui.workspace = true
 util.workspace = true
 workspace.workspace = true
 worktree.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+languages = { workspace = true, features = ["test-support"] }
+tree-sitter-rust.workspace = true

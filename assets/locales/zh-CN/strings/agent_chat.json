@@ -80,6 +80,7 @@
   "Fork Chat": "分叉对话",
   "Forked from \"{title}\"": "分叉自“{title}”",
   "IDE: attach the project conventions (AGENTS.md)": "IDE：附上项目约定（AGENTS.md）",
+  "IDE: attach the ranked repository map": "IDE：附上带权重的仓库地图",
   "IDE: choose model and reasoning": "IDE：选择模型和推理强度",
   "IDE: open a terminal": "IDE：打开终端",
   "IDE: open changes": "IDE：打开更改",
