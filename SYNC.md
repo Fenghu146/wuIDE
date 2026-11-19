@@ -8,7 +8,7 @@
 | --- | --- |
 | 共同祖先 | `41b71ce4`（2026-11-11，上游 `Bump to 1.2.2`） |
 | 上游领先 | 0 个 commit —— 已同步到上游最新 |
-| 本分叉领先 | 35 个 commit（不含本文档自身的修订） |
+| 本分叉领先 | 43 个 commit（不含本文档自身的修订） |
 | 同步标记 | `sync/upstream-41b71ce4`（上一次是 `sync/upstream-12c1985`） |
 | `upstream` remote | 已配置（2026-11-12） |
 
@@ -50,6 +50,8 @@ git tag -a sync/upstream-$(git rev-parse --short upstream/main) -m 'Merged upstr
 | `crates/agent_chat/` | 本分叉加了 DeepSeek / Pi 两种智能体，上游在改会话与模型选择 |
 | `crates/wu/Cargo.toml` | 本分叉改了 `[[bin]] name = "IDE"` 与 bundle 元数据 |
 | `assets/locales/zh-CN/` | 本分叉补了大量中文翻译，上游也在加 |
+| `crates/editor/src/mouse_context_menu.rs` | 本分叉加了「用智能体解释选中/修复诊断」两个菜单项（行级，好解） |
+| `crates/editor/src/editor.rs` | 本分叉在 `fn tab` 加了编辑预测接受、在 `on_buffer_event` 加了 `refresh_edit_predictions` 钩子（行级） |
 | `script/bundle-linux` | 两边都在改打包流程 |
 | `Cargo.lock` | 必然冲突；冲突时删掉自己的那半，合并后跑 `cargo check` 让 Cargo 重算 |
 | `.github/release/CHANGELOG.md` | 两边都在顶部加条目 |
@@ -135,6 +137,15 @@ fn agent_logo(kind: AgentKind) -> IconName {
 ### `.github/release/CHANGELOG.md`
 
 上游会加一个 `## 1.2.x` 小节，但本分叉的版本线里没有这个号。把上游的条目放进 `## Unreleased`，并标注 `(from upstream)`，不要引入一个本分叉永远不会发布的版本号。
+
+## 清理依赖时的陷阱（2026-11-19 实测）
+
+`git_ui` 的 `remote_connection` 三行（普通依赖、dev-dependency、`test-support` feature 条目）看起来冗余但**是承重的**：`remote_connection` 里 match `RemoteConnectionOptions::Mock` 的臂随自身 `test-support` 门控，而 `Mock` 变体在 `remote` crate 里随 `remote/test-support` 门控。删掉这三行会让 `project_panel --tests` 等上下文里两边的 cfg 失配，炸出 E0004。cargo-shear / cargo-machete 会一直报它未使用——保留，并在 git_ui 的 `cargo-shear` ignore 清单里静默。同理要警惕的宏展开类“隐形承重”：`debug_panic!` 展开体引用 `log::`（`ui` / `outline_panel` 的 `log` 依赖），`RegisterComponent` derive 展开体引用 `component::`（五个 UI crate）。
+
+## 已知的失败与平台差异（不要误认为是新问题）
+
+- `cargo test -p editor --lib code_lens::tests::test_code_lens_resolve_only_visible` 在干净 HEAD 上也失败：`move_to_end` 后实际解析 `{60,70,80,90}`，期望 `{70,80,90}`。首个断言（顶部 5 行）精确通过，说明不是字体度量漂移；`code_lens.rs` 自 Zed 1.21 端口后只改过颜色。上游 CI 只有 linux-arm-crash-test / mac-dmg / release 三个工作流，不跑任何 `cargo test`，所以上游不会自己发现。
+- `cli::InstallCliBinary` 刻意只在非 Windows 注册（处理器、菜单、onboarding 都已 `#[cfg]` 门控），zh-CN 翻译条目是静态 JSON 无法门控；已在 i18n 测试加了 `ACTIONS_MISSING_FROM_WINDOWS_BUILD` 白名单，Windows 上 `script/check-translations` 全绿。
 
 ## 合并后要检查的事
 

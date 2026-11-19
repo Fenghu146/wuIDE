@@ -796,6 +796,11 @@ mod tests {
         "projects::OpenWsl",
     ];
 
+    /// Actions that are deliberately cfg'd off on Windows (their handlers,
+    /// menu entries and onboarding sections are unix-only), but whose
+    /// translation entries are static JSON that cannot be platform-gated.
+    const ACTIONS_MISSING_FROM_WINDOWS_BUILD: &[&str] = &["cli::InstallCliBinary"];
+
     #[derive(Deserialize)]
     struct DumpedActions {
         actions: Vec<DumpedAction>,
@@ -853,6 +858,7 @@ mod tests {
         for name in translations.keys() {
             if !registered.contains(name.as_str())
                 && !ACTIONS_MISSING_FROM_MACOS_RELEASE.contains(&name.as_str())
+                && !ACTIONS_MISSING_FROM_WINDOWS_BUILD.contains(&name.as_str())
             {
                 problems.push(format!("{name} is not a registered command"));
             }
