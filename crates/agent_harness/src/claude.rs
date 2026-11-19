@@ -1532,6 +1532,7 @@ mod tests {
             chrome: false,
             drop_prompt: None,
             ephemeral: false,
+            mcp_servers: Vec::new(),
         };
         assert!(flag_settings(&request).is_empty());
         request.auto_compact_tokens = Some(150_000);
@@ -1558,6 +1559,7 @@ mod tests {
             chrome: true,
             drop_prompt: None,
             ephemeral: false,
+            mcp_servers: Vec::new(),
         };
         let harness = ClaudeHarness::new();
         let args = |request: &RunRequest| -> Vec<String> {
@@ -1594,6 +1596,7 @@ mod tests {
             chrome: false,
             drop_prompt: None,
             ephemeral: false,
+            mcp_servers: Vec::new(),
         };
         let harness = ClaudeHarness::new();
         let persists = |request: &RunRequest| {

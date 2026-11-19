@@ -15,8 +15,8 @@ use collections::{BTreeMap, BTreeSet, FxHashSet, HashMap, HashSet, btree_map};
 pub use extension::ExtensionManifest;
 use extension::extension_builder::{CompileExtensionOptions, ExtensionBuilder};
 use extension::{
-    ExtensionDebugAdapterProviderProxy, ExtensionEvents, ExtensionGrammarProxy, ExtensionHostProxy,
-    ExtensionLanguageProxy, ExtensionLanguageServerProxy, ExtensionSnippetProxy,
+    Extension, ExtensionDebugAdapterProviderProxy, ExtensionEvents, ExtensionGrammarProxy,
+    ExtensionHostProxy, ExtensionLanguageProxy, ExtensionLanguageServerProxy, ExtensionSnippetProxy,
     ExtensionThemeProxy,
 };
 use fs::{Fs, RemoveOptions, RenameOptions};
@@ -567,6 +567,18 @@ impl ExtensionStore {
             .extensions
             .get(extension_id)
             .map(|extension| &extension.manifest)
+    }
+
+    /// Returns the loaded Wasm extension instance for the given extension ID, if any.
+    ///
+    /// The returned handle can be used to invoke extension entry points such as
+    /// [`Extension::run_slash_command`](extension::Extension::run_slash_command) from
+    /// other crates; calls are forwarded to the extension's Wasm task.
+    pub fn wasm_extension_for_id(&self, extension_id: &str) -> Option<Arc<dyn Extension>> {
+        self.wasm_extensions
+            .iter()
+            .find(|(manifest, _)| manifest.id.as_ref() == extension_id)
+            .map(|(_, extension)| Arc::new(extension.clone()) as Arc<dyn Extension>)
     }
 
     /// Returns the names of themes provided by extensions.

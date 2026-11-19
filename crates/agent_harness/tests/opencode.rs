@@ -261,6 +261,7 @@ fn request(prompt: &str) -> RunRequest {
         chrome: false,
         drop_prompt: None,
         ephemeral: false,
+        mcp_servers: Vec::new(),
     }
 }
 

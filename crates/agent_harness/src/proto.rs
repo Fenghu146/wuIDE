@@ -122,6 +122,33 @@ pub struct ModelOptionChoice {
     pub label: String,
 }
 
+/// An MCP server the harness should connect to, sent via the ACP
+/// `session/new` and `session/load` `mcpServers` field.
+///
+/// Serialized as the ACP v1 flat stdio shape:
+/// `{"name": ..., "command": ..., "args": [...], "env": [{"name": ..., "value": ...}]}`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStdio {
+    /// Human-readable name identifying this MCP server.
+    pub name: String,
+    /// Absolute path to the MCP server executable.
+    pub command: String,
+    /// Command-line arguments to pass to the MCP server.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Environment variables to set when launching the MCP server.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<McpEnvVariable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpEnvVariable {
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
@@ -147,6 +174,10 @@ pub struct RunRequest {
     /// Context size in tokens at which the agent compacts; `None` keeps the agent's own default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_tokens: Option<u64>,
+    /// MCP servers to expose to the agent; ACP harnesses pass these to the
+    /// agent in `session/new`. Other harnesses ignore them for now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerStdio>,
     /// Lets Claude Code use the browser through the Claude in Chrome extension.
     #[serde(default)]
     pub chrome: bool,

@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use cloud_api_types::{ExtensionApiManifest, ExtensionMetadata, ExtensionProvides};
 use extension::{ExtensionManifest, SchemaVersion};
@@ -442,6 +445,8 @@ impl Component for ExtensionCard {
                 languages: Vec::new(),
                 grammars: Default::default(),
                 language_servers: Default::default(),
+                context_servers: BTreeMap::default(),
+                slash_commands: BTreeMap::default(),
                 snippets: None,
                 capabilities: Vec::new(),
                 debug_adapters: Default::default(),

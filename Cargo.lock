@@ -162,6 +162,8 @@ dependencies = [
  "dictation",
  "dirs",
  "editor",
+ "extension",
+ "extension_host",
  "file_icons",
  "fs",
  "futures",

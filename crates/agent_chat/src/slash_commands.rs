@@ -1,6 +1,7 @@
 use agent_harness::SlashCommand;
 use i18n::{SharedString, t};
 use std::ops::Range;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommandToken {
@@ -141,9 +142,20 @@ impl AppCommand {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExtensionSlashCommand {
+    pub extension_id: Arc<str>,
+    pub name: Arc<str>,
+    pub description: String,
+    pub requires_argument: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CommandTarget {
     Agent,
     App(AppCommand),
+    Extension {
+        extension_id: Arc<str>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,7 +166,10 @@ pub(crate) struct CommandItem {
     pub is_skill: bool,
 }
 
-pub(crate) fn command_items(agent_commands: &[SlashCommand]) -> Vec<CommandItem> {
+pub(crate) fn command_items(
+    agent_commands: &[SlashCommand],
+    extension_commands: &[ExtensionSlashCommand],
+) -> Vec<CommandItem> {
     let mut items: Vec<CommandItem> = agent_commands
         .iter()
         .map(|command| CommandItem {
@@ -168,6 +183,21 @@ pub(crate) fn command_items(agent_commands: &[SlashCommand]) -> Vec<CommandItem>
             is_skill: command.is_skill,
         })
         .collect();
+    for command in extension_commands {
+        // Harness-provided commands run remotely and win over extension
+        // commands registered under the same name.
+        if items.iter().any(|item| item.name == command.name.as_ref()) {
+            continue;
+        }
+        items.push(CommandItem {
+            name: command.name.to_string(),
+            detail: command.description.clone(),
+            target: CommandTarget::Extension {
+                extension_id: command.extension_id.clone(),
+            },
+            is_skill: false,
+        });
+    }
     for command in AppCommand::ALL {
         let mut name = command.name().to_string();
         while items.iter().any(|item| item.name == name) {
@@ -202,6 +232,87 @@ pub(crate) fn filter_commands(query: &str, items: Vec<CommandItem>) -> Vec<Comma
         .collect();
     ranked.sort_by_key(|(rank, index, _)| (*rank, *index));
     ranked.into_iter().map(|(_, _, item)| item).collect()
+}
+
+/// An extension slash command found in a message, ready to be run.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExtensionCommandCall {
+    pub extension_id: Arc<str>,
+    pub name: Arc<str>,
+    pub arguments: Vec<String>,
+    /// The range in the message text that the command and its arguments
+    /// occupy, from the leading `/` to the end of the line.
+    pub range: Range<usize>,
+}
+
+fn is_command_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.')
+}
+
+/// Finds extension slash commands in a message.
+///
+/// A command is recognized when the first non-whitespace token of a line is
+/// `/<name>` matching one of `commands`. The arguments are the remaining
+/// whitespace-separated words on that line.
+pub(crate) fn extension_command_calls(
+    text: &str,
+    commands: &[ExtensionSlashCommand],
+) -> Vec<ExtensionCommandCall> {
+    let mut calls = Vec::new();
+    let mut line_start = 0;
+    for line in text.split('\n') {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = &line[indent..];
+        let name = trimmed
+            .strip_prefix('/')
+            .map(|rest| {
+                let name_len = rest
+                    .bytes()
+                    .take_while(|byte| is_command_name_byte(*byte))
+                    .count();
+                &rest[..name_len]
+            })
+            .filter(|name| !name.is_empty());
+        if let Some(name) = name {
+            // A slash right after the name means a path like /usr/bin, not a command.
+            let not_a_path = trimmed[1 + name.len()..]
+                .strip_prefix('/')
+                .is_none();
+            if let Some(command) = commands
+                .iter()
+                .find(|command| command.name.as_ref() == name)
+                && not_a_path
+            {
+                let arguments = trimmed[1 + name.len()..]
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+                calls.push(ExtensionCommandCall {
+                    extension_id: command.extension_id.clone(),
+                    name: command.name.clone(),
+                    arguments,
+                    range: line_start + indent..line_start + line.len(),
+                });
+            }
+        }
+        line_start += line.len() + 1;
+    }
+    calls
+}
+
+/// Replaces the text occupied by a command call with the command's output.
+pub(crate) fn replace_extension_command_call(
+    text: &str,
+    call: &ExtensionCommandCall,
+    output: &str,
+) -> String {
+    let start = call.range.start.min(text.len());
+    let end = call.range.end.max(start).min(text.len());
+    let mut result = String::with_capacity(text.len());
+    result.push_str(&text[..start]);
+    result.push_str(output);
+    result.push_str(&text[end..]);
+    result
 }
 
 pub(crate) fn app_command_for_text(text: &str, items: &[CommandItem]) -> Option<AppCommand> {
@@ -265,9 +376,18 @@ mod tests {
         }
     }
 
+    fn extension(name: &str) -> ExtensionSlashCommand {
+        ExtensionSlashCommand {
+            extension_id: "example-extension".into(),
+            name: name.into(),
+            description: "Runs in the example extension".into(),
+            requires_argument: false,
+        }
+    }
+
     #[test]
     fn wu_commands_step_aside_for_agent_commands() {
-        let items = command_items(&[agent("review"), agent("model")]);
+        let items = command_items(&[agent("review"), agent("model")], &[]);
         let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
         assert_eq!(&names[..3], ["review", "model", "wu:model"]);
         assert_eq!(
@@ -288,18 +408,61 @@ mod tests {
             is_skill: false,
         };
         assert_eq!(
-            command_items(&[command])[0].detail,
+            command_items(&[command], &[])[0].detail,
             "Review a pull request · <[pr number]>"
         );
     }
 
     #[test]
     fn prefix_matches_come_first() {
-        let items = command_items(&[agent("compact"), agent("pr-comments"), agent("compress")]);
+        let items = command_items(
+            &[agent("compact"), agent("pr-comments"), agent("compress")],
+            &[],
+        );
         let names: Vec<String> = filter_commands("COM", items)
             .into_iter()
             .map(|item| item.name)
             .collect();
         assert_eq!(names, ["compact", "compress", "pr-comments"]);
+    }
+
+    #[test]
+    fn extension_commands_merge_with_the_others() {
+        let items = command_items(&[agent("model")], &[extension("flash"), extension("model")]);
+        let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
+        // The agent's `model` wins over the extension's, `flash` joins the
+        // list and the app command steps aside for both.
+        assert_eq!(&names[..3], &["model", "flash", "wu:model"]);
+        assert!(matches!(items[1].target, CommandTarget::Extension { .. }));
+    }
+
+    #[test]
+    fn extension_commands_are_found_at_line_starts() {
+        let commands = [extension("flash"), extension("registers")];
+        let calls = extension_command_calls(
+            "
+  /flash  --target f407 
+plain text
+/registers arm m4
+/usr/bin/not-a-command",
+            &commands,
+        );
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name.as_ref(), "flash");
+        assert_eq!(calls[0].arguments, ["--target", "f407"]);
+        assert_eq!(calls[0].range, 3..25);
+        assert_eq!(calls[1].name.as_ref(), "registers");
+        assert_eq!(calls[1].arguments, ["arm", "m4"]);
+
+        let expanded = replace_extension_command_call(
+            "
+  /flash  --target f407 
+plain text",
+            &calls[0],
+            "Flashed to 0x08000000",
+        );
+        assert_eq!(expanded, "
+  Flashed to 0x08000000
+plain text");
     }
 }

@@ -242,5 +242,8 @@
   "{path} is larger than 24 MB": "{path} 超过 24 MB",
   "{seconds}s": "{seconds} 秒",
   "{used} / {total} tokens": "{used} / {total} 个 token",
-  "… {count} more lines": "… 还有 {count} 行"
+  "… {count} more lines": "… 还有 {count} 行",
+  "/{name} requires an argument.": "/{name} 需要一个参数。",
+  "Failed to run /{name}: {error}": "运行 /{name} 失败：{error}",
+  "The extension providing /{name} is not installed.": "提供 /{name} 的扩展未安装。"
 }

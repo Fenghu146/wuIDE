@@ -22,7 +22,10 @@ use crate::{
     },
     model_picker::{ModelPicker, Selection, agent_icon},
     session::{AgentSession, AgentStore, Entry, PendingQuestion, Prompt, ToolEntry, ToolStatus},
-    slash_commands::{CommandToken, app_command_for_text},
+    slash_commands::{
+        CommandToken, ExtensionCommandCall, app_command_for_text, extension_command_calls,
+        replace_extension_command_call,
+    },
     usage_rings::{ContextCard, UsageCard, context_chip, usage_chip},
 };
 use agent_harness::{ToolCall, UserInputAnswer, UserInputQuestion, view};
@@ -62,8 +65,9 @@ use ui::{
 use std::time::Instant;
 use gpui::ExternalPaths;
 use workspace::{
-    DraggedSelection, Workspace,
+    DraggedSelection, Toast, Workspace,
     item::{Item, ItemEvent, TabContentParams},
+    notifications::NotificationId,
 };
 
 const CONTENT_WIDTH: f32 = 736.;
@@ -207,6 +211,7 @@ pub struct ChatView {
     copied: Option<SharedString>,
     revealed_turn: Option<usize>,
     flavour_seed: u64,
+    _extension_commands: Task<()>,
     _copied_reset: Task<()>,
     _revealed_reset: Task<()>,
     _auto_advance: Task<()>,
@@ -384,6 +389,7 @@ impl ChatView {
             copied: None,
             revealed_turn: None,
             flavour_seed: flavour,
+            _extension_commands: Task::ready(()),
             _copied_reset: Task::ready(()),
             _revealed_reset: Task::ready(()),
             _auto_advance: Task::ready(()),
@@ -761,6 +767,12 @@ impl ChatView {
         {
             return;
         }
+        if self.attachments.is_empty()
+            && self.editing_queued.is_none()
+            && self.expand_extension_commands(text.clone(), window, cx)
+        {
+            return;
+        }
         let skills = std::mem::take(&mut self.composer_skills)
             .into_iter()
             .filter(|skill| text.contains(&format!("${}", skill.name)))
@@ -778,6 +790,140 @@ impl ChatView {
         self.session
             .update(cx, |session, cx| session.send_message(prompt, cx));
         self.glide_to_bottom(cx);
+    }
+
+    /// Runs extension-provided slash commands found in `text`, replacing each
+    /// command line with its output and sending the expanded message once every
+    /// command has run. Returns `true` when such a command was found, in which
+    /// case the caller must not continue with the regular send.
+    fn expand_extension_commands(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let extension_commands = completion::extension_slash_commands(cx);
+        let calls = extension_command_calls(&text, &extension_commands);
+        if calls.is_empty() {
+            return false;
+        }
+        for call in &calls {
+            let Some(command) = extension_commands.iter().find(|command| {
+                command.extension_id == call.extension_id && command.name == call.name
+            }) else {
+                continue;
+            };
+            if command.requires_argument && call.arguments.is_empty() {
+                let message = t!("/{name} requires an argument.", name = command.name.as_ref())
+                    .to_string();
+                self.restore_failed_extension_send(text, Some(message), window, cx);
+                return true;
+            }
+        }
+
+        let store = extension_host::ExtensionStore::try_global(cx);
+        let mut resolved: Vec<(ExtensionCommandCall, bool, Arc<dyn extension::Extension>)> =
+            Vec::new();
+        for call in calls {
+            // Commands can only come from the extension store, so a missing
+            // store or instance means the extension was uninstalled in between.
+            let extension = store
+                .as_ref()
+                .and_then(|store| store.read(cx).wasm_extension_for_id(&call.extension_id));
+            let Some(extension) = extension else {
+                let message = t!(
+                    "The extension providing /{name} is not installed.",
+                    name = call.name.as_ref()
+                )
+                .to_string();
+                self.restore_failed_extension_send(text, Some(message), window, cx);
+                return true;
+            };
+            let requires_argument = extension_commands
+                .iter()
+                .find(|command| {
+                    command.extension_id == call.extension_id && command.name == call.name
+                })
+                .is_some_and(|command| command.requires_argument);
+            resolved.push((call, requires_argument, extension));
+        }
+
+        let skills = std::mem::take(&mut self.composer_skills)
+            .into_iter()
+            .filter(|skill| text.contains(&format!("${}", skill.name)))
+            .collect::<Vec<_>>();
+        let attachments = std::mem::take(&mut self.attachments);
+        self._extension_commands = cx.spawn_in(window, async move |this, cx| {
+            let mut expanded_text = text.clone();
+            let mut failure: Option<String> = None;
+            for (call, requires_argument, extension) in resolved.into_iter().rev() {
+                let command = extension::SlashCommand {
+                    name: call.name.to_string(),
+                    description: String::new(),
+                    tooltip_text: String::new(),
+                    requires_argument,
+                };
+                match extension.run_slash_command(command, call.arguments.clone(), None).await {
+                    Ok(output) => {
+                        expanded_text =
+                            replace_extension_command_call(&expanded_text, &call, &output.text);
+                    }
+                    Err(error) => {
+                        failure = Some(
+                            t!(
+                                "Failed to run /{name}: {error}",
+                                name = call.name.as_ref(),
+                                error = error.to_string()
+                            )
+                            .to_string(),
+                        );
+                        break;
+                    }
+                }
+            }
+            this.update_in(cx, |this, window, cx| {
+                if let Some(message) = failure {
+                    this.composer_skills = skills;
+                    this.attachments = attachments;
+                    this.restore_failed_extension_send(text, Some(message), window, cx);
+                    return;
+                }
+                this.attachment_error = None;
+                let prompt = Prompt {
+                    text: expanded_text,
+                    attachments,
+                    skills,
+                };
+                this.session
+                    .update(cx, |session, cx| session.send_message(prompt, cx));
+                this.glide_to_bottom(cx);
+            })
+            .ok();
+        });
+        true
+    }
+
+    /// Puts `text` back into the composer after an extension command could not
+    /// be run, optionally showing `message` as a toast.
+    fn restore_failed_extension_send(
+        &mut self,
+        text: String,
+        message: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer
+            .update(cx, |editor, cx| editor.set_text(text.as_str(), window, cx));
+        if let Some(message) = message {
+            self.workspace
+                .update(cx, |workspace, cx| {
+                    workspace.show_toast(
+                        Toast::new(NotificationId::unique::<ChatView>(), message).autohide(),
+                        cx,
+                    )
+                })
+                .log_err();
+        }
     }
 
     fn glide_to_bottom(&mut self, cx: &mut Context<Self>) {

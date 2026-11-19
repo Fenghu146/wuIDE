@@ -923,7 +923,7 @@ async fn drive_inner(
                 json!({
                     "sessionId": previous,
                     "cwd": cwd.to_string_lossy(),
-                    "mcpServers": []
+                    "mcpServers": &request.mcp_servers
                 }),
             )
             .await
@@ -937,7 +937,7 @@ async fn drive_inner(
                 client
                     .request(
                         "session/new",
-                        json!({ "cwd": cwd.to_string_lossy(), "mcpServers": [] }),
+                        json!({ "cwd": cwd.to_string_lossy(), "mcpServers": &request.mcp_servers }),
                     )
                     .await?
             }
@@ -946,7 +946,7 @@ async fn drive_inner(
             client
                 .request(
                     "session/new",
-                    json!({ "cwd": cwd.to_string_lossy(), "mcpServers": [] }),
+                    json!({ "cwd": cwd.to_string_lossy(), "mcpServers": &request.mcp_servers }),
                 )
                 .await?
         }

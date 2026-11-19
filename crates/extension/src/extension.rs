@@ -124,6 +124,43 @@ pub trait Extension: Send + Sync + 'static {
         symbols: Vec<Symbol>,
     ) -> Result<Vec<Option<CodeLabel>>>;
 
+    /// Returns the completions that should be shown when completing the provided slash command with the given query.
+    async fn complete_slash_command_argument(
+        &self,
+        _command: SlashCommand,
+        _arguments: Vec<String>,
+    ) -> Result<Vec<SlashCommandArgumentCompletion>> {
+        bail!("`complete_slash_command_argument` not implemented")
+    }
+
+    /// Returns the output from running the provided slash command.
+    async fn run_slash_command(
+        &self,
+        _command: SlashCommand,
+        _arguments: Vec<String>,
+        _worktree: Option<Arc<dyn WorktreeDelegate>>,
+    ) -> Result<SlashCommandOutput> {
+        bail!("`run_slash_command` not implemented")
+    }
+
+    /// Returns the command used to start a context server.
+    async fn context_server_command(
+        &self,
+        _context_server_id: Arc<str>,
+        _project: Arc<dyn ProjectDelegate>,
+    ) -> Result<Command> {
+        bail!("`context_server_command` not implemented")
+    }
+
+    /// Returns the configuration for a context server.
+    async fn context_server_configuration(
+        &self,
+        _context_server_id: Arc<str>,
+        _project: Arc<dyn ProjectDelegate>,
+    ) -> Result<Option<ContextServerConfiguration>> {
+        Ok(None)
+    }
+
     async fn suggest_docs_packages(&self, provider: Arc<str>) -> Result<Vec<String>>;
 
     async fn index_docs(

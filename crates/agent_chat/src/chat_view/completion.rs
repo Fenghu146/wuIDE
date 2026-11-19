@@ -5,8 +5,8 @@ use crate::{
     SelectNextCommand, SelectPreviousCommand, Send, ToggleFocus,
     chat_style::{MENU_ITEM_RADIUS, icon, ink, popover_card, selected_row},
     slash_commands::{
-        AppCommand, CommandItem, CommandTarget, CommandToken, TokenKind, command_items,
-        completion_token, filter_commands,
+        AppCommand, CommandItem, CommandTarget, CommandToken, ExtensionSlashCommand, TokenKind,
+        command_items, completion_token, filter_commands,
     },
 };
 use agent_harness::SkillRef;
@@ -180,7 +180,10 @@ impl ChatView {
     pub(super) fn command_items(&self, cx: &App) -> Vec<CommandItem> {
         let (kind, cwd) = self.session_kind_and_cwd(cx);
         let catalog = self.store.read(cx).commands(kind, &cwd);
-        command_items(catalog.map_or(&[], |catalog| catalog.commands.as_slice()))
+        command_items(
+            catalog.map_or(&[], |catalog| catalog.commands.as_slice()),
+            &extension_slash_commands(cx),
+        )
     }
 
     fn rows(&self, cx: &App) -> Vec<Row> {
@@ -849,4 +852,41 @@ impl ChatView {
         .with_priority(1)
         .into_any_element()
     }
+}
+
+/// Returns the slash commands provided by installed and dev extensions.
+pub(super) fn extension_slash_commands(cx: &App) -> Vec<ExtensionSlashCommand> {
+    fn collect(
+        commands: &mut Vec<ExtensionSlashCommand>,
+        extension_id: &Arc<str>,
+        manifest: &extension::ExtensionManifest,
+    ) {
+        for (name, entry) in &manifest.slash_commands {
+            // The first extension to register a name wins; dev extensions are
+            // collected before installed ones so local development overrides
+            // marketplace extensions.
+            if commands.iter().any(|command| command.name == *name) {
+                continue;
+            }
+            commands.push(ExtensionSlashCommand {
+                extension_id: extension_id.clone(),
+                name: name.clone(),
+                description: entry.description.clone(),
+                requires_argument: entry.requires_argument,
+            });
+        }
+    }
+
+    let Some(store) = extension_host::ExtensionStore::try_global(cx) else {
+        return Vec::new();
+    };
+    let store = store.read(cx);
+    let mut commands = Vec::new();
+    for manifest in store.dev_extensions() {
+        collect(&mut commands, &manifest.id, manifest);
+    }
+    for (extension_id, entry) in store.installed_extensions() {
+        collect(&mut commands, extension_id, &entry.manifest);
+    }
+    commands
 }

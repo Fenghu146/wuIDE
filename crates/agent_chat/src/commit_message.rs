@@ -127,6 +127,7 @@ async fn run_once(
         chrome: false,
         drop_prompt: None,
         ephemeral: true,
+        mcp_servers: Vec::new(),
     };
     let (steering_tx, steering) = tokio::sync::mpsc::channel(1);
     let (permission_tx, permission_changes) = tokio::sync::watch::channel(permission);

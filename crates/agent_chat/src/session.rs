@@ -1,8 +1,8 @@
 use agent_harness::{
     AcpHarness, AgentEvent, CancellationToken, ClaudeHarness, CodexHarness, DoneStatus,
-    ExternalSession, Harness, HarnessId, Model, OpencodeHarness, PermissionMode, ReasoningLevel,
-    RunControls, RunRequest, SkillRef, SlashCommand, SteerMessage, ToolCall, UserInputAnswer,
-    UserInputQuestion, usage::PlanUsage,
+    ExternalSession, Harness, HarnessId, McpEnvVariable, McpServerStdio, Model, OpencodeHarness,
+    PermissionMode, ReasoningLevel, RunControls, RunRequest, SkillRef, SlashCommand, SteerMessage,
+    ToolCall, UserInputAnswer, UserInputQuestion, usage::PlanUsage,
 };
 use anyhow::{Context as _, Result};
 use collections::{HashMap, HashSet};
@@ -1523,6 +1523,7 @@ impl AgentSession {
             permission: settings.permission,
             resume: self.metadata.native_session_id.clone(),
             fork,
+            mcp_servers: Vec::new(),
             auto_compact_tokens: self.auto_compact_tokens(cx),
             chrome: AgentChatSettings::get_global(cx).claude_in_chrome,
             drop_prompt,
@@ -1548,7 +1549,12 @@ impl AgentSession {
             permission: permission_rx,
         };
 
-        let run = spawn_agent_work(cx, async move { harness.run(request, controls).await });
+        let mcp_candidates = extension_mcp_candidates(cx);
+        let run = spawn_agent_work(cx, async move {
+            let mut request = request;
+            request.mcp_servers = resolve_extension_mcp_servers(mcp_candidates).await;
+            harness.run(request, controls).await
+        });
         let events = cx.spawn(async move |this, cx| {
             let stream = match run.await {
                 Ok(Ok(stream)) => stream,
@@ -2300,6 +2306,83 @@ pub(crate) fn shell_env_loaded(cx: &App) -> impl std::future::Future<Output = ()
 }
 
 /// Agent CLIs and their config folders come from the login shell's environment, which loads after startup.
+/// Collects the context servers declared by installed extensions, ready to be
+/// resolved into launch commands for the harness.
+fn extension_mcp_candidates(cx: &App) -> Vec<(Arc<str>, Arc<dyn extension::Extension>)> {
+    fn collect(
+        candidates: &mut Vec<(Arc<str>, Arc<dyn extension::Extension>)>,
+        store: &extension_host::ExtensionStore,
+        extension_id: &Arc<str>,
+        manifest: &extension::ExtensionManifest,
+    ) {
+        for server_id in manifest.context_servers.keys() {
+            // The first extension to declare a server name wins; dev extensions
+            // are collected before installed ones so local development
+            // overrides marketplace extensions.
+            if candidates.iter().any(|(id, _)| id == server_id) {
+                continue;
+            }
+            if let Some(extension) = store.wasm_extension_for_id(extension_id) {
+                candidates.push((server_id.clone(), extension));
+            }
+        }
+    }
+
+    let Some(store) = extension_host::ExtensionStore::try_global(cx) else {
+        return Vec::new();
+    };
+    let store = store.read(cx);
+    let mut candidates = Vec::new();
+    for manifest in store.dev_extensions() {
+        collect(&mut candidates, &store, &manifest.id, manifest);
+    }
+    for (extension_id, entry) in store.installed_extensions() {
+        collect(&mut candidates, &store, extension_id, &entry.manifest);
+    }
+    candidates
+}
+
+/// Resolves the launch command for each collected context server. Servers
+/// whose extension fails to produce a command are skipped so a broken
+/// extension cannot block the chat.
+async fn resolve_extension_mcp_servers(
+    candidates: Vec<(Arc<str>, Arc<dyn extension::Extension>)>,
+) -> Vec<McpServerStdio> {
+    /// Chats are cwd-based and hold no project handle, so extensions see no
+    /// worktree ids and fall back to their global defaults.
+    struct SessionProjectDelegate;
+
+    impl extension::ProjectDelegate for SessionProjectDelegate {
+        fn worktree_ids(&self) -> Vec<u64> {
+            Vec::new()
+        }
+    }
+
+    let project: Arc<dyn extension::ProjectDelegate> = Arc::new(SessionProjectDelegate);
+    let mut servers = Vec::new();
+    for (server_id, extension) in candidates {
+        match extension
+            .context_server_command(server_id.clone(), project.clone())
+            .await
+        {
+            Ok(command) => servers.push(McpServerStdio {
+                name: server_id.to_string(),
+                command: command.command.to_string_lossy().into_owned(),
+                args: command.args,
+                env: command
+                    .env
+                    .into_iter()
+                    .map(|(name, value)| McpEnvVariable { name, value })
+                    .collect(),
+            }),
+            Err(error) => {
+                log::warn!("skipping extension context server {server_id}: {error:#}");
+            }
+        }
+    }
+    servers
+}
+
 fn spawn_agent_work<T: 'static, F, R>(
     cx: &Context<T>,
     work: F,
