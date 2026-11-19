@@ -4,6 +4,7 @@ mod chat_panel;
 mod chat_style;
 mod chat_view;
 mod commit_message;
+mod editor_bridge;
 mod model_picker;
 mod notifications;
 mod saved_chats;
@@ -12,7 +13,8 @@ mod slash_commands;
 mod usage_rings;
 
 pub use agent_chat_settings::{AgentChatSettings, CommitMessageSettings};
-pub use agent_panel::AgentPanel;
+pub use agent_panel::{AgentPanel, open_chat_with_prompt};
+pub use editor_bridge::{ask_about_selection, fix_diagnostics};
 pub use chat_panel::ChatPanel;
 pub use chat_view::ChatView;
 pub use commit_message::{

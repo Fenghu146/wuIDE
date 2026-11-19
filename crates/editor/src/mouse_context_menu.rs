@@ -10,7 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{Context, DismissEvent, Entity, Focusable as _, Pixels, Point, Subscription, Window};
 use i18n::t;
 use std::ops::Range;
-use text::PointUtf16;
+use text::{PointUtf16, ToPoint as _};
+use wu_actions::{AskAgentAboutSelection, FixDiagnosticsWithAgent};
 use workspace::OpenInTerminal;
 use wu_actions::preview::{
     markdown::OpenPreview as OpenMarkdownPreview, svg::OpenPreview as OpenSvgPreview,
@@ -216,6 +217,26 @@ pub fn deploy_context_menu(
                         .is_some()
                 });
 
+        let has_diagnostics = buffer
+            .anchor_to_buffer_anchor(anchor)
+            .and_then(|(buffer_anchor, _)| {
+                editor
+                    .buffer()
+                    .read(cx)
+                    .as_singleton()
+                    .map(|singleton| (buffer_anchor, singleton))
+            })
+            .is_some_and(|(buffer_anchor, singleton)| {
+                let buffer = singleton.read(cx);
+                let snapshot = buffer.snapshot();
+                let clicked_row = buffer_anchor.to_point(&snapshot).row;
+                buffer.buffer_diagnostics(None).iter().any(|entry| {
+                    let start = entry.range.start.to_point(&snapshot);
+                    let end = entry.range.end.to_point(&snapshot);
+                    start.row <= clicked_row && end.row >= clicked_row
+                })
+            });
+
         let evaluate_selection = window.is_action_available(&EvaluateSelectedText, cx);
         let run_to_cursor = window.is_action_available(&RunToCursor, cx);
         let format_selections = window.is_action_available(&FormatSelections, cx);
@@ -289,6 +310,21 @@ pub fn deploy_context_menu(
                         quick_launch: false,
                     }),
                 )
+                .when(has_selections || has_diagnostics, |builder| {
+                    builder.separator()
+                })
+                .when(has_selections, |builder| {
+                    builder.action(
+                        t!("Ask Agent About Selection"),
+                        Box::new(AskAgentAboutSelection),
+                    )
+                })
+                .when(has_diagnostics, |builder| {
+                    builder.action(
+                        t!("Fix Diagnostics with Agent"),
+                        Box::new(FixDiagnosticsWithAgent),
+                    )
+                })
                 .separator()
                 .action(t!("Cut"), Box::new(Cut))
                 .action(t!("Copy"), Box::new(Copy))

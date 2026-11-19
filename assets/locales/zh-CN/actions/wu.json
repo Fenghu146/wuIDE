@@ -3,6 +3,14 @@
     "description": "显示 IDE 的相关信息。",
     "name": "关于"
   },
+  "wu::AskAgentAboutSelection": {
+    "description": "把当前编辑器中选中的代码发给智能体对话，请它解释。",
+    "name": "用智能体解释选中代码"
+  },
+  "wu::CancelEtwTrace": {
+    "description": "取消进行中的 ETW 跟踪会话，不保存。",
+    "name": "取消 ETW 跟踪"
+  },
   "wu::CopySystemSpecsIntoClipboard": {
     "description": "将系统信息复制到剪贴板，用于提交问题报告。",
     "name": "复制系统信息到剪贴板"
@@ -22,6 +30,10 @@
   "wu::Extensions": {
     "description": "打开扩展管理界面。",
     "name": "扩展"
+  },
+  "wu::FixDiagnosticsWithAgent": {
+    "description": "把光标附近的诊断信息发给智能体对话，请它修复。",
+    "name": "用智能体修复诊断"
   },
   "wu::Hide": {
     "description": "隐藏应用窗口。",
@@ -154,6 +166,14 @@
     "description": "重新构建已安装的开发扩展。",
     "name": "重新构建开发扩展"
   },
+  "wu::RecordEtwTrace": {
+    "description": "开始记录一条 ETW（Windows 事件跟踪）会话。",
+    "name": "开始 ETW 跟踪"
+  },
+  "wu::RecordEtwTraceWithHeapTracing": {
+    "description": "开始记录一条带堆跟踪的 ETW（Windows 事件跟踪）会话。",
+    "name": "开始 ETW 跟踪（含堆跟踪）"
+  },
   "wu::ReloadExtensions": {
     "description": "重新加载所有已安装的扩展。",
     "name": "重新加载扩展"
@@ -177,6 +197,10 @@
   "wu::RevealLogInFileManager": {
     "description": "在系统文件管理器中显示 IDE 的日志文件。",
     "name": "在文件管理器中显示日志"
+  },
+  "wu::SaveEtwTrace": {
+    "description": "把进行中的 ETW 跟踪会话保存到磁盘。",
+    "name": "保存 ETW 跟踪"
   },
   "wu::ShowAll": {
     "description": "显示所有隐藏的窗口。",

@@ -178,6 +178,24 @@ pub(crate) fn open_chat(
     open_chat_in(workspace, session, false, window, cx)
 }
 
+/// Creates a new chat with the first visible agent and immediately sends the
+/// given prompt. Does nothing when no agent is visible; remote projects are
+/// rejected by [`create_session`].
+pub fn open_chat_with_prompt(
+    workspace: &mut Workspace,
+    prompt: String,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let Some(kind) = AgentChatSettings::get_global(cx).agents().first().cloned() else {
+        return;
+    };
+    if let Some(session) = create_session(workspace, kind, cx) {
+        open_chat(workspace, session.clone(), window, cx);
+        session.update(cx, |session, cx| session.send_message(prompt, cx));
+    }
+}
+
 fn open_chat_in(
     workspace: &mut Workspace,
     session: Entity<AgentSession>,

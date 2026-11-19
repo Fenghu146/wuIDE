@@ -1,5 +1,6 @@
 {
   "Add Bookmark": "添加书签",
+  "Ask Agent About Selection": "用智能体解释选中代码",
   "Bookmarks": "书签",
   "Cancel": "取消",
   "Class": "类",
@@ -40,6 +41,7 @@
   "File": "文件",
   "File not found. It was deleted or moved.": "找不到文件。它已被删除或移动。",
   "Find All References": "查找所有引用",
+  "Fix Diagnostics with Agent": "用智能体修复诊断",
   "Fold Excerpt": "折叠摘录",
   "Folder": "文件夹",
   "Format Buffer": "格式化文档",

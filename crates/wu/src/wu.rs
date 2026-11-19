@@ -97,8 +97,8 @@ use workspace::{
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use wu_actions::{
-    About, OpenBrowser, OpenDocs, OpenProjectTasks, OpenServerSettings, OpenSettingsFile,
-    OpenWuUrl, Quit,
+    About, AskAgentAboutSelection, FixDiagnosticsWithAgent, OpenBrowser, OpenDocs,
+    OpenProjectTasks, OpenServerSettings, OpenSettingsFile, OpenWuUrl, Quit,
 };
 
 const DOCS_URL: &str = "https://wu.dstrml.org/docs";
@@ -678,6 +678,22 @@ fn register_actions(
 ) {
     workspace
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &AskAgentAboutSelection,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                agent_chat::ask_about_selection(workspace, window, cx);
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &FixDiagnosticsWithAgent,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                agent_chat::fix_diagnostics(workspace, window, cx);
+            },
+        )
         .register_action(
             |workspace: &mut Workspace,
              _: &DumpAccessibilityTree,

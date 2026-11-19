@@ -75,6 +75,10 @@ actions!(
         OpenOnboarding,
         /// Shows the auto-update notification for testing.
         ShowUpdateNotification,
+        /// Asks the configured agent to explain the code selected in the active editor.
+        AskAgentAboutSelection,
+        /// Asks the configured agent to fix the diagnostics around the cursor in the active editor.
+        FixDiagnosticsWithAgent,
     ]
 );
 
