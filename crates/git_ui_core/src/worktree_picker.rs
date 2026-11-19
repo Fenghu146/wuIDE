@@ -27,8 +27,8 @@ use workspace::{
 use crate::notifications::show_error_toast;
 use crate::worktree_service::{RemoteBranchName, WorktreeCreateTarget, worktree_create_targets};
 use wu_actions::{
-    CreateWorktree, NewWorktreeBranchTarget, OpenWorktreeInNewWindow, OpenWorktreeSetupTasks,
-    SwitchWorktree,
+    CreateWorktree, NewPiChatInWorktree, NewWorktreeBranchTarget, OpenWorktreeInNewWindow,
+    OpenWorktreeSetupTasks, SwitchWorktree,
 };
 
 actions!(
@@ -1307,9 +1307,31 @@ impl PickerDelegate for WorktreePickerDelegate {
                                         })),
                                 );
 
+                            let new_pi_chat_button = IconButton::new(
+                                ("new-pi-chat-in-worktree", ix),
+                                IconName::AgentGitBranch,
+                            )
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text(t!("Start Pi Chat in This Worktree")))
+                            .on_click(cx.listener(move |picker, _, window, cx| {
+                                let Some(entry) = picker.delegate.matches.get(ix) else {
+                                    return;
+                                };
+                                if let WorktreeEntry::Worktree { worktree, .. } = entry {
+                                    window.dispatch_action(
+                                        Box::new(NewPiChatInWorktree {
+                                            path: worktree.path.clone(),
+                                        }),
+                                        cx,
+                                    );
+                                    cx.emit(DismissEvent);
+                                }
+                            }));
+
                             this.end_slot(
                                 h_flex()
                                     .gap_0p5()
+                                    .child(new_pi_chat_button)
                                     .child(open_in_new_window_button)
                                     .when(can_remove_from_window, |this| {
                                         let worktree_path = worktree.path.clone();

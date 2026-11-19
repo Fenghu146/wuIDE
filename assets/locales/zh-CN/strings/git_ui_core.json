@@ -26,6 +26,7 @@
   "Remove Worktree from Window": "从窗口中移除工作树",
   "Requires a Git repository in the project": "项目中需要有 Git 仓库",
   "Select or type to create a worktree…": "选择或输入名称以创建工作树…",
+  "Start Pi Chat in This Worktree": "在此工作树中启动 Pi 会话",
   "Show Error Logs": "显示错误日志",
   "Some project folders are not git repositories. They were included as-is without creating a worktree.": "部分项目文件夹不是 Git 仓库，已按原样包含，未为其创建工作树。",
   "This Window": "此窗口",

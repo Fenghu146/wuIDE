@@ -116,6 +116,10 @@
   "git::LeaderAndFollower": {
     "name": "主导者与跟随者"
   },
+  "git::NewPiChatInWorktree": {
+    "name": "在工作树中启动 Pi 会话",
+    "description": "以指定 Git 工作树为工作目录，新建 Pi 智能体会话。"
+  },
   "git::OpenFileAtHead": {
     "name": "在项目中打开文件"
   },

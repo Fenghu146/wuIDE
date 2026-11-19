@@ -313,6 +313,14 @@ pub struct OpenWorktreeInNewWindow {
     pub path: PathBuf,
 }
 
+/// Starts a Pi chat whose working directory is the given git worktree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Action)]
+#[action(namespace = git)]
+#[serde(deny_unknown_fields)]
+pub struct NewPiChatInWorktree {
+    pub path: PathBuf,
+}
+
 pub mod git {
     use gpui::actions;
 

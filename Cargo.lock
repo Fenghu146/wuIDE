@@ -197,6 +197,7 @@ dependencies = [
  "util",
  "uuid",
  "workspace",
+ "wu_actions",
 ]
 
 [[package]]

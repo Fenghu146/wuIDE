@@ -1,6 +1,6 @@
 use crate::{
-    AgentChatSettings, AgentKind, ContinueSavedChat, NewClaudeChat, NewCodexChat,
-    NewDeepSeekChat, NewOpencodeChat, NewPiChat, ToggleFocus,
+    AgentChatSettings, AgentKind, ContinueSavedChat, NewClaudeChat, NewCodexChat, NewDeepSeekChat,
+    NewOpencodeChat, NewPiChat, ToggleFocus,
     chat_style::{accent, ink, selected_row, text_faint, ui, wash},
     chat_view::ChatView,
     session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, SessionSummary},
@@ -33,6 +33,7 @@ use workspace::{
     dock::{DockPosition, Panel, PanelEvent},
     notifications::NotificationId,
 };
+use wu_actions::NewPiChatInWorktree;
 
 mod saved_messages;
 
@@ -89,6 +90,11 @@ pub fn init(cx: &mut App) {
                     new_chat(workspace, AgentKind::Pi, window, cx);
                 }
             })
+            .register_action(|workspace, action: &NewPiChatInWorktree, window, cx| {
+                if agent_chat_enabled(cx) {
+                    new_chat_in_worktree(workspace, action.path.clone(), window, cx);
+                }
+            })
             .register_action(|workspace, _: &ContinueSavedChat, window, cx| {
                 if agent_chat_enabled(cx) {
                     crate::saved_chats::toggle(workspace, window, cx);
@@ -130,9 +136,34 @@ fn new_chat(
     }
 }
 
+fn new_chat_in_worktree(
+    workspace: &mut Workspace,
+    cwd: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if let Some(session) = create_session_at(workspace, AgentKind::Pi, cwd, cx) {
+        open_chat(workspace, session, window, cx);
+    }
+}
+
 pub(crate) fn create_session(
     workspace: &mut Workspace,
     kind: AgentKind,
+    cx: &mut Context<Workspace>,
+) -> Option<Entity<AgentSession>> {
+    let project = workspace.project().clone();
+    let cwd = chat_roots(&project, cx)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| paths::home_dir().clone());
+    create_session_at(workspace, kind, cwd, cx)
+}
+
+fn create_session_at(
+    workspace: &mut Workspace,
+    kind: AgentKind,
+    cwd: PathBuf,
     cx: &mut Context<Workspace>,
 ) -> Option<Entity<AgentSession>> {
     let project = workspace.project().clone();
@@ -147,10 +178,6 @@ pub(crate) fn create_session(
         );
         return None;
     }
-    let cwd = chat_roots(&project, cx)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| paths::home_dir().clone());
     let store = store_for(workspace, cx);
     Some(store.update(cx, |store, cx| store.create_session(kind, cwd, cx)))
 }
