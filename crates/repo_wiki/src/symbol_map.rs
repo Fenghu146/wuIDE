@@ -172,7 +172,7 @@ fn select(sources: Vec<SourceFile>) -> (Vec<SourceFile>, BuildStats) {
     }
 
     for (_, bucket) in &mut buckets {
-        bucket.sort_by(|a, b| b.size.cmp(&a.size));
+        bucket.sort_by_key(|source| std::cmp::Reverse(source.size));
     }
 
     let mut chosen = Vec::with_capacity(kept.min(MAX_FILES));

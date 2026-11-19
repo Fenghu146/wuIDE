@@ -559,7 +559,6 @@ impl RepoMapPanel {
                             worktree_id: *worktree_id,
                             path: rel.clone(),
                         };
-                        let key = key;
                         move |this, event: &ClickEvent, window, cx| {
                             // A plain click toggles the definition list once the
                             // file has one; opening the file stays on double

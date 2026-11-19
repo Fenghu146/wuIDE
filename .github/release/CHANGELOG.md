@@ -20,6 +20,20 @@ All notable user-facing changes to Wu are listed here, newest first.
 - Fix Wu crashing on startup on ARM Linux. (from upstream)
 - List models in the model picker in the same order as the underlying agent. (from upstream)
 
+## 1.4.0 - 2026-11-19
+
+- Add a Remote Explorer sidebar panel that lists configured SSH/WSL hosts and hosts discovered in `~/.ssh/config`, marks active connections, expands registered projects, and offers connect, open, refresh and new-remote actions. Toggle it with `ctrl-alt-r` (`ctrl-cmd-r` on macOS).
+- Add a repo map panel with a zero-cost directory tree and an on-demand symbol map: definitions are extracted with tree-sitter and files ranked by cross-file references (PageRank), so the most-referenced modules surface first. Toggle it from the command palette or the activity bar.
+- Add `/conventions` and `/repo-map` chat commands: they expand project AGENTS.md files and the ranked repo map into the composer without sending them, so you can review exactly what the agent receives. Both support inline expansion on their own line in a longer message.
+- Start a Pi chat directly inside a git worktree from the worktree picker.
+- Add inline edit predictions (ghost text) from any OpenAI-compatible endpoint, including DeepSeek and local Ollama. Disabled by default; enable via `edit_predictions` settings with an endpoint and optional API key. Tab accepts, cursor movement dismisses.
+- Ask the configured agent to explain the selected code or fix the diagnostics at the cursor from the editor context menu.
+- Restore extension-provided slash commands and context servers in the WASM extension API.
+- Make the inlay hints toggle persist across restarts.
+- Download the dictation ONNX Runtime from PyPI wheels: the upstream GitHub release is gone, so speech model installation no longer 404s.
+- Raise cargo build parallelism to match 16-core machines and remove 46 unused dependency declarations.
+- Keep the i18n completeness test working on Windows for platform-gated actions.
+
 ## 1.3.2 - 2026-11-11
 
 - Turn automatic updates back on, checking this project's own GitHub releases rather than the upstream project's.
