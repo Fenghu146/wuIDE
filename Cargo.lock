@@ -182,6 +182,7 @@ dependencies = [
  "paths",
  "picker",
  "project",
+ "repo_wiki",
  "resvg",
  "serde",
  "serde_json",
@@ -10306,6 +10307,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "repo_wiki"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dunce",
+ "fs",
+ "futures",
+ "gpui",
+ "i18n",
+ "language",
+ "languages",
+ "log",
+ "path",
+ "paths",
+ "project",
+ "streaming-iterator",
+ "tree-sitter",
+ "tree-sitter-rust",
+ "ui",
+ "util",
+ "workspace",
+ "worktree",
+]
+
+[[package]]
 name = "reqwest_client"
 version = "0.1.0"
 dependencies = [
@@ -15825,6 +15851,7 @@ dependencies = [
  "release_channel",
  "remote",
  "remote_server",
+ "repo_wiki",
  "reqwest_client",
  "rope",
  "search",

@@ -48,6 +48,7 @@ use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
 use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
 use outline_panel::OutlinePanel;
+use repo_wiki::RepoMapPanel;
 use paths::{
     legacy_local_debug_file_relative_path, legacy_local_settings_file_relative_path,
     legacy_local_tasks_file_relative_path, local_debug_file_relative_path,
@@ -635,6 +636,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let agent_panel = agent_chat::AgentPanel::load(workspace_handle.clone(), cx.clone());
         let chat_panel = agent_chat::ChatPanel::load(workspace_handle.clone(), cx.clone());
         let remote_panel = recent_projects::RemotePanel::load(workspace_handle.clone(), cx.clone());
+        let repo_map_panel = RepoMapPanel::load(workspace_handle.clone(), cx.clone());
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
@@ -658,6 +660,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(search_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(repo_map_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(remote_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(agent_panel, workspace_handle.clone(), cx.clone()),
@@ -5752,6 +5755,7 @@ mod tests {
             git_ui::init(cx);
             project_panel::init(cx);
             outline_panel::init(cx);
+            repo_wiki::init(cx);
             agent_chat::init(None, cx);
             terminal_view::init(cx);
             image_viewer::init(cx);

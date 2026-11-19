@@ -23,12 +23,17 @@ use crate::{
     model_picker::{ModelPicker, Selection, agent_icon},
     session::{AgentSession, AgentStore, Entry, PendingQuestion, Prompt, ToolEntry, ToolStatus},
     slash_commands::{
-        CommandToken, ExtensionCommandCall, app_command_for_text, extension_command_calls,
+        CommandToken, ContextCommand, ExtensionCommandCall, app_command_for_text,
+        context_command_calls, extension_command_calls, replace_context_command_call,
         replace_extension_command_call,
     },
     usage_rings::{ContextCard, UsageCard, context_chip, usage_chip},
 };
 use agent_harness::{ToolCall, UserInputAnswer, UserInputQuestion, view};
+
+/// Upper bound on generated context injected into the composer, so a large
+/// repository cannot stall the editor behind a huge string.
+const MAX_CONTEXT_COMMAND_CHARS: usize = 12_000;
 use i18n::{t, tc};
 use settings::{AgentChatSendKey, Settings as _};
 use gpui::Font;
@@ -212,6 +217,8 @@ pub struct ChatView {
     revealed_turn: Option<usize>,
     flavour_seed: u64,
     _extension_commands: Task<()>,
+    /// In-flight generation for a /conventions or /repo-map expansion.
+    _context_command: Task<()>,
     _copied_reset: Task<()>,
     _revealed_reset: Task<()>,
     _auto_advance: Task<()>,
@@ -390,6 +397,7 @@ impl ChatView {
             revealed_turn: None,
             flavour_seed: flavour,
             _extension_commands: Task::ready(()),
+            _context_command: Task::ready(()),
             _copied_reset: Task::ready(()),
             _revealed_reset: Task::ready(()),
             _auto_advance: Task::ready(()),
@@ -763,6 +771,12 @@ impl ChatView {
         }
         if self.attachments.is_empty()
             && self.editing_queued.is_none()
+            && self.expand_context_commands(text.clone(), window, cx)
+        {
+            return;
+        }
+        if self.attachments.is_empty()
+            && self.editing_queued.is_none()
             && self.redirect_hidden_command(&text, window, cx)
         {
             return;
@@ -924,6 +938,110 @@ impl ChatView {
                 })
                 .log_err();
         }
+    }
+
+    /// Generates the content of a context command (conventions or repo map)
+    /// and puts it in the composer, appending to whatever the user already
+    /// typed. Nothing is ever sent automatically: the user reads the injection
+    /// before it goes out.
+    fn insert_context(
+        &mut self,
+        command: ContextCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.composer.read(cx).text(cx);
+        self.fill_context_command(command, text, window, cx);
+    }
+
+    /// Expands every context command line in `text` in place and leaves the
+    /// result in the composer. Returns `true` when such a command was found, in
+    /// which case the caller must not send the message.
+    fn expand_context_commands(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let calls = context_command_calls(&text);
+        if calls.is_empty() {
+            return false;
+        }
+        // One command per message is the common case; handle the first and keep
+        // the rest literal so a malformed message cannot spawn many builds.
+        let call = &calls[0];
+        self.fill_context_command(call.command, text, window, cx);
+        true
+    }
+
+    fn fill_context_command(
+        &mut self,
+        command: ContextCommand,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The content task is created here, where `&App` is available, so the
+        // async part only has to move strings around.
+        let content_task: Task<Option<String>> = match command {
+            ContextCommand::Conventions => {
+                let roots = self
+                    .project
+                    .read(cx)
+                    .visible_worktrees(cx)
+                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                    .collect::<Vec<_>>();
+                let docs = repo_wiki::conventions::conventions_task(roots, cx);
+                cx.background_spawn(async move {
+                    repo_wiki::conventions::conventions_markdown(&docs.await)
+                })
+            }
+            ContextCommand::RepoMap => {
+                let map = repo_wiki::symbol_map::symbol_map_task(self.project.clone(), cx);
+                cx.background_spawn(async move {
+                    Some(map.await.to_markdown(MAX_CONTEXT_COMMAND_CHARS))
+                })
+            }
+        };
+        let workspace = self.workspace.clone();
+
+        self._context_command = cx.spawn_in(window, async move |this, cx| {
+            let Some(content) = content_task.await else {
+                let message = t!(
+                    "No project conventions found. Create an AGENTS.md at the project root, or use the repo map panel to add one."
+                )
+                .to_string();
+                workspace
+                    .update_in(cx, |workspace, _window, cx| {
+                        workspace.show_toast(
+                            Toast::new(NotificationId::unique::<ChatView>(), message).autohide(),
+                            cx,
+                        )
+                    })
+                    .log_err();
+                return;
+            };
+
+            let expanded = match context_command_calls(&text)
+                .into_iter()
+                .find(|call| call.command == command)
+            {
+                Some(call) => replace_context_command_call(&text, &call, &content),
+                // Completed from the slash menu rather than typed: append
+                // instead of replacing a line that is not there.
+                None if text.trim().is_empty() => content,
+                None => format!("{text}
+
+{content}"),
+            };
+
+            this.update_in(cx, |this, window, cx| {
+                this.composer.update(cx, |editor, cx| {
+                    editor.set_text(expanded.as_str(), window, cx);
+                });
+            })
+            .log_err();
+        });
     }
 
     fn glide_to_bottom(&mut self, cx: &mut Context<Self>) {

@@ -5,7 +5,8 @@ use crate::{
     SelectNextCommand, SelectPreviousCommand, Send, ToggleFocus,
     chat_style::{MENU_ITEM_RADIUS, icon, ink, popover_card, selected_row},
     slash_commands::{
-        AppCommand, CommandItem, CommandTarget, CommandToken, ExtensionSlashCommand, TokenKind,
+        AppCommand, CommandItem, CommandTarget, CommandToken, ContextCommand, ExtensionSlashCommand,
+        TokenKind,
         command_items, completion_token, filter_commands,
     },
 };
@@ -643,6 +644,10 @@ impl ChatView {
             },
             AppCommand::Resume => window.dispatch_action(Box::new(ToggleFocus), cx),
             AppCommand::Stop => self.session.update(cx, |session, cx| session.stop(cx)),
+            AppCommand::Conventions => {
+                self.insert_context(ContextCommand::Conventions, window, cx)
+            }
+            AppCommand::RepoMap => self.insert_context(ContextCommand::RepoMap, window, cx),
             AppCommand::Settings | AppCommand::Diff | AppCommand::Files | AppCommand::Terminal => {
                 let Some(name) = command.action_name() else {
                     return;

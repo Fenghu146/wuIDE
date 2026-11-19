@@ -3,7 +3,7 @@
 > 分支 `wiki-p0` ｜ worktree `D:\wuIDE-main\wuIDE-wiki-p0` ｜ 基线 `d890f9b4` → 已 rebase 到 `c02f07c7`（main）
 > 主回话（RemotePanel）的工作未被触碰；本分支独立开发、独立验证。
 >
-> **交接状态（2026-11-19 整理）**：本分支已 rebase 到 main 的 `c02f07c7`（含 Remote Explorer 面板），领先 main 两个提交（`c94a746f`、`9eda43f3`），可直接 fast-forward 合并；主工作区当前停在 `c02f07c7`，本文件由主回话从 wiki-p0 同步到 main，便于两个会话共享同一份交接说明。
+> **合并状态（2026-11-19）**：本分支已合并入 main（含 Pi-in-worktree 与交接文档），审查中发现并修复了刷新时符号构建标记残留的 bug（`4d8adb3d`）；仓库地图与 Remote Explorer 两个面板共存。
 
 ## 一、这个 P0 做了什么
 
@@ -48,6 +48,7 @@
 c02f07c7  Add a Remote Explorer panel to the sidebar   (main)
 c94a746f  Add repo map panel and project conventions pipeline  (wiki-p0)
 9eda43f3  Rank the repo map by symbol references instead of file size  (wiki-p0)
+4d8adb3d  Clear in-flight symbol markers when refreshing the repo map  (wiki-p0)
 ```
 
 **该分支现已可直接 fast-forward 合并，无需再解冲突。**
