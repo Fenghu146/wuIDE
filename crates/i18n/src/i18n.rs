@@ -794,6 +794,12 @@ mod tests {
         "dev::ShowWorkspaceError",
         "projects::OpenFolderInWsl",
         "projects::OpenWsl",
+        // ETW tracing is Windows-only; its actions are cfg'd out on macOS,
+        // but the zh-CN translation entries are static JSON.
+        "wu::CancelEtwTrace",
+        "wu::RecordEtwTrace",
+        "wu::RecordEtwTraceWithHeapTracing",
+        "wu::SaveEtwTrace",
     ];
 
     /// Actions that are deliberately cfg'd off on Windows (their handlers,
