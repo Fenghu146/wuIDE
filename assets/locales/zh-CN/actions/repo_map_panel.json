@@ -1,4 +1,8 @@
 {
+  "repo_map_panel::CopyToClipboard": {
+    "name": "复制符号地图为 JSON",
+    "description": "把当前符号地图导出为 JSON 并复制到剪贴板。"
+  },
   "repo_map_panel::ToggleFocus": {
     "name": "切换焦点",
     "description": "切换仓库地图面板的焦点。"

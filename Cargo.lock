@@ -10325,6 +10325,7 @@ dependencies = [
  "serde_json",
  "streaming-iterator",
  "tree-sitter",
+ "tree-sitter-cpp",
  "tree-sitter-rust",
  "ui",
  "util",

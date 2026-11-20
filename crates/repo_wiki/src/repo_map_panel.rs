@@ -10,8 +10,8 @@ use std::{
 };
 
 use gpui::{
-    Action, AnyElement, App, AsyncWindowContext, ClickEvent, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, Pixels, ScrollHandle, Task, WeakEntity, Window, actions,
+    Action, AnyElement, App, AsyncWindowContext, ClickEvent, ClipboardItem, Context, Entity,
+    EventEmitter, FocusHandle, Focusable, Pixels, ScrollHandle, Task, WeakEntity, Window, actions,
 };
 use i18n::t;
 use path::{PathStyle, rel_path::RelPath};
@@ -33,6 +33,8 @@ actions!(
     [
         /// Toggle the repo map panel.
         ToggleFocus,
+        /// Copy the whole symbol map to the clipboard as JSON.
+        CopyToClipboard,
     ]
 );
 
@@ -41,6 +43,23 @@ pub fn init(cx: &mut App) {
         workspace.register_action(
             |workspace: &mut Workspace, _: &ToggleFocus, window, cx| {
                 workspace.toggle_panel_focus::<RepoMapPanel>(window, cx);
+            },
+        );
+        workspace.register_action(
+            |workspace: &mut Workspace, _: &CopyToClipboard, _window, cx| {
+                let Some(panel) = workspace.panel::<RepoMapPanel>(cx) else {
+                    return;
+                };
+                let (json, symbols) = panel.read(cx).export_json();
+                cx.write_to_clipboard(ClipboardItem::new_string(json));
+                workspace.show_toast(
+                    Toast::new(
+                        NotificationId::unique::<RepoMapPanel>(),
+                        t!("Copied {count} symbols as JSON", count = symbols).to_string(),
+                    )
+                    .autohide(),
+                    cx,
+                );
             },
         );
     })
@@ -278,6 +297,26 @@ impl RepoMapPanel {
                 })
                 .log_err();
         });
+    }
+
+    /// The symbol maps of every worktree as JSON, with the number of symbols
+    /// they contain: `[{"path": ..., "symbols": [{"name", "line", "kind"}]}]`.
+    fn export_json(&self) -> (String, usize) {
+        let mut files = Vec::new();
+        let mut symbols = 0;
+        for structure in &self.structures {
+            let Some(index) = self.symbol_maps.get(&structure.worktree_id) else {
+                continue;
+            };
+            symbols += index
+                .map
+                .ranked()
+                .map(|file| file.symbols.len())
+                .sum::<usize>();
+            files.extend(index.map.json_entries());
+        }
+        let json = serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_owned());
+        (json, symbols)
     }
 
     /// Starts background symbol builds for worktrees that do not have one yet.

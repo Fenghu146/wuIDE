@@ -22,7 +22,6 @@ use project::Project;
 use streaming_iterator::StreamingIterator as _;
 use language::{Language, LanguageRegistry};
 use path::rel_path::RelPath;
-use util::ResultExt as _;
 
 /// Upper bound on how many files one build parses. Parsing and walking a file
 /// costs single-digit milliseconds, so this keeps a build in the low seconds
@@ -44,7 +43,7 @@ const PAGERANK_DAMPING: f32 = 0.85;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolEntry {
     pub name: Arc<str>,
-    /// The tree-sitter node kind of the definition, e.g. `function_item`.
+    /// The normalized category of the definition, e.g. `function`.
     pub kind: Arc<str>,
     /// Zero-based row of the definition's name.
     pub row: u32,
@@ -60,7 +59,7 @@ pub struct FileSymbols {
 
 #[derive(Clone, Debug, Default)]
 pub struct BuildStats {
-    /// Files handed to the builder.
+    /// Files handed to the builder, excluding those it could not parse at all.
     pub considered: usize,
     /// Files actually parsed and kept.
     pub parsed: usize,
@@ -114,6 +113,29 @@ impl SymbolMap {
             out.push_str("\nNo definitions were found in this repository.\n");
         }
         out
+    }
+
+    /// The map as JSON for the clipboard export: one entry per file that has
+    /// definitions, best-ranked first, with one-based line numbers.
+    pub fn json_entries(&self) -> Vec<serde_json::Value> {
+        self.ranked()
+            .map(|file| {
+                serde_json::json!({
+                    "path": file.rel.display(path::PathStyle::Unix),
+                    "symbols": file
+                        .symbols
+                        .iter()
+                        .map(|symbol| {
+                            serde_json::json!({
+                                "name": symbol.name,
+                                "line": symbol.row + 1,
+                                "kind": symbol.kind,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect()
     }
 }
 
@@ -211,19 +233,41 @@ pub async fn build(
         // Yielding between files lets the task be dropped promptly when the
         // panel closes or a newer build starts.
         futures::future::ready(()).await;
-        let Some(text) = fs.load(&source.abs_path).await.log_err() else {
-            continue;
+        // Unreadable files are common (vendored blobs, binaries, non-UTF-8
+        // sources such as coq's SharedStack) and say nothing about the
+        // project, so they stay at debug level.
+        let text = match fs.load(&source.abs_path).await {
+            Ok(text) => text,
+            Err(error) => {
+                log::debug!(
+                    "repo map: skipping {}: {error:#}",
+                    source.rel.display(path::PathStyle::Unix)
+                );
+                continue;
+            }
         };
-        let Some(language) = languages
+        let language = match languages
             .load_language_for_file_path(&source.abs_path)
             .await
-            .log_err()
-        else {
-            stats.unsupported += 1;
-            continue;
+        {
+            Ok(language) => language,
+            Err(error) => {
+                log::debug!(
+                    "repo map: skipping {}: {error:#}",
+                    source.rel.display(path::PathStyle::Unix)
+                );
+                unsupported(&mut stats);
+                continue;
+            }
         };
+        // Without a grammar and an outline query there is nothing to collect;
+        // such files do not count as considered so the stats stay meaningful.
+        if !has_outline_query(&language) {
+            unsupported(&mut stats);
+            continue;
+        }
         let Some(file) = parse_file(&source, &text, &language) else {
-            stats.unsupported += 1;
+            unsupported(&mut stats);
             continue;
         };
         parsed.push(file);
@@ -261,6 +305,21 @@ struct ParsedFile {
     mentions: HashSet<Arc<str>>,
 }
 
+/// Records a file the builder cannot turn into symbols. Such files do not
+/// occupy a `considered` slot, which counts only files that were inspected.
+fn unsupported(stats: &mut BuildStats) {
+    stats.unsupported += 1;
+    stats.considered = stats.considered.saturating_sub(1);
+}
+
+/// Whether the language has both a grammar and the outline query the symbol
+/// list is built from.
+fn has_outline_query(language: &Language) -> bool {
+    language
+        .grammar()
+        .is_some_and(|grammar| grammar.outline_config.is_some())
+}
+
 fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Option<ParsedFile> {
     let grammar = language.grammar()?;
     let mut parser = tree_sitter::Parser::new();
@@ -278,7 +337,22 @@ fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Opti
     })
 }
 
-/// Runs the grammar's outline query and keeps one entry per definition name.
+/// A definition name reported by the outline query, before the per-file cap.
+struct Candidate {
+    name: Arc<str>,
+    kind: &'static str,
+    row: u32,
+    /// Depth of the matched node; shallow nodes win when the cap trims a file.
+    depth: usize,
+}
+
+/// Runs the grammar's outline query and keeps one readable entry per
+/// definition name.
+///
+/// Outline queries match every `@name` they can reach, so a function body's
+/// local declarations and nested declarators show up next to the definitions
+/// the panel is meant to list. Each match is classified into a readable kind
+/// and filtered before it becomes a [`SymbolEntry`].
 fn collect_symbols(
     config: Option<&language::OutlineConfig>,
     root: tree_sitter::Node<'_>,
@@ -290,39 +364,249 @@ fn collect_symbols(
     let bytes = text.as_bytes();
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut matches = cursor.matches(&config.query, root, bytes);
-    let mut symbols: Vec<SymbolEntry> = Vec::new();
-    let mut seen: HashSet<(u32, String)> = HashSet::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    // Prototypes and definitions of the same name, or a local declared twice,
+    // are one symbol: keyed by the definition body that contains them.
+    let mut seen: HashSet<(usize, &str)> = HashSet::new();
     while let Some(mat) = matches.next() {
-        if symbols.len() >= MAX_SYMBOLS_PER_FILE {
-            break;
-        }
-        let Some(name_node) = mat
-            .captures
-            .iter()
-            .find(|capture| capture.index == config.name_capture_ix)
-            .map(|capture| capture.node)
-        else {
+        let capture = |index: u32| {
+            mat.captures
+                .iter()
+                .find(|capture| capture.index == index)
+                .map(|capture| capture.node)
+        };
+        let (Some(name_node), Some(item_node)) = (
+            capture(config.name_capture_ix),
+            capture(config.item_capture_ix),
+        ) else {
             continue;
         };
+        // An `impl` block is a container, not a definition: its members are
+        // listed on their own and its name only repeats the implemented type.
+        if item_node.kind() == "impl_item" {
+            continue;
+        }
         let Ok(name) = name_node.utf8_text(bytes) else {
             continue;
         };
-        let row = name_node.start_position().row as u32;
-        if !seen.insert((row, name.to_string())) {
+        let name = name.trim();
+        // A declarator's text can span several tokens (`(*fp)(int)`), which is
+        // not a name a reader can use.
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
             continue;
         }
-        let kind = name_node
-            .parent()
-            .map(|parent| parent.kind())
-            .unwrap_or_else(|| name_node.kind());
-        symbols.push(SymbolEntry {
+        if is_inside_parameter_list(name_node) {
+            continue;
+        }
+        if !seen.insert((enclosing_body(item_node).start_byte(), name)) {
+            continue;
+        }
+        candidates.push(Candidate {
             name: name.into(),
-            kind: kind.into(),
-            row,
+            kind: classify_kind(item_node),
+            row: name_node.start_position().row as u32,
+            depth: node_depth(item_node),
         });
     }
-    symbols.sort_by_key(|symbol| symbol.row);
-    symbols
+    finish_symbols(candidates)
+}
+
+/// Applies the per-file cap, keeping the shallowest definitions, then orders
+/// the survivors by line as the rest of the map expects.
+fn finish_symbols(mut candidates: Vec<Candidate>) -> Vec<SymbolEntry> {
+    candidates.sort_by_key(|candidate| (candidate.depth, candidate.row));
+    candidates.truncate(MAX_SYMBOLS_PER_FILE);
+    candidates.sort_by_key(|candidate| candidate.row);
+    candidates
+        .into_iter()
+        .map(|candidate| SymbolEntry {
+            name: candidate.name,
+            kind: candidate.kind.into(),
+            row: candidate.row,
+        })
+        .collect()
+}
+
+/// How deeply a node is nested, used to prefer top-level definitions when a
+/// file has more symbols than the cap allows.
+fn node_depth(mut node: tree_sitter::Node<'_>) -> usize {
+    let mut depth = 0;
+    while let Some(parent) = node.parent() {
+        depth += 1;
+        node = parent;
+    }
+    depth
+}
+
+/// Node kinds that open a definition body. Duplicate names are only collapsed
+/// within one of these, so two functions may each declare a local `i`.
+const DEFINITION_BODIES: &[&str] = &[
+    "class_definition",
+    "class_specifier",
+    "function_definition",
+    "function_item",
+    "impl_item",
+    "interface_declaration",
+    "mod_item",
+    "namespace_definition",
+    "struct_item",
+    "struct_specifier",
+    "trait_item",
+];
+
+fn enclosing_body(mut node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
+    while let Some(parent) = node.parent() {
+        if DEFINITION_BODIES.contains(&parent.kind()) {
+            return parent;
+        }
+        node = parent;
+    }
+    node
+}
+
+/// Parameter names are not definitions. Outline queries are anchored on
+/// definitions, but the free-form `declaration` patterns of C and C++ can
+/// still reach into a parameter list, so the names are filtered by ancestry.
+fn is_inside_parameter_list(node: tree_sitter::Node<'_>) -> bool {
+    const PARAMETER_KINDS: &[&str] = &[
+        "argument_list",
+        "formal_parameters",
+        "optional_parameter_declaration",
+        "parameter",
+        "parameter_declaration",
+        "parameter_list",
+        "parameters",
+        "preproc_params",
+        "template_parameter_list",
+        "type_parameters",
+        "variadic_parameter",
+        "variadic_parameter_declaration",
+    ];
+    let mut current = Some(node);
+    while let Some(node) = current {
+        if PARAMETER_KINDS.contains(&node.kind()) {
+            return true;
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// The readable category of a definition.
+///
+/// `@item` often lands on a declarator or a plain `declaration`, whose kind
+/// says nothing about what is being defined. Walking up to the nearest node
+/// that carries meaning (`function_definition`, `class_specifier`,
+/// `field_declaration`, ...) classifies those instead of exposing the
+/// tree-sitter node name.
+fn classify_kind(item: tree_sitter::Node<'_>) -> &'static str {
+    let mut current = Some(item);
+    while let Some(node) = current {
+        if let Some(kind) = semantic_kind(node) {
+            return refine_kind(node, kind);
+        }
+        current = node.parent();
+    }
+    "symbol"
+}
+
+fn semantic_kind(node: tree_sitter::Node<'_>) -> Option<&'static str> {
+    let kind = match node.kind() {
+        "arrow_function"
+        | "constructor_declaration"
+        | "destructor_declaration"
+        | "function_declaration"
+        | "function_declarator"
+        | "function_definition"
+        | "function_item"
+        | "function_signature_item"
+        | "method_declaration"
+        | "method_definition" => "function",
+        // A declaration covers variables and function prototypes alike.
+        "declaration" | "lexical_declaration" | "variable_declaration" => {
+            if declares_function(node) {
+                "function"
+            } else {
+                "variable"
+            }
+        }
+        "class_declaration" | "class_definition" | "class_specifier" | "object_type" => "class",
+        "struct_definition" | "struct_item" | "struct_specifier" | "union_definition"
+        | "union_specifier" => "struct",
+        "enum_definition" | "enum_item" | "enum_specifier" => "enum",
+        "enum_variant" | "enumerator" => "variant",
+        "trait_declaration" | "trait_definition" | "trait_item" => "trait",
+        "interface_declaration" | "interface_definition" => "interface",
+        "field_declaration" | "field_definition" => {
+            if declares_function(node) {
+                "function"
+            } else {
+                "field"
+            }
+        }
+        "property_declaration" | "public_field_definition" => "field",
+        "mod_item" | "module" | "module_declaration" | "namespace_definition" => "module",
+        "const_item" | "constant_declaration" | "static_item" => "constant",
+        "associated_type"
+        | "concept_definition"
+        | "type_alias_declaration"
+        | "type_declaration"
+        | "type_definition"
+        | "type_item" => "type",
+        "macro_definition" | "preproc_def" | "preproc_function_def" => "macro",
+        _ => return None,
+    };
+    Some(kind)
+}
+
+/// Whether a declaration's declarator chain ends in a function, which tells a
+/// prototype (`void sort(int);`) from a variable (`int i = 0;`).
+fn declares_function(node: tree_sitter::Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    let declarators: Vec<_> = node
+        .children_by_field_name("declarator", &mut cursor)
+        .collect();
+    declarators.into_iter().any(declarator_is_function)
+}
+
+fn declarator_is_function(declarator: tree_sitter::Node<'_>) -> bool {
+    if declarator.kind() == "function_declarator" {
+        return true;
+    }
+    let mut cursor = declarator.walk();
+    let nested: Vec<_> = declarator
+        .children_by_field_name("declarator", &mut cursor)
+        .collect();
+    nested.into_iter().any(declarator_is_function)
+}
+
+/// A function that lives in a type body is a method, not a free function.
+fn refine_kind(node: tree_sitter::Node<'_>, kind: &'static str) -> &'static str {
+    if kind == "function" && has_type_ancestor(node) {
+        "method"
+    } else {
+        kind
+    }
+}
+
+fn has_type_ancestor(node: tree_sitter::Node<'_>) -> bool {
+    const TYPE_BODIES: &[&str] = &[
+        "class_definition",
+        "class_specifier",
+        "impl_item",
+        "interface_declaration",
+        "object_type",
+        "struct_specifier",
+        "trait_item",
+    ];
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if TYPE_BODIES.contains(&parent.kind()) {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 /// Collects identifier-shaped tokens. Every tree-sitter grammar in this
@@ -467,7 +751,7 @@ mod tests {
                 .iter()
                 .map(|name| SymbolEntry {
                     name: (*name).into(),
-                    kind: "function_item".into(),
+                    kind: "function".into(),
                     row: 0,
                 })
                 .collect(),
@@ -608,6 +892,17 @@ mod tests {
         );
         // The identifier walk should have collected plenty of mentions.
         assert!(parsed.mentions.len() > 50, "mentions: {}", parsed.mentions.len());
+
+        // Kinds are normalized: no node names and no bare "symbol" fallbacks.
+        let kinds: Vec<&str> = parsed.symbols.iter().map(|symbol| &*symbol.kind).collect();
+        assert!(kinds.contains(&"struct"), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"method"), "kinds: {kinds:?}");
+        assert!(
+            kinds
+                .iter()
+                .all(|kind| !kind.contains('_') && *kind != "symbol"),
+            "kinds: {kinds:?}"
+        );
     }
 
     #[test]
@@ -673,7 +968,7 @@ mod tests {
                     rank: 0.5,
                     symbols: vec![SymbolEntry {
                         name: "main".into(),
-                        kind: "function_item".into(),
+                        kind: "function".into(),
                         row: 0,
                     }],
                 },
@@ -685,7 +980,7 @@ mod tests {
                     rank: 0.1,
                     symbols: vec![SymbolEntry {
                         name: "other".into(),
-                        kind: "function_item".into(),
+                        kind: "function".into(),
                         row: 0,
                     }],
                 },
@@ -695,12 +990,212 @@ mod tests {
 
         let full = map.to_markdown(10_000);
         assert!(full.contains("src/lib.rs"));
-        assert!(full.contains("function_item main"));
+        assert!(full.contains("function main"));
         assert!(full.find("src/lib.rs") < full.find("src/big.rs"));
 
         // A budget smaller than the first file block stops before anything is
         // written, and says so instead of emitting a bare header.
         let tiny = map.to_markdown(10);
         assert!(tiny.contains("No definitions were found"));
+    }
+
+    fn cpp_symbols(text: &str) -> Vec<SymbolEntry> {
+        let language = languages::language("cpp", tree_sitter_cpp::LANGUAGE.into());
+        let grammar = language.grammar().expect("cpp grammar is built in");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar.ts_language)
+            .expect("cpp is a parseable language");
+        let tree = parser.parse(text, None).expect("cpp source parses");
+        collect_symbols(grammar.outline_config.as_ref(), tree.root_node(), text)
+    }
+
+    fn kind_of<'a>(symbols: &'a [SymbolEntry], name: &str) -> &'a str {
+        symbols
+            .iter()
+            .find(|symbol| &*symbol.name == name)
+            .map_or("<missing>", |symbol| &symbol.kind)
+    }
+
+    #[test]
+    fn a_cpp_sorting_function_yields_one_function_and_no_parameters() {
+        let symbols = cpp_symbols(
+            r#"
+void insertionSort(int arr[], int n) {
+    int i, key, j;
+    for (i = 1; i < n; i++) {
+        key = arr[i];
+        j = i - 1;
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j = j - 1;
+        }
+        arr[j + 1] = key;
+    }
+}
+"#,
+        );
+
+        let functions: Vec<&SymbolEntry> = symbols
+            .iter()
+            .filter(|symbol| &*symbol.kind == "function")
+            .collect();
+        assert_eq!(functions.len(), 1, "symbols: {symbols:?}");
+        assert_eq!(&*functions[0].name, "insertionSort");
+        // The parameters are the loudest source of noise in C and C++.
+        assert!(
+            !symbols
+                .iter()
+                .any(|symbol| &*symbol.name == "arr" || &*symbol.name == "n"),
+            "parameters leaked into {symbols:?}"
+        );
+        // Locals stay, but with a readable kind instead of `init_declarator`.
+        assert_eq!(kind_of(&symbols, "i"), "variable");
+        assert!(
+            symbols
+                .iter()
+                .all(|symbol| !symbol.kind.contains("declarator"))
+        );
+    }
+
+    #[test]
+    fn names_inside_a_parameter_list_are_not_definitions() {
+        let text = "void sort(int *values, int size);";
+        let language = languages::language("cpp", tree_sitter_cpp::LANGUAGE.into());
+        let grammar = language.grammar().expect("cpp grammar is built in");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&grammar.ts_language)
+            .expect("cpp is a parseable language");
+        let tree = parser.parse(text, None).expect("cpp source parses");
+        let root = tree.root_node();
+        let node_at = |needle: &str| {
+            let start = text.find(needle).expect("needle is in the source");
+            root.descendant_for_byte_range(start, start + needle.len())
+                .expect("node covers the needle")
+        };
+
+        assert!(is_inside_parameter_list(node_at("size")));
+        assert!(!is_inside_parameter_list(node_at("sort")));
+    }
+
+    #[test]
+    fn cpp_definitions_get_readable_kinds() {
+        let symbols = cpp_symbols(
+            r#"
+#define LIMIT 10
+namespace sorting {
+typedef int Count;
+enum Mode { Ascending, Descending };
+class Sorter {
+ public:
+  int count;
+  void sort(int *values, int size);
+};
+int helper(int value);
+}
+"#,
+        );
+
+        assert_eq!(kind_of(&symbols, "LIMIT"), "macro");
+        assert_eq!(kind_of(&symbols, "sorting"), "module");
+        assert_eq!(kind_of(&symbols, "Count"), "type");
+        assert_eq!(kind_of(&symbols, "Mode"), "enum");
+        assert_eq!(kind_of(&symbols, "Ascending"), "variant");
+        assert_eq!(kind_of(&symbols, "Sorter"), "class");
+        assert_eq!(kind_of(&symbols, "count"), "field");
+        assert_eq!(kind_of(&symbols, "sort"), "method");
+        assert_eq!(kind_of(&symbols, "helper"), "function");
+        // No raw tree-sitter node name leaks into the panel.
+        assert!(
+            symbols.iter().all(|symbol| !symbol.kind.contains('_')),
+            "symbols: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_names_collapse_within_a_definition_only() {
+        let symbols = cpp_symbols(
+            r#"
+void first() {
+    int i = 0;
+    for (int i = 0; i < 2; i++) {
+        int i = 3;
+    }
+}
+void second() {
+    int i = 0;
+}
+"#,
+        );
+
+        let count = |name: &str| {
+            symbols
+                .iter()
+                .filter(|symbol| &*symbol.name == name)
+                .count()
+        };
+        assert_eq!(count("i"), 2, "one `i` per function body: {symbols:?}");
+        assert_eq!(count("first"), 1);
+        assert_eq!(count("second"), 1);
+    }
+
+    #[test]
+    fn the_symbol_cap_keeps_shallow_definitions_first() {
+        let candidates: Vec<Candidate> = (0..(MAX_SYMBOLS_PER_FILE + 20))
+            .map(|index| Candidate {
+                name: format!("deep_{index}").into(),
+                kind: "variable",
+                row: index as u32,
+                depth: 4,
+            })
+            .chain([Candidate {
+                name: "top_level".into(),
+                kind: "function",
+                row: (MAX_SYMBOLS_PER_FILE + 40) as u32,
+                depth: 1,
+            }])
+            .collect();
+
+        let symbols = finish_symbols(candidates);
+        assert_eq!(symbols.len(), MAX_SYMBOLS_PER_FILE);
+        // A late top-level definition survives; only the deepest tail is cut.
+        assert!(symbols.iter().any(|symbol| &*symbol.name == "top_level"));
+        assert!(
+            !symbols
+                .iter()
+                .any(|symbol| &*symbol.name == format!("deep_{}", MAX_SYMBOLS_PER_FILE + 19))
+        );
+        // Whatever the cap kept stays ordered by line for the panel.
+        assert!(symbols.windows(2).all(|pair| pair[0].row <= pair[1].row));
+    }
+
+    #[test]
+    fn json_export_uses_one_based_lines_and_relative_paths() {
+        let map = SymbolMap {
+            files: vec![FileSymbols {
+                rel: RelPath::new(std::path::Path::new("src/lib.rs"), path::PathStyle::local())
+                    .expect("valid test path")
+                    .into_arc(),
+                size: 10,
+                rank: 1.,
+                symbols: vec![SymbolEntry {
+                    name: "foo".into(),
+                    kind: "function".into(),
+                    row: 11,
+                }],
+            }],
+            stats: BuildStats::default(),
+        };
+
+        let json = serde_json::to_string(&map.json_entries()).expect("values serialize");
+        let actual: serde_json::Value = serde_json::from_str(&json).expect("json parses");
+        assert_eq!(
+            actual,
+            serde_json::json!([{
+                "path": "src/lib.rs",
+                "symbols": [{"name": "foo", "line": 12, "kind": "function"}],
+            }])
+        );
     }
 }

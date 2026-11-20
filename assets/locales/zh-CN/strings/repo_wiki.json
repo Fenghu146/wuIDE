@@ -1,4 +1,5 @@
 {
+  "Copied {count} symbols as JSON": "已把 {count} 个符号复制为 JSON",
   "Create AGENTS.md": "创建 AGENTS.md",
   "Failed to create {path}: {error}": "创建 {path} 失败：{error}",
   "No project is open": "没有打开的项目",
