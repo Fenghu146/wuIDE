@@ -2,6 +2,13 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## 1.4.2 - 2026-11-20
+
+- Repository map: symbols now carry a readable kind (function, method, class, struct and so on) instead of a raw syntax node name, function parameters and nested declarators are no longer listed, each file's top-level symbols come first, and duplicates are dropped.
+- Add **Copy Symbols as JSON** to the repo map: `ctrl-alt-m` opens the panel and `ctrl-alt-shift-m` copies its symbols as JSON (`ctrl-cmd-m` and `ctrl-cmd-shift-m` on macOS).
+- Give the built-in Pi its project conventions in the system prompt on every start, and let it query the repository map on demand through the `repo_map` and `symbols` MCP tools. Snapshots are written to the IDE data directory, never into the project.
+- Repository map: skip files that have no syntax tree, so they no longer take a symbol budget slot or log UTF-8 parse errors.
+
 ## 1.4.1 - 2026-11-20
 
 - Fix Wu crashing right after launch: the repo map panel read the workspace while the workspace was still being updated, which 1.4.0 hit on every start.
