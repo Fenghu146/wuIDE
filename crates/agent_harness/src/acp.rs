@@ -49,6 +49,10 @@ const PI_REASONING_LEVELS: &[ReasoningLevel] = &[
 const PI_MODEL_CONFIG_ID: &str = "model";
 const PI_THINKING_CONFIG_ID: &str = "thought_level";
 
+// Bump when the addendum text changes, so a file written by an older build is
+// recognizable. Pi reads it from the agent directory on every start.
+const PI_ADDENDUM_VERSION: u32 = 1;
+
 #[derive(Clone)]
 struct AcpPreset {
     id: HarnessId,
@@ -540,6 +544,7 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
             log::warn!("failed to restrict permissions on {dir:?}: {error}");
         }
     }
+    write_pi_addendum(&agent_dir);
 
     let settings_path = agent_dir.join("settings.json");
     if let Some(source_agent) = source_pi_agent_dir() {
@@ -593,6 +598,58 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 
     Some((home, agent_dir))
+}
+
+/// Where Pi looks for the instructions Wu appends to its system prompt.
+fn pi_addendum_path(agent_dir: &Path) -> PathBuf {
+    agent_dir.join("APPEND_SYSTEM.md")
+}
+
+/// The instructions Wu appends to Pi's system prompt.
+///
+/// Pi reads `APPEND_SYSTEM.md` from its agent directory on every start and adds
+/// it to its own prompt as an `<addendum>` block. The agent directory is shared
+/// by every chat and every project, so this text stays free of project and
+/// session state: Pi derives whatever it needs from its working directory.
+fn pi_addendum(version: u32) -> String {
+    format!(
+        r#"<!-- wu:pi-addendum:v{version} -->
+# Working inside Wu
+
+You are running inside Wu (wuIDE), a fork of the Zed editor built on GPUI. Wu
+has a built-in Pi agent and adds these instructions to your system prompt every
+time it starts you.
+
+- Your working directory is the project root. Treat it as the base for every
+  relative path.
+- Project conventions live in `AGENTS.md` at the project root. Read it before
+  making structural or stylistic decisions about this codebase.
+- Wu may maintain a repository map at `.wu/repo-map.json` in the project root.
+  When that file exists, prefer it for structural orientation - which files
+  matter and where things live - over guessing from directory listings or search
+  results. When it does not exist, ignore it completely: do not report an error,
+  wait for it, or invent its contents.
+- This file is shared by every project and every chat, so it holds no project or
+  session state. Derive anything project-specific from the working directory.
+- Reply in the language the user writes in.
+"#
+    )
+}
+
+/// Writes Wu's addendum into the isolated Pi agent directory.
+///
+/// This runs before every Pi launch and overwrites the file, so a launch never
+/// depends on leftovers. It never touches the user's own `AGENTS.md`, and a
+/// failure only costs the addendum - Pi still starts.
+fn write_pi_addendum(agent_dir: &Path) {
+    let path = pi_addendum_path(agent_dir);
+    if let Err(error) = std::fs::write(&path, pi_addendum(PI_ADDENDUM_VERSION)) {
+        log::error!("failed to write Pi addendum {path:?}: {error}");
+        return;
+    }
+    if let Err(error) = restrict_to_owner(&path) {
+        log::error!("failed to restrict permissions on {path:?}: {error}");
+    }
 }
 
 fn isolated_pi_settings(source: &Value) -> Value {
@@ -1549,5 +1606,62 @@ mod tests {
     fn content_text_reads_blocks() {
         let content = json!([{ "type": "text", "text": "hello " }, { "type": "text", "text": "world" }]);
         assert_eq!(content_text(Some(&content)).as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn addendum_leads_with_its_version_marker() {
+        assert_eq!(
+            pi_addendum(7).lines().next(),
+            Some("<!-- wu:pi-addendum:v7 -->")
+        );
+    }
+
+    #[test]
+    fn addendum_tells_pi_where_project_context_lives() {
+        let text = pi_addendum(PI_ADDENDUM_VERSION);
+        for needle in [
+            "Wu (wuIDE)",
+            "working directory is the project root",
+            "`AGENTS.md`",
+            "`.wu/repo-map.json`",
+            "Reply in the language the user writes in",
+        ] {
+            assert!(text.contains(needle), "addendum lost {needle:?}");
+        }
+        // A file shared by every project must not carry an absolute path.
+        assert!(!text.contains('\\'), "addendum must not embed platform paths");
+    }
+
+    #[test]
+    fn addendum_path_sits_in_the_agent_dir() {
+        let agent_dir = Path::new("pi-home").join(".pi").join("agent");
+        assert_eq!(
+            pi_addendum_path(&agent_dir),
+            agent_dir.join("APPEND_SYSTEM.md")
+        );
+    }
+
+    #[test]
+    fn writing_the_addendum_twice_leaves_a_single_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        write_pi_addendum(dir.path());
+        write_pi_addendum(dir.path());
+
+        let written = std::fs::read_to_string(pi_addendum_path(dir.path())).unwrap();
+        assert_eq!(written, pi_addendum(PI_ADDENDUM_VERSION));
+        assert_eq!(written.matches("<!-- wu:pi-addendum:").count(), 1);
+    }
+
+    #[test]
+    fn writing_the_addendum_keeps_the_users_agents_md() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "user rules\n").unwrap();
+
+        write_pi_addendum(dir.path());
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+            "user rules\n"
+        );
     }
 }
