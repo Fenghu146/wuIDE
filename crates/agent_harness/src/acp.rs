@@ -51,7 +51,7 @@ const PI_THINKING_CONFIG_ID: &str = "thought_level";
 
 // Bump when the addendum text changes, so a file written by an older build is
 // recognizable. Pi reads it from the agent directory on every start.
-const PI_ADDENDUM_VERSION: u32 = 1;
+const PI_ADDENDUM_VERSION: u32 = 2;
 
 #[derive(Clone)]
 struct AcpPreset {
@@ -79,6 +79,9 @@ pub struct AcpHarness {
 struct Launch {
     program: PathBuf,
     args: Vec<String>,
+    /// Directory the bundled agent runtime lives in; it owns `node_modules`,
+    /// the agent's own data directory and anything else shipped beside them.
+    agent_dir: PathBuf,
     /// Directories prepended to PATH for the child: the bundled runtime's own
     /// directory (so npm shims find our `node`) and `node_modules/.bin`.
     path_prepend: Vec<PathBuf>,
@@ -152,13 +155,14 @@ impl AcpHarness {
         // npm's POSIX shims exec `node` from PATH, so the bundled node next to
         // them has to come first for the runtime to be used even on machines
         // without a system Node install.
-        let mut path_prepend = vec![agent_dir];
+        let mut path_prepend = vec![agent_dir.clone()];
         if bin.is_dir() {
             path_prepend.push(bin);
         }
         Ok(Launch {
             program,
             args,
+            agent_dir,
             path_prepend,
         })
     }
@@ -299,7 +303,7 @@ impl AcpHarness {
     /// there. Providers without a credential are skipped — Pi cannot use them.
     fn pi_models(&self) -> Option<Vec<Model>> {
         let launch = self.resolve_launch().ok()?;
-        let (_home, agent_dir) = prepare_pi_home(&launch.program)?;
+        let (_home, agent_dir) = prepare_pi_home(&launch.program, &launch.agent_dir)?;
         let ladder = PI_REASONING_LEVELS.to_vec();
         let mut models = Vec::new();
         let mut seen = HashSet::new();
@@ -525,7 +529,7 @@ fn agent_data_root(program: &Path) -> PathBuf {
 /// The model, credential and settings files are mirrored from the user's global
 /// Pi config on every launch, so a profile switch in cc-switch (which writes
 /// that config) reaches the bundled Pi without wiping the isolated home.
-fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
+fn prepare_pi_home(program: &Path, agent_root: &Path) -> Option<(PathBuf, PathBuf)> {
     let base = agent_data_root(program);
     let home = base.join("pi-home");
     let agent_dir = home.join(".pi").join("agent");
@@ -545,6 +549,7 @@ fn prepare_pi_home(program: &Path) -> Option<(PathBuf, PathBuf)> {
         }
     }
     write_pi_addendum(&agent_dir);
+    write_pi_mcp_config(&agent_dir, agent_root, program);
 
     let settings_path = agent_dir.join("settings.json");
     if let Some(source_agent) = source_pi_agent_dir() {
@@ -624,11 +629,13 @@ time it starts you.
   relative path.
 - Project conventions live in `AGENTS.md` at the project root. Read it before
   making structural or stylistic decisions about this codebase.
-- Wu may maintain a repository map at `.wu/repo-map.json` in the project root.
-  When that file exists, prefer it for structural orientation - which files
-  matter and where things live - over guessing from directory listings or search
-  results. When it does not exist, ignore it completely: do not report an error,
-  wait for it, or invent its contents.
+- Wu serves the project's structure as two tools: `repo_map` lists the files the
+  rest of the repository refers to most, with their definitions, and `symbols`
+  lists one file's definitions. Call `repo_map` when structural context would
+  help - which files matter, where something lives - instead of guessing from
+  directory listings or search results. If it reports that no snapshot exists
+  yet, ask the user to open the Repository Map panel and try again; never invent
+  the map.
 - This file is shared by every project and every chat, so it holds no project or
   session state. Derive anything project-specific from the working directory.
 - Reply in the language the user writes in.
@@ -645,6 +652,100 @@ fn write_pi_addendum(agent_dir: &Path) {
     let path = pi_addendum_path(agent_dir);
     if let Err(error) = std::fs::write(&path, pi_addendum(PI_ADDENDUM_VERSION)) {
         log::error!("failed to write Pi addendum {path:?}: {error}");
+        return;
+    }
+    if let Err(error) = restrict_to_owner(&path) {
+        log::error!("failed to restrict permissions on {path:?}: {error}");
+    }
+}
+
+/// The name Wu registers its MCP server under, and the prefix Pi gives its
+/// tools (`mcp__wu__repo_map`).
+const PI_MCP_SERVER_NAME: &str = "wu";
+
+fn pi_mcp_config_path(agent_dir: &Path) -> PathBuf {
+    agent_dir.join("mcp.json")
+}
+
+/// The script Wu ships for Pi to call Wu's repository map.
+fn pi_mcp_server_script(agent_root: &Path) -> PathBuf {
+    agent_root
+        .join("mcp")
+        .join("wu-repo-map")
+        .join("server.js")
+}
+
+/// Wu's own MCP entry.
+///
+/// `exposure` must be `direct`: with Pi's default (`codemode`) the tools are
+/// only reachable through codemode scripts and are never declared to the model,
+/// which makes them look broken.
+fn pi_mcp_server_entry(agent_root: &Path, node: &Path, agent_dir: &Path) -> Value {
+    json!({
+        "command": node,
+        "args": [pi_mcp_server_script(agent_root)],
+        "env": { "PI_CODING_AGENT_DIR": agent_dir },
+        "exposure": "direct",
+        "description": "Wu's repository map: file and symbol structure of the open project."
+    })
+}
+
+/// Adds Wu's server to Pi's `mcp.json` and leaves every other entry alone.
+///
+/// The file belongs to Pi, not to Wu, so an unreadable one is never replaced:
+/// dropping the user's servers to register ours would be a bad trade. Returns
+/// the new file contents, or `None` when the existing file must be kept as is.
+fn merge_mcp_config(existing: Option<&str>, entry: Value) -> Option<String> {
+    let mut config = match existing.map(str::trim) {
+        None | Some("") => json!({}),
+        Some(text) => match serde_json::from_str::<Value>(text) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) => {
+                log::error!("Pi's mcp.json is not a JSON object; leaving it untouched");
+                return None;
+            }
+            Err(error) => {
+                log::error!("Pi's mcp.json is not valid JSON ({error}); leaving it untouched");
+                return None;
+            }
+        },
+    };
+
+    let Some(object) = config.as_object_mut() else {
+        return None;
+    };
+    let servers = object.entry("mcpServers").or_insert_with(|| json!({}));
+    let Some(servers) = servers.as_object_mut() else {
+        log::error!("Pi's mcp.json has a non-object mcpServers; leaving it untouched");
+        return None;
+    };
+    servers.insert(PI_MCP_SERVER_NAME.to_owned(), entry);
+
+    serde_json::to_string_pretty(&config).ok()
+}
+
+/// Registers Wu's repository map with Pi through the agent directory's
+/// `mcp.json`. Failing here costs the tool, not the run.
+fn write_pi_mcp_config(agent_dir: &Path, agent_root: &Path, node: &Path) {
+    let path = pi_mcp_config_path(agent_dir);
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            log::error!("failed to read Pi MCP config {path:?}: {error}");
+            return;
+        }
+    };
+
+    let entry = pi_mcp_server_entry(agent_root, node, agent_dir);
+    let Some(merged) = merge_mcp_config(existing.as_deref(), entry) else {
+        return;
+    };
+    if existing.as_deref() == Some(merged.as_str()) {
+        return;
+    }
+    if let Err(error) = std::fs::write(&path, merged) {
+        log::error!("failed to write Pi MCP config {path:?}: {error}");
         return;
     }
     if let Err(error) = restrict_to_owner(&path) {
@@ -925,7 +1026,7 @@ async fn drive_inner(
     // they never write into (or read plugin state from) the machine-wide install,
     // and so the sandboxed app never has to touch the user's real home.
     let pi_home = if harness_id == HarnessId::Pi {
-        prepare_pi_home(&launch.program)
+        prepare_pi_home(&launch.program, &launch.agent_dir)
     } else {
         None
     };
@@ -1623,7 +1724,7 @@ mod tests {
             "Wu (wuIDE)",
             "working directory is the project root",
             "`AGENTS.md`",
-            "`.wu/repo-map.json`",
+            "`repo_map`",
             "Reply in the language the user writes in",
         ] {
             assert!(text.contains(needle), "addendum lost {needle:?}");
@@ -1663,5 +1764,145 @@ mod tests {
             std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
             "user rules\n"
         );
+    }
+
+    fn server_entry() -> Value {
+        pi_mcp_server_entry(
+            Path::new("agents"),
+            Path::new("agents/node"),
+            Path::new("pi-home/.pi/agent"),
+        )
+    }
+
+    #[test]
+    fn mcp_entry_exposes_tools_directly() {
+        let entry = server_entry();
+        let script = pi_mcp_server_script(Path::new("agents"));
+        // Pi's default exposure is `codemode`, which hides the tools from the model.
+        assert_eq!(entry["exposure"], "direct");
+        assert_eq!(entry["command"], "agents/node");
+        assert_eq!(entry["args"][0].as_str(), script.to_str());
+        assert_eq!(entry["env"]["PI_CODING_AGENT_DIR"], "pi-home/.pi/agent");
+    }
+
+    #[test]
+    fn mcp_config_keeps_the_servers_the_user_configured() {
+        let existing = r#"{
+  "mcpServers": {
+    "github": { "url": "https://example.com/mcp", "exposure": "deferred" }
+  }
+}"#;
+        let merged = merge_mcp_config(Some(existing), server_entry()).unwrap();
+        let config: Value = serde_json::from_str(&merged).unwrap();
+
+        assert_eq!(
+            config["mcpServers"]["github"]["url"],
+            "https://example.com/mcp"
+        );
+        assert_eq!(config["mcpServers"]["github"]["exposure"], "deferred");
+        assert_eq!(config["mcpServers"]["wu"]["exposure"], "direct");
+    }
+
+    #[test]
+    fn mcp_config_creates_the_file_when_there_is_none() {
+        let merged = merge_mcp_config(None, server_entry()).unwrap();
+        let config: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(config["mcpServers"]["wu"]["exposure"], "direct");
+    }
+
+    #[test]
+    fn mcp_config_replaces_only_wus_entry() {
+        let existing = r#"{"mcpServers":{"wu":{"exposure":"codemode"},"other":{"command":"x"}}}"#;
+        let merged = merge_mcp_config(Some(existing), server_entry()).unwrap();
+        let config: Value = serde_json::from_str(&merged).unwrap();
+
+        assert_eq!(config["mcpServers"]["wu"]["exposure"], "direct");
+        assert_eq!(config["mcpServers"]["other"]["command"], "x");
+    }
+
+    #[test]
+    fn mcp_config_is_left_alone_when_it_cannot_be_parsed() {
+        // Overwriting would silently delete every server the user configured.
+        assert!(merge_mcp_config(Some("{ not json"), server_entry()).is_none());
+        assert!(merge_mcp_config(Some("[]"), server_entry()).is_none());
+        assert!(merge_mcp_config(Some(r#"{"mcpServers":[]}"#), server_entry()).is_none());
+    }
+
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the MCP server is a separate Node process"
+    )]
+    fn bundled_mcp_server_lists_its_tools_and_survives_a_missing_snapshot() {
+        use std::io::{Read as _, Write as _};
+
+        let agents = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates directory")
+            .join("wu/resources/agents");
+        let script = agents.join("mcp/wu-repo-map/server.js");
+        assert!(script.is_file(), "the bundled MCP server is missing");
+
+        let bundled = agents.join(if cfg!(windows) { "node.exe" } else { "node" });
+        let node = if bundled.is_file() {
+            bundled
+        } else {
+            PathBuf::from("node")
+        };
+
+        let empty_home = tempfile::tempdir().unwrap();
+        let mut child = match std::process::Command::new(&node)
+            .arg(&script)
+            .env("PI_CODING_AGENT_DIR", empty_home.path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("skipping the MCP server test: cannot run {node:?}: {error}");
+                return;
+            }
+        };
+
+        let mut stdin = child.stdin.take().unwrap();
+        for request in [
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "repo_map", "arguments": {}}}),
+        ] {
+            writeln!(stdin, "{request}").unwrap();
+        }
+        drop(stdin);
+
+        let mut stdout = String::new();
+        child.stdout.take().unwrap().read_to_string(&mut stdout).unwrap();
+        child.wait().unwrap();
+
+        let responses: Vec<Value> = stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+
+        let tools = responses
+            .iter()
+            .find(|response| response["id"] == 2)
+            .expect("tools/list answered")["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(tools, ["repo_map", "symbols"]);
+
+        // No snapshot in a fresh agent directory: the model must be told what to
+        // do, not handed a protocol error it cannot act on.
+        let missing = responses
+            .iter()
+            .find(|response| response["id"] == 3)
+            .expect("tools/call answered");
+        assert!(missing.get("error").is_none(), "a missing snapshot is not a failure");
+        let text = missing["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Repository Map panel"), "unhelpful message: {text}");
     }
 }

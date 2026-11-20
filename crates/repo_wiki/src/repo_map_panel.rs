@@ -26,6 +26,7 @@ use workspace::{
 };
 
 use crate::conventions::{AGENTS_FILE_NAME, AGENTS_TEMPLATE};
+use crate::snapshot;
 use crate::symbol_map::{self, SourceFile, SymbolMap};
 
 actions!(
@@ -325,7 +326,7 @@ impl RepoMapPanel {
         let fs = project.read(cx).fs().clone();
         let languages = project.read(cx).languages().clone();
 
-        let mut jobs: Vec<(WorktreeId, Vec<SourceFile>)> = Vec::new();
+        let mut jobs: Vec<(WorktreeId, PathBuf, Vec<SourceFile>)> = Vec::new();
         for structure in &self.structures {
             if self.symbol_maps.contains_key(&structure.worktree_id)
                 || self.building.contains(&structure.worktree_id)
@@ -335,20 +336,27 @@ impl RepoMapPanel {
             let mut sources = Vec::new();
             collect_sources(&structure.root, &structure.root_path, &mut sources);
             if !sources.is_empty() {
-                jobs.push((structure.worktree_id, sources));
+                jobs.push((structure.worktree_id, structure.root_path.clone(), sources));
             }
         }
         if jobs.is_empty() {
             return;
         }
-        for (worktree_id, _) in &jobs {
+        for (worktree_id, _, _) in &jobs {
             self.building.insert(*worktree_id);
         }
         cx.notify();
 
         self._symbol_task = cx.spawn_in(window, async move |this, cx| {
-            for (worktree_id, sources) in jobs {
+            for (worktree_id, root_path, sources) in jobs {
                 let map = symbol_map::build(sources, fs.clone(), languages.clone()).await;
+                // Pi's MCP server reads this file with no IPC channel, so it has
+                // to be written wherever the map itself was produced.
+                if let Err(error) =
+                    snapshot::write(&map, &root_path, &paths::repo_map_snapshots_dir())
+                {
+                    log::error!("failed to write the repo map snapshot for {root_path:?}: {error}");
+                }
                 this.update_in(cx, |panel, _window, cx| {
                     panel.building.remove(&worktree_id);
                     panel.symbol_maps
