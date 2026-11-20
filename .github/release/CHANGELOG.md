@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## 1.4.1 - 2026-11-20
+
+- Fix Wu crashing right after launch: the repo map panel read the workspace while the workspace was still being updated, which 1.4.0 hit on every start.
+- Fix Wu crashing right after launch when the Remote Explorer panel's settings observer updated the panel from inside its own update.
+- Fix the Repo Map button in the activity bar doing nothing: the panel's actions were never registered in production builds.
+- Ask Agent About Selection now starts the new chat with the agent and model of the chat you are looking at, or the most recent one, instead of always picking Claude with Fable 5.
+- Add **Add Selection to Chat** to the editor context menu: it appends the selected code to the chat you are looking at, and tells you to open a chat first instead of starting one for you.
+
 ## Unreleased
 
 - Keep the isolated Pi home private: its directories are now `0700` and the credentials and transcripts inside it `0600`, so other accounts on the same machine can no longer read them.
