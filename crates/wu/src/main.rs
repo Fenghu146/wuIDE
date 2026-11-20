@@ -632,6 +632,7 @@ fn main() {
         project_symbols::init(cx);
         project_panel::init(cx);
         outline_panel::init(cx);
+        repo_wiki::init(cx);
         agent_chat::init(Some(agent_shell_env_rx), cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);
