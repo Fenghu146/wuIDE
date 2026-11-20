@@ -3,7 +3,7 @@ use crate::{
     NewOpencodeChat, NewPiChat, ToggleFocus,
     chat_style::{accent, ink, selected_row, text_faint, ui, wash},
     chat_view::ChatView,
-    session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, SessionSummary},
+    session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, RunSettings, SessionSummary},
 };
 use anyhow::Result;
 use collections::HashSet;
@@ -152,18 +152,37 @@ pub(crate) fn create_session(
     kind: AgentKind,
     cx: &mut Context<Workspace>,
 ) -> Option<Entity<AgentSession>> {
+    create_session_with_choice(workspace, kind, None, cx)
+}
+
+fn create_session_with_choice(
+    workspace: &mut Workspace,
+    kind: AgentKind,
+    settings: Option<RunSettings>,
+    cx: &mut Context<Workspace>,
+) -> Option<Entity<AgentSession>> {
     let project = workspace.project().clone();
     let cwd = chat_roots(&project, cx)
         .into_iter()
         .next()
         .unwrap_or_else(|| paths::home_dir().clone());
-    create_session_at(workspace, kind, cwd, cx)
+    create_session_at_with_settings(workspace, kind, cwd, settings, cx)
 }
 
 fn create_session_at(
     workspace: &mut Workspace,
     kind: AgentKind,
     cwd: PathBuf,
+    cx: &mut Context<Workspace>,
+) -> Option<Entity<AgentSession>> {
+    create_session_at_with_settings(workspace, kind, cwd, None, cx)
+}
+
+fn create_session_at_with_settings(
+    workspace: &mut Workspace,
+    kind: AgentKind,
+    cwd: PathBuf,
+    settings: Option<RunSettings>,
     cx: &mut Context<Workspace>,
 ) -> Option<Entity<AgentSession>> {
     let project = workspace.project().clone();
@@ -179,7 +198,59 @@ fn create_session_at(
         return None;
     }
     let store = store_for(workspace, cx);
-    Some(store.update(cx, |store, cx| store.create_session(kind, cwd, cx)))
+    Some(store.update(cx, |store, cx| match settings {
+        Some(settings) => store.create_session_with_settings(kind, cwd, settings, cx),
+        None => store.create_session(kind, cwd, cx),
+    }))
+}
+
+/// The chat the user is looking at: the focused tab, else the docked chat.
+pub(crate) fn visible_chat(workspace: &Workspace, cx: &App) -> Option<Entity<ChatView>> {
+    workspace.active_item_as::<ChatView>(cx).or_else(|| {
+        workspace
+            .items_of_type::<ChatView>(cx)
+            .find(|view| view.read(cx).is_docked())
+    })
+}
+
+/// Settings a chat opened on the user's behalf should start from: the harness
+/// and model of the chat the user is looking at, then the most recently used
+/// chat, then the configured defaults.
+pub(crate) fn preferred_chat_settings(
+    workspace: &Workspace,
+    cx: &mut App,
+) -> (AgentKind, Option<RunSettings>) {
+    if let Some(view) = visible_chat(workspace, cx) {
+        let session = view.read(cx).session().read(cx);
+        return choose_chat_settings(
+            Some((session.kind(), session.settings().clone())),
+            None,
+            AgentChatSettings::get_global(cx).agents(),
+        );
+    }
+    let recent = store_for(workspace, cx)
+        .read(cx)
+        .sessions_metadata()
+        .find(|metadata| !metadata.side_chat && metadata.parent_id.is_none())
+        .map(|metadata| (metadata.kind, metadata.settings.clone()));
+    choose_chat_settings(None, recent, AgentChatSettings::get_global(cx).agents())
+}
+
+fn choose_chat_settings(
+    visible: Option<(AgentKind, RunSettings)>,
+    recent: Option<(AgentKind, RunSettings)>,
+    agents: &[AgentKind],
+) -> (AgentKind, Option<RunSettings>) {
+    if let Some((kind, settings)) = visible {
+        return (kind, Some(settings));
+    }
+    if let Some((kind, settings)) = recent {
+        return (kind, Some(settings));
+    }
+    (
+        agents.first().copied().unwrap_or(AgentKind::Claude),
+        None,
+    )
 }
 
 pub(crate) fn chat_view_for(
@@ -205,19 +276,17 @@ pub(crate) fn open_chat(
     open_chat_in(workspace, session, false, window, cx)
 }
 
-/// Creates a new chat with the first visible agent and immediately sends the
-/// given prompt. Does nothing when no agent is visible; remote projects are
-/// rejected by [`create_session`].
+/// Creates a new chat with the harness and model the user was last using, and
+/// immediately sends the given prompt. Does nothing when no agent is visible;
+/// remote projects are rejected by [`create_session`].
 pub fn open_chat_with_prompt(
     workspace: &mut Workspace,
     prompt: String,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    let Some(kind) = AgentChatSettings::get_global(cx).agents().first().cloned() else {
-        return;
-    };
-    if let Some(session) = create_session(workspace, kind, cx) {
+    let (kind, settings) = preferred_chat_settings(workspace, cx);
+    if let Some(session) = create_session_with_choice(workspace, kind, settings, cx) {
         open_chat(workspace, session.clone(), window, cx);
         session.update(cx, |session, cx| session.send_message(prompt, cx));
     }
@@ -1939,6 +2008,51 @@ impl Panel for AgentPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chat_opened_for_a_selection_follows_the_chat_the_user_is_looking_at() {
+        let visible = RunSettings {
+            model: Some("opus-5".into()),
+            ..Default::default()
+        };
+        let recent = RunSettings {
+            model: Some("gpt-6-sol".into()),
+            ..Default::default()
+        };
+        let (kind, settings) = choose_chat_settings(
+            Some((AgentKind::Codex, visible)),
+            Some((AgentKind::Claude, recent)),
+            &[AgentKind::Pi],
+        );
+        assert_eq!(kind, AgentKind::Codex);
+        assert_eq!(
+            settings.and_then(|settings| settings.model).as_deref(),
+            Some("opus-5")
+        );
+    }
+
+    #[test]
+    fn a_chat_opened_for_a_selection_falls_back_to_the_most_recent_chat() {
+        let recent = RunSettings {
+            model: Some("deepseek-v4".into()),
+            ..Default::default()
+        };
+        let (kind, settings) =
+            choose_chat_settings(None, Some((AgentKind::DeepSeek, recent)), &[AgentKind::Claude]);
+        assert_eq!(kind, AgentKind::DeepSeek);
+        assert_eq!(
+            settings.and_then(|settings| settings.model).as_deref(),
+            Some("deepseek-v4")
+        );
+    }
+
+    #[test]
+    fn a_chat_opened_for_a_selection_uses_the_configured_agent_as_a_last_resort() {
+        let (kind, settings) =
+            choose_chat_settings(None, None, &[AgentKind::Pi, AgentKind::Claude]);
+        assert_eq!(kind, AgentKind::Pi);
+        assert!(settings.is_none(), "no explicit model was ever picked");
+    }
 
     #[test]
     fn time_ago_uses_compact_units() {

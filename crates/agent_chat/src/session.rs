@@ -3640,7 +3640,19 @@ impl AgentStore {
         cwd: PathBuf,
         cx: &mut Context<Self>,
     ) -> Entity<AgentSession> {
-        self.create_session_in(kind, cwd, None, None, cx)
+        self.create_session_in(kind, cwd, None, None, None, cx)
+    }
+
+    /// Creates a chat that starts from settings the caller picked, such as the
+    /// harness and model of the chat the user was already looking at.
+    pub fn create_session_with_settings(
+        &mut self,
+        kind: AgentKind,
+        cwd: PathBuf,
+        settings: RunSettings,
+        cx: &mut Context<Self>,
+    ) -> Entity<AgentSession> {
+        self.create_session_in(kind, cwd, None, None, Some(settings), cx)
     }
 
     pub fn create_session_in(
@@ -3649,9 +3661,11 @@ impl AgentStore {
         cwd: PathBuf,
         project_root: Option<PathBuf>,
         branch: Option<String>,
+        settings: Option<RunSettings>,
         cx: &mut Context<Self>,
     ) -> Entity<AgentSession> {
-        let mut metadata = SessionMetadata::new(kind, cwd, self.new_chat_settings(kind, cx));
+        let settings = settings.unwrap_or_else(|| self.new_chat_settings(kind, cx));
+        let mut metadata = SessionMetadata::new(kind, cwd, settings);
         metadata.project_root = project_root.filter(|root| *root != metadata.cwd);
         metadata.branch = branch;
         let languages = self.languages.clone();
