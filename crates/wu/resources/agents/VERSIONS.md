@@ -10,6 +10,10 @@ in `licenses/` and are copied next to them by the packaging scripts.
 | `node_modules/pi-acp` | `pi-acp` | 0.0.34 | MIT | https://github.com/svkozak/pi-acp |
 | `node_modules/@earendil-works/pi-coding-agent` | `@earendil-works/pi-coding-agent` | 1.5.1 | MIT | https://github.com/earendil-works/pi |
 
+`mcp/wu-repo-map/` is not a third-party package: it is Wu's own dependency-free
+Node MCP server that lets Pi read the repository map, and it ships under this
+repository's license.
+
 ## Verifying what is checked in
 
 `dsh-acp` binaries are byte-identical to the ones published in the npm tarball

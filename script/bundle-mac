@@ -166,6 +166,16 @@ else
     exit 1
 fi
 
+# Wu's repository map server: a dependency-free Node script Pi starts itself.
+mcp_src="crates/wu/resources/agents/mcp"
+if [[ -d "${mcp_src}" ]]; then
+    mkdir -p "${agents_dst}/mcp"
+    cp -R "${mcp_src}/." "${agents_dst}/mcp/"
+else
+    echo "error: missing ${mcp_src}; Pi could not read the repository map" >&2
+    exit 1
+fi
+
 # Redistributed third-party runtimes keep their own licenses next to them.
 licenses_src="crates/wu/resources/agents/licenses"
 if [[ -d "${licenses_src}" ]]; then

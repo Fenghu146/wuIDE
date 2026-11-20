@@ -10311,6 +10311,7 @@ name = "repo_wiki"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dunce",
  "fs",
  "futures",
@@ -10323,7 +10324,9 @@ dependencies = [
  "paths",
  "project",
  "serde_json",
+ "sha2",
  "streaming-iterator",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-cpp",
  "tree-sitter-rust",

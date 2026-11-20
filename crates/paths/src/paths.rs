@@ -199,6 +199,28 @@ pub fn data_dir() -> &'static PathBuf {
     })
 }
 
+/// Directory holding each agent runtime's isolated home.
+pub fn agents_data_dir() -> PathBuf {
+    data_dir().join("agents")
+}
+
+/// The isolated Pi agent directory, which Wu passes to Pi as
+/// `PI_CODING_AGENT_DIR`.
+///
+/// Keep in step with `prepare_pi_home` in `agent_harness/src/acp.rs`: Pi reads
+/// its settings, `AGENTS.md` and `APPEND_SYSTEM.md` from here.
+pub fn pi_agent_dir() -> PathBuf {
+    agents_data_dir().join("pi-home").join(".pi").join("agent")
+}
+
+/// Where the IDE drops repository map snapshots for Pi's MCP server.
+///
+/// The repo map panel writes one file per project root; the bundled
+/// `agents/mcp/wu-repo-map/server.js` reads it through `PI_CODING_AGENT_DIR`.
+pub fn repo_map_snapshots_dir() -> PathBuf {
+    pi_agent_dir().join("repo-maps")
+}
+
 pub fn state_dir() -> &'static PathBuf {
     static STATE_DIR: OnceLock<PathBuf> = OnceLock::new();
     STATE_DIR.get_or_init(|| {
