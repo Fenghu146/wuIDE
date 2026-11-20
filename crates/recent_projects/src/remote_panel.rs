@@ -138,12 +138,10 @@ impl RemotePanel {
     ) -> Task<anyhow::Result<Entity<Self>>> {
         Task::ready(workspace.clone().update_in(&mut cx, |_, window, cx| {
             cx.new(|cx: &mut Context<Self>| {
-                let settings_subscription = cx.observe_global_in::<settings::SettingsStore>(window, {
-                    let weak = cx.entity().downgrade();
-                    move |_, window, cx| {
-                        weak.update(cx, |panel, cx| panel.refresh(window, cx)).log_err();
-                    }
-                });
+                let settings_subscription = cx.observe_global_in::<settings::SettingsStore>(
+                    window,
+                    |panel, window, cx| panel.refresh(window, cx),
+                );
                 let mut panel = Self {
                     workspace,
                     focus_handle: cx.focus_handle(),
@@ -555,6 +553,74 @@ impl Panel for RemotePanel {
     }
 
     fn activation_priority(&self) -> u32 {
-        7
+        10
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{TestAppContext, UpdateGlobal as _};
+    use project::{FakeFs, Project};
+
+    #[gpui::test]
+    async fn settings_changes_refresh_the_server_list_without_panicking(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            crate::init(cx);
+        });
+
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("test window should have a workspace");
+        let workspace_handle = workspace.downgrade();
+        let panel = window
+            .update(cx, |_, window, cx| {
+                cx.spawn_in(window, async move |_, cx| {
+                    RemotePanel::load(workspace_handle, cx.clone()).await
+                })
+            })
+            .expect("test window should be open")
+            .await
+            .expect("remote panel should load");
+        window
+            .update(cx, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.add_panel(panel.clone(), window, cx)
+                })
+            })
+            .expect("test window should be open");
+
+        cx.update(|cx| {
+            settings::SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.remote.ssh_connections = Some(vec![settings::SshConnection {
+                        host: "host-a.example".to_string(),
+                        ..Default::default()
+                    }]);
+                });
+            });
+        });
+        cx.run_until_parked();
+
+        let hosts: Vec<String> = cx.update(|cx| {
+            panel
+                .read(cx)
+                .servers
+                .iter()
+                .filter_map(|server| match server {
+                    RemoteServer::Configured {
+                        connection: Connection::Ssh(connection),
+                        ..
+                    } => Some(connection.host.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        assert_eq!(hosts, vec!["host-a.example".to_string()]);
     }
 }
