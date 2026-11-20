@@ -954,6 +954,26 @@ impl ChatView {
         self.fill_context_command(command, text, window, cx);
     }
 
+    /// Appends a quoted selection to the composer without sending it, so the
+    /// user can add context to the chat they are already having.
+    pub(crate) fn insert_selection_reference(
+        &mut self,
+        reference: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.composer.read(cx).text(cx);
+        let expanded = if text.trim().is_empty() {
+            reference
+        } else {
+            format!("{}\n\n{reference}", text.trim_end())
+        };
+        self.composer.update(cx, |editor, cx| {
+            editor.set_text(expanded.as_str(), window, cx);
+        });
+        cx.notify();
+    }
+
     /// Expands every context command line in `text` in place and leaves the
     /// result in the composer. Returns `true` when such a command was found, in
     /// which case the caller must not send the message.

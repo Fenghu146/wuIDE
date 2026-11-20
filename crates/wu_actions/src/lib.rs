@@ -77,6 +77,8 @@ actions!(
         ShowUpdateNotification,
         /// Asks the configured agent to explain the code selected in the active editor.
         AskAgentAboutSelection,
+        /// Adds the code selected in the active editor to the chat the user is looking at.
+        AddSelectionToChat,
         /// Asks the configured agent to fix the diagnostics around the cursor in the active editor.
         FixDiagnosticsWithAgent,
     ]

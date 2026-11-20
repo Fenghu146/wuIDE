@@ -1,10 +1,12 @@
 //! Bridges the active editor with agent chat sessions: selections and
 //! diagnostics can be routed to an agent as a chat prompt.
 
+use crate::chat_view::ChatView;
 use editor::{Editor, MultiBufferOffset};
 use gpui::{App, Context, Window};
+use i18n::t;
 use text::{Point, ToPoint as _};
-use workspace::Workspace;
+use workspace::{Toast, Workspace, notifications::NotificationId};
 
 /// Selections are truncated to keep the prompt small; agents can always
 /// re-read the file at the given location.
@@ -40,7 +42,41 @@ pub fn fix_diagnostics(
     }
 }
 
-fn selection_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
+/// Appends the active editor's selection to the chat the user is looking at.
+/// Never starts a new chat: without a visible chat it explains what to do.
+pub fn add_selection_to_chat(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let Some(reference) = selection_reference(workspace, cx) else {
+        return;
+    };
+    let Some(chat) = crate::agent_panel::visible_chat(workspace, cx) else {
+        workspace.show_toast(
+            Toast::new(
+                NotificationId::unique::<ChatView>(),
+                t!("Open a chat before adding selected code.").to_string(),
+            )
+            .autohide(),
+            cx,
+        );
+        return;
+    };
+    chat.update(cx, |chat, cx| {
+        chat.insert_selection_reference(reference, window, cx)
+    });
+}
+
+struct Selection {
+    file_name: Option<String>,
+    start_row: u32,
+    end_row: u32,
+    language: Option<String>,
+    text: String,
+}
+
+fn selection(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<Selection> {
     let editor = workspace.active_item_as::<Editor>(cx)?;
     editor.update(cx, |editor, cx| {
         let display_map = editor.display_snapshot(cx);
@@ -63,21 +99,68 @@ fn selection_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Optio
             .language_at(selection.head())
             .map(|language| language.name().to_string());
         let file_name = singleton_file_name(editor, cx);
-
-        let mut prompt = String::from("请解释以下选中的代码");
-        if let Some(file_name) = &file_name {
-            prompt.push_str(&format!("（文件 `{file_name}`，第 {start_row}-{end_row} 行）"));
-        }
-        prompt.push_str("：\n\n");
-        if let Some(language) = &language {
-            prompt.push_str(&format!("```{language}\n"));
-        }
-        prompt.push_str(&truncate(&text, MAX_SELECTION_CHARS));
-        if language.is_some() {
-            prompt.push_str("\n```");
-        }
-        Some(prompt)
+        Some(Selection {
+            file_name,
+            start_row,
+            end_row,
+            language,
+            text,
+        })
     })
+}
+
+fn selection_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
+    let selection = selection(workspace, cx)?;
+    let mut prompt = String::from("请解释以下选中的代码");
+    if let Some(file_name) = &selection.file_name {
+        prompt.push_str(&format!(
+            "（文件 `{file_name}`，第 {}-{} 行）",
+            selection.start_row, selection.end_row
+        ));
+    }
+    prompt.push_str("：\n\n");
+    if let Some(language) = &selection.language {
+        prompt.push_str(&format!("```{language}\n"));
+    }
+    prompt.push_str(&truncate(&selection.text, MAX_SELECTION_CHARS));
+    if selection.language.is_some() {
+        prompt.push_str("\n```");
+    }
+    Some(prompt)
+}
+
+/// A quoted snippet for an existing chat: file and line range, then the code.
+fn selection_reference(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
+    let selection = selection(workspace, cx)?;
+    Some(format_reference(
+        selection.file_name.as_deref(),
+        selection.start_row,
+        selection.end_row,
+        selection.language.as_deref(),
+        &selection.text,
+    ))
+}
+
+fn format_reference(
+    file_name: Option<&str>,
+    start_row: u32,
+    end_row: u32,
+    language: Option<&str>,
+    text: &str,
+) -> String {
+    let mut reference = match file_name {
+        Some(file_name) => format!("`{file_name}` L{start_row}-L{end_row}"),
+        None => format!("L{start_row}-L{end_row}"),
+    };
+    reference.push_str("\n\n");
+    if let Some(language) = language {
+        reference.push_str(&format!("```{language}\n"));
+    }
+    reference.push_str(&truncate(text, MAX_SELECTION_CHARS));
+    if language.is_some() {
+        reference.push_str("\n```");
+    }
+    reference
 }
 
 fn diagnostics_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
@@ -208,4 +291,32 @@ fn truncate(text: &str, max_chars: usize) -> String {
     let mut truncated: String = text.chars().take(max_chars).collect();
     truncated.push_str("\n…（已截断）");
     truncated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reference_names_the_file_and_line_range_before_the_code() {
+        let reference = format_reference(Some("src/panel.rs"), 12, 20, Some("rust"), "fn main() {}");
+        assert_eq!(
+            reference,
+            "`src/panel.rs` L12-L20\n\n```rust\nfn main() {}\n```"
+        );
+    }
+
+    #[test]
+    fn a_reference_without_a_language_is_still_a_valid_snippet() {
+        let reference = format_reference(None, 3, 4, None, "plain text");
+        assert_eq!(reference, "L3-L4\n\nplain text");
+    }
+
+    #[test]
+    fn a_reference_is_truncated_like_the_explanation_prompt() {
+        let long = "x".repeat(MAX_SELECTION_CHARS + 100);
+        let reference = format_reference(Some("big.rs"), 1, 2, Some("rust"), &long);
+        assert!(reference.len() < MAX_SELECTION_CHARS + 100);
+        assert!(reference.contains("已截断"));
+    }
 }

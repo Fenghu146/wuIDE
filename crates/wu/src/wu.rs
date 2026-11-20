@@ -98,7 +98,7 @@ use workspace::{
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use wu_actions::{
-    About, AskAgentAboutSelection, FixDiagnosticsWithAgent, OpenBrowser, OpenDocs,
+    About, AddSelectionToChat, AskAgentAboutSelection, FixDiagnosticsWithAgent, OpenBrowser, OpenDocs,
     OpenProjectTasks, OpenServerSettings, OpenSettingsFile, OpenWuUrl, Quit,
 };
 
@@ -697,6 +697,14 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 agent_chat::ask_about_selection(workspace, window, cx);
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &AddSelectionToChat,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                agent_chat::add_selection_to_chat(workspace, window, cx);
             },
         )
         .register_action(

@@ -14,7 +14,7 @@ mod usage_rings;
 
 pub use agent_chat_settings::{AgentChatSettings, CommitMessageSettings};
 pub use agent_panel::{AgentPanel, open_chat_with_prompt};
-pub use editor_bridge::{ask_about_selection, fix_diagnostics};
+pub use editor_bridge::{add_selection_to_chat, ask_about_selection, fix_diagnostics};
 pub use chat_panel::ChatPanel;
 pub use chat_view::ChatView;
 pub use commit_message::{

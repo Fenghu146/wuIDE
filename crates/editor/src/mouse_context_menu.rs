@@ -11,7 +11,7 @@ use gpui::{Context, DismissEvent, Entity, Focusable as _, Pixels, Point, Subscri
 use i18n::t;
 use std::ops::Range;
 use text::{PointUtf16, ToPoint as _};
-use wu_actions::{AskAgentAboutSelection, FixDiagnosticsWithAgent};
+use wu_actions::{AddSelectionToChat, AskAgentAboutSelection, FixDiagnosticsWithAgent};
 use workspace::OpenInTerminal;
 use wu_actions::preview::{
     markdown::OpenPreview as OpenMarkdownPreview, svg::OpenPreview as OpenSvgPreview,
@@ -314,10 +314,15 @@ pub fn deploy_context_menu(
                     builder.separator()
                 })
                 .when(has_selections, |builder| {
-                    builder.action(
-                        t!("Ask Agent About Selection"),
-                        Box::new(AskAgentAboutSelection),
-                    )
+                    builder
+                        .action(
+                            t!("Ask Agent About Selection"),
+                            Box::new(AskAgentAboutSelection),
+                        )
+                        .action(
+                            t!("Add Selection to Chat"),
+                            Box::new(AddSelectionToChat),
+                        )
                 })
                 .when(has_diagnostics, |builder| {
                     builder.action(
