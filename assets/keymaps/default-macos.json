@@ -477,6 +477,10 @@
       "ctrl-r": "projects::OpenRecent",
       "ctrl-cmd-o": ["projects::OpenRemote", { "from_existing_connection": false }],
       "ctrl-cmd-r": "remote_panel::ToggleFocus",
+      // The repo map opens next to the remote panel, so its `m` binding uses
+      // the same modifier family.
+      "ctrl-cmd-m": "repo_map_panel::ToggleFocus",
+      "ctrl-cmd-shift-m": "repo_map_panel::CopyToClipboard",
       "ctrl-cmd-shift-o": ["projects::OpenRemote", { "from_existing_connection": true }],
       "cmd-ctrl-b": "branches::OpenRecent",
       "cmd-ctrl-w": "git::Worktree",
