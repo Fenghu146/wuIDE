@@ -10322,6 +10322,7 @@ dependencies = [
  "path",
  "paths",
  "project",
+ "serde_json",
  "streaming-iterator",
  "tree-sitter",
  "tree-sitter-rust",

@@ -49,6 +49,7 @@ pub fn init(cx: &mut App) {
 
 pub struct RepoMapPanel {
     workspace: WeakEntity<Workspace>,
+    project: Entity<Project>,
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
     structures: Vec<WorktreeStructure>,
@@ -169,32 +170,29 @@ impl RepoMapPanel {
         workspace: WeakEntity<Workspace>,
         mut cx: AsyncWindowContext,
     ) -> Task<anyhow::Result<Entity<Self>>> {
-        Task::ready(workspace.clone().update_in(&mut cx, |_, _window, cx| {
-            cx.new(|cx: &mut Context<Self>| {
-                let mut panel = Self {
-                    workspace: workspace.clone(),
-                    focus_handle: cx.focus_handle(),
-                    scroll_handle: ScrollHandle::new(),
-                    structures: Vec::new(),
-                    expanded: HashSet::default(),
-                    symbol_maps: HashMap::default(),
-                    building: HashSet::default(),
-                    active: false,
-                    _refresh_task: Task::ready(()),
-                    _symbol_task: Task::ready(()),
-                };
-                panel.refresh(cx);
-                panel
+        Task::ready(workspace.update_in(&mut cx, |workspace, _window, cx| {
+            let project = workspace.project().clone();
+            let workspace_handle = cx.entity().downgrade();
+            cx.new(|cx: &mut Context<Self>| Self {
+                workspace: workspace_handle,
+                project: project.clone(),
+                focus_handle: cx.focus_handle(),
+                scroll_handle: ScrollHandle::new(),
+                structures: build_structures(&project, cx),
+                expanded: HashSet::default(),
+                symbol_maps: HashMap::default(),
+                building: HashSet::default(),
+                active: false,
+                _refresh_task: Task::ready(()),
+                _symbol_task: Task::ready(()),
             })
         }))
     }
 
     /// Rebuilds the structure list from the current worktree snapshots.
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        if let Some(workspace) = self.workspace.upgrade() {
-            let project = workspace.read(cx).project().clone();
-            self.structures = build_structures(&project, cx);
-        }
+        let project = self.project.clone();
+        self.structures = build_structures(&project, cx);
         cx.notify();
     }
 
@@ -284,10 +282,7 @@ impl RepoMapPanel {
 
     /// Starts background symbol builds for worktrees that do not have one yet.
     fn request_symbol_maps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(workspace) = self.workspace.upgrade() else {
-            return;
-        };
-        let project = workspace.read(cx).project().clone();
+        let project = self.project.clone();
         let fs = project.read(cx).fs().clone();
         let languages = project.read(cx).languages().clone();
 
@@ -740,7 +735,7 @@ impl Panel for RepoMapPanel {
     }
 
     fn activation_priority(&self) -> u32 {
-        7
+        5
     }
 }
 
@@ -940,6 +935,103 @@ mod tests {
     fn format_size_uses_readable_units() {
         assert_eq!(format_size(512), "512 B");
         assert_eq!(format_size(2048), "2.0 KB");
+    }
+
+    #[gpui::test]
+    async fn loading_the_panel_during_a_workspace_update_does_not_panic(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use project::FakeFs;
+        use workspace::MultiWorkspace;
+
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            super::init(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            "/project",
+            serde_json::json!({
+                "src": {
+                    "main.rs": "fn main() {}\n",
+                },
+            }),
+        )
+        .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("test window should have a workspace");
+        let workspace_handle = workspace.downgrade();
+
+        let panel = window
+            .update(cx, |_, window, cx| {
+                cx.spawn_in(window, async move |_, cx| {
+                    RepoMapPanel::load(workspace_handle, cx.clone()).await
+                })
+            })
+            .expect("test window should be open")
+            .await
+            .expect("repo map panel should load");
+        cx.run_until_parked();
+
+        assert_eq!(
+            cx.update(|cx| panel.read(cx).structures.len()),
+            1,
+            "the panel should be built from the workspace's worktrees"
+        );
+    }
+
+    #[gpui::test]
+    async fn opening_the_panel_during_a_workspace_update_does_not_panic(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use project::FakeFs;
+        use workspace::MultiWorkspace;
+
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            super::init(cx);
+        });
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree("/project", serde_json::json!({ "src": { "main.rs": "fn main() {}\n" } }))
+            .await;
+        let project = Project::test(fs, [Path::new("/project")], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("test window should have a workspace");
+        let workspace_handle = workspace.downgrade();
+        let panel = window
+            .update(cx, |_, window, cx| {
+                cx.spawn_in(window, async move |_, cx| {
+                    RepoMapPanel::load(workspace_handle, cx.clone()).await
+                })
+            })
+            .expect("test window should be open")
+            .await
+            .expect("repo map panel should load");
+
+        let mut cx = gpui::VisualTestContext::from_window(window.into(), cx);
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            workspace.add_panel(panel, window, cx);
+        });
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            workspace.open_panel::<RepoMapPanel>(window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(
+            workspace.read_with(&cx, |workspace, cx| {
+                workspace
+                    .panel::<RepoMapPanel>(cx)
+                    .is_some_and(|panel| panel.read(cx).active)
+            }),
+            "opening the panel should activate it without panicking"
+        );
     }
 
     fn test_rel(path: &'static str) -> Arc<RelPath> {
