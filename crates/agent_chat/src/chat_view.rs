@@ -180,6 +180,9 @@ pub struct ChatView {
     composer_skills: Vec<agent_harness::SkillRef>,
     composer_refs: Vec<composer_refs::ComposerRef>,
     next_composer_ref_id: u64,
+    /// A chat offers its digest only once, even when the chip is removed.
+    digest_offered: bool,
+    _digest_chip: Task<()>,
     attachments: Vec<std::path::PathBuf>,
     lightbox: Option<image_viewer::Lightbox>,
     generated_image_layouts: std::cell::RefCell<HashMap<std::path::PathBuf, Option<(Pixels, f32)>>>,
@@ -362,6 +365,8 @@ impl ChatView {
             composer_skills: Vec::new(),
             composer_refs: Vec::new(),
             next_composer_ref_id: 0,
+            digest_offered: false,
+            _digest_chip: Task::ready(()),
             attachments: Vec::new(),
             lightbox: None,
             generated_image_layouts: Default::default(),
@@ -414,6 +419,7 @@ impl ChatView {
         view.pin_default_settings(cx);
         view.sync_answer_editors(window, cx);
         view.sync_turns(cx);
+        view.offer_repo_digest(window, cx);
         view
     }
 
@@ -3930,6 +3936,7 @@ impl EventEmitter<workspace::searchable::SearchEvent> for ChatView {}
 
 #[cfg(test)]
 mod tests {
+    use super::composer_refs::DigestRef;
     use super::*;
     use crate::{
         AcceptCommand, AgentKind, DismissCommands, SelectNextCommand, SelectPreviousCommand,
@@ -4996,6 +5003,215 @@ mod tests {
         });
         view.update_in(cx, |view, window, cx| view.close_side_pane(window, cx));
         assert!(view.read_with(cx, |view, _| view.side_pane_content().is_none()));
+    }
+
+    fn digest_reference() -> DigestRef {
+        DigestRef {
+            files: 2,
+            digest: "仓库地图摘要（按被引用程度排序，共 2 个文件）：\n- src/main.rs".to_string(),
+        }
+    }
+
+    fn update_chat_settings(
+        cx: &mut TestAppContext,
+        update: impl FnOnce(&mut settings::AgentChatSettingsContent),
+    ) {
+        cx.update(|cx| {
+            <settings::SettingsStore as gpui::UpdateGlobal>::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |content| {
+                    update(content.agent_chat.get_or_insert_default())
+                })
+            })
+        });
+    }
+
+    #[gpui::test]
+    async fn a_digest_chip_is_inserted_once_and_removal_keeps_it_out(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+
+        assert!(
+            view.update_in(cx, |view, window, cx| {
+                view.insert_digest_chip(digest_reference(), window, cx)
+            })
+        );
+        assert_eq!(composer_text(&view, cx), "@digest 2");
+        let shown = view.update(cx, |view, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.display_text(cx))
+        });
+        assert_eq!(shown, "⋯", "the composer shows a chip, not the token");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.composer_refs.len()),
+            1,
+            "one digest chip"
+        );
+
+        assert!(
+            !view.update_in(cx, |view, window, cx| {
+                view.insert_digest_chip(digest_reference(), window, cx)
+            }),
+            "the digest is offered once per chat"
+        );
+
+        let id = view.read_with(cx, |view, _| view.composer_refs[0].id);
+        view.update(cx, |view, cx| view.remove_composer_ref(id, cx));
+        assert_eq!(composer_text(&view, cx), "", "the token goes with the chip");
+        assert!(
+            !view.update_in(cx, |view, window, cx| {
+                view.insert_digest_chip(digest_reference(), window, cx)
+            }),
+            "a removed digest is never put back"
+        );
+        assert!(view.read_with(cx, |view, _| view.composer_refs.is_empty()));
+    }
+
+    #[gpui::test]
+    async fn a_chat_offers_its_digest_only_when_the_setting_is_on(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+
+        update_chat_settings(cx, |content| {
+            content.inject_repo_map_digest = Some(false);
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        assert!(
+            !view.update_in(cx, |view, window, cx| view.offer_repo_digest(window, cx)),
+            "the setting turns the offer off"
+        );
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.composer_refs.is_empty()));
+        assert_eq!(composer_text(&view, cx), "");
+    }
+
+    #[gpui::test]
+    async fn an_empty_project_offers_no_digest(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.composer_refs.is_empty()));
+        assert_eq!(composer_text(&view, cx), "", "nothing is inserted");
+    }
+
+    #[gpui::test]
+    async fn a_sent_digest_stays_visible_in_the_transcript(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+
+        let digest = digest_reference();
+        view.update_in(cx, |view, window, cx| {
+            view.insert_digest_chip(digest.clone(), window, cx);
+        });
+        view.update_in(cx, |view, window, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.set_text("@digest 2 请先熟悉项目", window, cx))
+        });
+        let prompt = view.update(cx, |view, cx| {
+            let text = view.composer.read(cx).text(cx);
+            view.expand_composer_refs(&text, cx)
+        });
+        assert!(
+            prompt.contains(&digest.digest),
+            "the whole digest is sent: {prompt}"
+        );
+        assert!(prompt.starts_with("项目摘要 · 2 文件"));
+
+        session.update(cx, |session, cx| session.send_message(Prompt::text(prompt.clone()), cx));
+        session.read_with(cx, |session, _| {
+            let Some(Entry::User { text, .. }) = session.entries().last() else {
+                panic!("the user message is in the transcript");
+            };
+            assert_eq!(
+                text.as_ref(),
+                prompt,
+                "the transcript keeps the text the agent received"
+            );
+            assert!(text.contains("项目摘要 · 2 文件"));
+            assert!(
+                text.contains(&digest.digest),
+                "the digest stays readable after sending"
+            );
+        });
+
+        assert!(
+            !view.update_in(cx, |view, window, cx| view.offer_repo_digest(window, cx)),
+            "later turns do not offer the digest again"
+        );
     }
 
     // These completion menus are fed by `refresh_commands`, which probes the agent
