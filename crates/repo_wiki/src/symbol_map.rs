@@ -93,6 +93,17 @@ pub struct SymbolMap {
     pub stats: BuildStats,
 }
 
+/// Files a first-turn digest lists.
+pub const DEFAULT_DIGEST_FILES: usize = 20;
+/// Symbols a digest lists per file.
+pub const DEFAULT_DIGEST_SYMBOLS_PER_FILE: usize = 5;
+/// Character budget for a first-turn digest.
+///
+/// At the usual four characters per token this is about 900 tokens, the top of
+/// the 600–900 token range a digest may cost before an agent has asked for
+/// anything. The full map is ten times that (40k characters ≈ 10k tokens).
+pub const MAX_DIGEST_CHARS: usize = 3_600;
+
 impl SymbolMap {
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
@@ -118,6 +129,48 @@ impl SymbolMap {
         self.repo_map_markdown(&RepoMapOptions::default(), max_chars)
     }
 
+    /// Renders the first-turn digest: the best-ranked files with a handful of
+    /// their definitions each, plus one line saying where the full map lives.
+    ///
+    /// This is what a fresh conversation can afford to carry, so every entry is
+    /// chosen rather than complete: `max_files` bounds the files,
+    /// `symbols_per_file` the definitions inside one file (top-level ones
+    /// before methods and fields, never locals), and `max_chars` the whole
+    /// result. Nothing disappears silently: the files that do not fit are
+    /// counted in a last line that points at `repo_map`.
+    pub fn to_digest(&self, max_files: usize, symbols_per_file: usize, max_chars: usize) -> String {
+        let files: Vec<&FileSymbols> = self.ranked().collect();
+        let total = files.len();
+        if total == 0 {
+            return String::from(
+                "这个项目还没有可用的仓库地图（请先在 IDE 里打开一次 Repository Map 面板）",
+            );
+        }
+
+        let shown = max_files.min(total);
+        let header = format!(
+            "仓库地图摘要（按被引用程度排序，共 {total} 个文件）：这里列出前 {shown} 个，\
+             每个最多 {symbols_per_file} 个符号；需要完整或更新内容时调用 `repo_map` 或 `symbols` 工具。"
+        );
+
+        // The omitted-files line is reserved before the body is rendered, so
+        // adding it never pushes the digest past `max_chars`. The reserve is
+        // measured against `total`, the widest count that line can carry.
+        let reserve = omitted_note(total).chars().count();
+        let budget = max_chars.saturating_sub(header.chars().count() + reserve);
+        let (body, written) = render_ranked(&files, 0, shown, budget, |file| {
+            digest_line(file, symbols_per_file)
+        });
+
+        let mut out = header;
+        out.push('\n');
+        out.push_str(&body);
+        if written < total {
+            out.push_str(&omitted_note(total - written));
+        }
+        out
+    }
+
     /// Renders the paged, top-level-first repository map.
     ///
     /// `limit` and `offset` page over the files that define something; the
@@ -138,18 +191,9 @@ impl SymbolMap {
         // The budget is a last resort: `limit` decides how many files are
         // shown, so only a pathological file list can shorten the page. The
         // body is built first so the header can state what was really written.
-        let mut body = String::new();
-        let mut budget = max_chars;
-        let mut written = start;
-        for file in &files[start..end] {
-            let block = self.file_block(file, options);
-            if block.len() > budget && written > start {
-                break;
-            }
-            budget = budget.saturating_sub(block.len());
-            body.push_str(&block);
-            written += 1;
-        }
+        let (body, written) = render_ranked(&files, start, end, max_chars, |file| {
+            self.file_block(file, options)
+        });
 
         let mut out = format!(
             "## Repository map\n\n\
@@ -216,6 +260,77 @@ impl SymbolMap {
     /// line numbers and the same field names the snapshot uses.
     pub fn json_entries(&self) -> Vec<serde_json::Value> {
         self.ranked().map(file_json).collect()
+    }
+}
+
+/// Renders whole file blocks in rank order until `max_chars` runs out.
+///
+/// Shared by the full map and the digest: both walk the ranked files and both
+/// keep the first block even when it alone exceeds the budget, so a tiny budget
+/// still names the best-ranked file instead of returning nothing. Returns the
+/// body and the absolute index just past the last file it holds.
+fn render_ranked(
+    files: &[&FileSymbols],
+    start: usize,
+    end: usize,
+    max_chars: usize,
+    mut render: impl FnMut(&FileSymbols) -> String,
+) -> (String, usize) {
+    let mut body = String::new();
+    let mut budget = max_chars;
+    let mut written = start;
+    for file in &files[start..end] {
+        let block = render(file);
+        let cost = block.chars().count();
+        if cost > budget && written > start {
+            break;
+        }
+        budget = budget.saturating_sub(cost);
+        body.push_str(&block);
+        written += 1;
+    }
+    (body, written)
+}
+
+/// The line a digest ends with when something was left out.
+fn omitted_note(omitted: usize) -> String {
+    format!("…另有 {omitted} 个文件，调用 `repo_map` 查看\n")
+}
+
+/// One digest line: the file, then its chosen definitions.
+fn digest_line(file: &FileSymbols, symbols_per_file: usize) -> String {
+    let mut line = format!("`{}`", file.rel.display(path::PathStyle::Unix));
+    let symbols: Vec<String> = digest_symbols(&file.symbols, symbols_per_file)
+        .into_iter()
+        .map(|symbol| format!("{} {} ({})", symbol.kind, symbol.name, symbol.row + 1))
+        .collect();
+    if !symbols.is_empty() {
+        line.push_str(" — ");
+        line.push_str(&symbols.join("、"));
+    }
+    line.push('\n');
+    line
+}
+
+/// The definitions a digest shows for one file.
+///
+/// Locals bury the structure of a real C and C++ file, so they never appear
+/// here. Top-level definitions come first, methods and fields after them, and
+/// each group keeps the file's own line order.
+fn digest_symbols(symbols: &[SymbolEntry], limit: usize) -> Vec<&SymbolEntry> {
+    let mut chosen: Vec<&SymbolEntry> = symbols.iter().filter(|symbol| !symbol.local).collect();
+    chosen.sort_by_key(|symbol| digest_tier(&symbol.kind));
+    chosen.truncate(limit);
+    chosen
+}
+
+/// Whether a definition describes the file rather than a detail inside one
+/// type. Kinds are already normalized by [`classify_kind`].
+fn digest_tier(kind: &str) -> u8 {
+    match kind {
+        "function" | "class" | "struct" | "enum" | "macro" | "constant" | "trait" | "interface"
+        | "module" | "type" => 0,
+        _ => 1,
     }
 }
 
@@ -2331,5 +2446,118 @@ vector<int> bfs(int start) {
         assert_eq!(file["symbols"][0]["kind"], "function");
         assert_eq!(file["symbols"][0]["local"], false);
         assert_eq!(file["symbols"][0]["depth"], 0);
+    }
+
+    #[test]
+    fn digest_shows_top_level_symbols_before_members_and_hides_locals() {
+        let mut cache = entry("cache", "variable", 30);
+        cache.local = true;
+        let map = SymbolMap {
+            files: vec![file_symbols(
+                "src/game.cpp",
+                0.9,
+                vec![
+                    entry("Game", "class", 1),
+                    entry("board", "field", 4),
+                    entry("start", "method", 9),
+                    cache,
+                    entry("main", "function", 40),
+                ],
+            )],
+            stats: BuildStats::default(),
+        };
+
+        let digest = map.to_digest(20, 4, MAX_DIGEST_CHARS);
+        let line = digest.lines().nth(1).expect("one file line");
+        assert_eq!(
+            line,
+            "`src/game.cpp` — class Game (2)、function main (41)、field board (5)、method start (10)"
+        );
+        assert!(!digest.contains("cache"), "{digest}");
+    }
+
+    #[test]
+    fn digest_lists_only_the_requested_files() {
+        let map = SymbolMap {
+            files: (0..30)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/file{index:02}.rs"),
+                        (30 - index) as f32,
+                        vec![entry(&format!("item{index}"), "function", 0)],
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        let digest = map.to_digest(20, 5, MAX_DIGEST_CHARS);
+        assert!(digest.contains("共 30 个文件"), "{digest}");
+        assert!(digest.contains("`src/file19.rs`"), "{digest}");
+        assert!(!digest.contains("`src/file20.rs`"), "{digest}");
+        assert!(digest.contains("…另有 10 个文件"), "{digest}");
+    }
+
+    #[test]
+    fn digest_stops_at_the_budget_and_counts_the_rest() {
+        let map = SymbolMap {
+            files: (0..10)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/file{index}.rs"),
+                        (10 - index) as f32,
+                        (0..6)
+                            .map(|symbol| {
+                                entry(&format!("item_{index}_{symbol}"), "function", symbol)
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        let digest = map.to_digest(10, 5, 400);
+        assert!(digest.chars().count() <= 400, "{digest}");
+        let listed = digest.lines().filter(|line| line.starts_with('`')).count();
+        assert!(listed > 0 && listed < 10, "{digest}");
+        assert!(
+            digest.contains(&format!("…另有 {} 个文件", 10 - listed)),
+            "{digest}"
+        );
+    }
+
+    #[test]
+    fn digest_handles_zero_limits() {
+        let map = SymbolMap {
+            files: vec![
+                file_symbols("src/a.rs", 3., vec![entry("a", "function", 0)]),
+                file_symbols("src/b.rs", 2., vec![entry("b", "function", 0)]),
+                file_symbols("src/c.rs", 1., vec![entry("c", "function", 0)]),
+            ],
+            stats: BuildStats::default(),
+        };
+
+        let no_files = map.to_digest(0, 5, MAX_DIGEST_CHARS);
+        assert!(
+            !no_files.lines().any(|line| line.starts_with("`src/")),
+            "{no_files}"
+        );
+        assert!(no_files.contains("…另有 3 个文件"), "{no_files}");
+
+        let no_symbols = map.to_digest(3, 0, MAX_DIGEST_CHARS);
+        assert!(
+            no_symbols.lines().any(|line| line == "`src/a.rs`"),
+            "{no_symbols}"
+        );
+    }
+
+    #[test]
+    fn an_empty_map_asks_for_the_repository_map_panel() {
+        let digest = SymbolMap::default().to_digest(20, 5, MAX_DIGEST_CHARS);
+        assert_eq!(
+            digest,
+            "这个项目还没有可用的仓库地图（请先在 IDE 里打开一次 Repository Map 面板）"
+        );
     }
 }
