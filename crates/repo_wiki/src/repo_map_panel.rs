@@ -17,17 +17,18 @@ use i18n::t;
 use path::{PathStyle, rel_path::RelPath};
 use project::{Project, ProjectPath};
 use ui::prelude::*;
+use ui::{Checkbox, Tooltip};
 use util::ResultExt;
-use worktree::{EntryKind, WorktreeId};
 use workspace::{
-    Workspace, Toast,
+    Toast, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::NotificationId,
 };
+use worktree::{EntryKind, WorktreeId};
 
 use crate::conventions::{AGENTS_FILE_NAME, AGENTS_TEMPLATE};
 use crate::snapshot;
-use crate::symbol_map::{self, SourceFile, SymbolMap};
+use crate::symbol_map::{self, SourceFile, SymbolLine, SymbolMap};
 
 actions!(
     repo_map_panel,
@@ -41,11 +42,9 @@ actions!(
 
 pub fn init(cx: &mut App) {
     cx.observe_new(|workspace: &mut Workspace, _, _| {
-        workspace.register_action(
-            |workspace: &mut Workspace, _: &ToggleFocus, window, cx| {
-                workspace.toggle_panel_focus::<RepoMapPanel>(window, cx);
-            },
-        );
+        workspace.register_action(|workspace: &mut Workspace, _: &ToggleFocus, window, cx| {
+            workspace.toggle_panel_focus::<RepoMapPanel>(window, cx);
+        });
         workspace.register_action(
             |workspace: &mut Workspace, _: &CopyToClipboard, _window, cx| {
                 let Some(panel) = workspace.panel::<RepoMapPanel>(cx) else {
@@ -78,6 +77,8 @@ pub struct RepoMapPanel {
     symbol_maps: HashMap<WorktreeId, SymbolIndex>,
     /// Worktrees whose symbol build is in flight.
     building: HashSet<WorktreeId>,
+    /// Whether function-body variables are listed.
+    include_locals: bool,
     active: bool,
     _refresh_task: Task<()>,
     _symbol_task: Task<()>,
@@ -176,12 +177,28 @@ enum Row {
         expanded: bool,
         symbol_count: usize,
         rank: Option<f32>,
+        in_degree: u32,
+        out_degree: u32,
     },
     Symbol {
         depth: usize,
         kind: Arc<str>,
         name: Arc<str>,
+        signature: Option<Arc<str>>,
         row: u32,
+    },
+    /// A C++ access label such as `public:`.
+    Access {
+        depth: usize,
+        access: Arc<str>,
+    },
+    /// A run of variables summarized on one line.
+    SymbolGroup {
+        depth: usize,
+        kind: Arc<str>,
+        count: usize,
+        first_row: u32,
+        last_row: u32,
     },
 }
 
@@ -202,6 +219,7 @@ impl RepoMapPanel {
                 expanded: HashSet::default(),
                 symbol_maps: HashMap::default(),
                 building: HashSet::default(),
+                include_locals: false,
                 active: false,
                 _refresh_task: Task::ready(()),
                 _symbol_task: Task::ready(()),
@@ -242,7 +260,8 @@ impl RepoMapPanel {
                 workspace
                     .update_in(cx, |workspace, _window, cx| {
                         workspace.show_toast(
-                            Toast::new(NotificationId::unique::<RepoMapPanel>(), message).autohide(),
+                            Toast::new(NotificationId::unique::<RepoMapPanel>(), message)
+                                .autohide(),
                             cx,
                         )
                     })
@@ -359,8 +378,7 @@ impl RepoMapPanel {
                 }
                 this.update_in(cx, |panel, _window, cx| {
                     panel.building.remove(&worktree_id);
-                    panel.symbol_maps
-                        .insert(worktree_id, SymbolIndex::new(map));
+                    panel.symbol_maps.insert(worktree_id, SymbolIndex::new(map));
                     cx.notify();
                 })
                 .log_err();
@@ -383,6 +401,7 @@ impl RepoMapPanel {
                 self.symbol_maps.get(&structure.worktree_id),
                 &structure.root,
                 0,
+                self.include_locals,
                 &mut rows,
             );
         }
@@ -402,22 +421,31 @@ impl RepoMapPanel {
                     .py_1()
                     .justify_between()
                     .child(
-                        v_flex().child(
-                            Label::new(structure.root_name.clone()).size(LabelSize::Small),
-                        )
-                        .child(
-                            Label::new(if building {
-                                t!("Scanning symbols…")
-                            } else {
-                                t!(
-                                    "{count} files · {size}",
-                                    count = structure.total_files,
-                                    size = format_size(structure.total_size)
-                                )
-                            })
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                        ),
+                        v_flex()
+                            .child(Label::new(structure.root_name.clone()).size(LabelSize::Small))
+                            .child(
+                                Label::new(if building {
+                                    t!("Scanning symbols…")
+                                } else {
+                                    t!(
+                                        "{count} files · {size}",
+                                        count = structure.total_files,
+                                        size = format_size(structure.total_size)
+                                    )
+                                })
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                            ),
+                    )
+                    .child(
+                        Checkbox::new(("include-locals", ix), self.include_locals.into())
+                            .label(t!("Locals"))
+                            .label_size(LabelSize::Small)
+                            .tooltip(Tooltip::text(t!("Show local variables")))
+                            .on_click(cx.listener(|this, state: &ToggleState, _window, cx| {
+                                this.include_locals = *state == ToggleState::Selected;
+                                cx.notify();
+                            })),
                     )
                     .child(
                         IconButton::new(("refresh", ix), IconName::RotateCcw).on_click(
@@ -471,29 +499,27 @@ impl RepoMapPanel {
                         let worktree_id = *worktree_id;
                         let root_path = root_path.clone();
                         let rel = rel.clone();
-                        move |this, _: &ClickEvent, window, cx| {
-                            match rel.clone() {
-                                Some(rel) => {
-                                    this.workspace
-                                        .update(cx, |workspace, cx| {
-                                            workspace
-                                                .open_path(
-                                                    ProjectPath {
-                                                        worktree_id,
-                                                        path: rel,
-                                                    },
-                                                    None,
-                                                    true,
-                                                    window,
-                                                    cx,
-                                                )
-                                                .detach_and_log_err(cx);
-                                        })
-                                        .log_err();
-                                }
-                                None => {
-                                    this.create_agents_md(worktree_id, root_path.clone(), window, cx);
-                                }
+                        move |this, _: &ClickEvent, window, cx| match rel.clone() {
+                            Some(rel) => {
+                                this.workspace
+                                    .update(cx, |workspace, cx| {
+                                        workspace
+                                            .open_path(
+                                                ProjectPath {
+                                                    worktree_id,
+                                                    path: rel,
+                                                },
+                                                None,
+                                                true,
+                                                window,
+                                                cx,
+                                            )
+                                            .detach_and_log_err(cx);
+                                    })
+                                    .log_err();
+                            }
+                            None => {
+                                this.create_agents_md(worktree_id, root_path.clone(), window, cx);
                             }
                         }
                     }))
@@ -554,6 +580,8 @@ impl RepoMapPanel {
                 expanded,
                 symbol_count,
                 rank,
+                in_degree,
+                out_degree,
             } => {
                 let has_symbols = *symbol_count > 0;
                 let key = rel.display(PathStyle::Unix).into_owned();
@@ -583,9 +611,17 @@ impl RepoMapPanel {
                     .child(div().flex_1())
                     .when(has_symbols, |this| {
                         this.child(
+                            Label::new(t!("{count} symbols", count = *symbol_count))
+                                .size(LabelSize::Small)
+                                .color(Color::Placeholder),
+                        )
+                    })
+                    .when(has_symbols, |this| {
+                        this.child(
                             Label::new(t!(
-                                "{count} symbols",
-                                count = *symbol_count
+                                "in {inbound} / out {outbound}",
+                                inbound = *in_degree,
+                                outbound = *out_degree
                             ))
                             .size(LabelSize::Small)
                             .color(Color::Placeholder),
@@ -636,6 +672,7 @@ impl RepoMapPanel {
                 depth,
                 kind,
                 name,
+                signature,
                 row,
             } => h_flex()
                 .id(("symbol", ix))
@@ -644,9 +681,12 @@ impl RepoMapPanel {
                 .pl(px(34. + *depth as f32 * 14.))
                 .gap_1()
                 .child(
-                    Label::new(name.clone())
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
+                    Label::new(match signature {
+                        Some(signature) => format!("{name}{signature}"),
+                        None => name.to_string(),
+                    })
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
                 )
                 .child(
                     Label::new(kind.clone())
@@ -658,6 +698,42 @@ impl RepoMapPanel {
                     Label::new(format!(":{}", row + 1))
                         .size(LabelSize::Small)
                         .color(Color::Placeholder),
+                )
+                .into_any_element(),
+            Row::Access { depth, access } => h_flex()
+                .id(("access", ix))
+                .px_2()
+                .py_0p5()
+                .pl(px(34. + *depth as f32 * 14.))
+                .gap_1()
+                .child(
+                    Label::new(format!("{access}:"))
+                        .size(LabelSize::Small)
+                        .color(Color::Placeholder),
+                )
+                .into_any_element(),
+            Row::SymbolGroup {
+                depth,
+                kind,
+                count,
+                first_row,
+                last_row,
+            } => h_flex()
+                .id(("symbol-group", ix))
+                .px_2()
+                .py_0p5()
+                .pl(px(34. + *depth as f32 * 14.))
+                .gap_1()
+                .child(
+                    Label::new(t!(
+                        "{kind} x{count} (lines {first}–{last})",
+                        kind = kind.to_string(),
+                        count = *count,
+                        first = first_row + 1,
+                        last = last_row + 1
+                    ))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
                 )
                 .into_any_element(),
         }
@@ -686,6 +762,7 @@ fn push_dir_rows(
     symbols: Option<&SymbolIndex>,
     node: &DirNode,
     depth: usize,
+    include_locals: bool,
     rows: &mut Vec<Row>,
 ) {
     for dir in &node.dirs {
@@ -699,7 +776,15 @@ fn push_dir_rows(
             expanded: is_expanded,
         });
         if is_expanded {
-            push_dir_rows(expanded, worktree_id, symbols, dir, depth + 1, rows);
+            push_dir_rows(
+                expanded,
+                worktree_id,
+                symbols,
+                dir,
+                depth + 1,
+                include_locals,
+                rows,
+            );
         }
     }
     for file in &node.files {
@@ -716,16 +801,52 @@ fn push_dir_rows(
             expanded: is_expanded,
             symbol_count: file_symbols.map_or(0, |file| file.symbols.len()),
             rank: file_symbols.map(|file| file.rank),
+            in_degree: file_symbols.map_or(0, |file| file.in_degree),
+            out_degree: file_symbols.map_or(0, |file| file.out_degree),
         });
         if is_expanded && let Some(file_symbols) = file_symbols {
-            for symbol in &file_symbols.symbols {
-                rows.push(Row::Symbol {
-                    depth: depth + 2,
-                    kind: symbol.kind.clone(),
-                    name: symbol.name.clone(),
-                    row: symbol.row,
-                });
-            }
+            push_symbol_rows(&file_symbols.symbols, depth + 2, include_locals, rows);
+        }
+    }
+}
+
+/// The symbol rows of one file: the same grouping, folding and filtering the
+/// agent sees in `repo_map`.
+fn push_symbol_rows(
+    symbols: &[crate::symbol_map::SymbolEntry],
+    depth: usize,
+    include_locals: bool,
+    rows: &mut Vec<Row>,
+) {
+    for line in symbol_map::symbol_lines(symbols, include_locals) {
+        match line {
+            SymbolLine::Access {
+                depth: line_depth,
+                access,
+            } => rows.push(Row::Access {
+                depth: depth + line_depth as usize,
+                access,
+            }),
+            SymbolLine::Symbol(symbol) => rows.push(Row::Symbol {
+                depth: depth + symbol.depth as usize,
+                kind: symbol.kind,
+                name: symbol.name,
+                signature: symbol.signature,
+                row: symbol.row,
+            }),
+            SymbolLine::Folded {
+                depth: line_depth,
+                kind,
+                count,
+                first_row,
+                last_row,
+            } => rows.push(Row::SymbolGroup {
+                depth: depth + line_depth as usize,
+                kind,
+                count,
+                first_row,
+                last_row,
+            }),
         }
     }
 }
@@ -915,7 +1036,8 @@ fn finalize(node: &mut DirNode) {
             .cmp(&a.total_size)
             .then_with(|| a.name.cmp(&b.name))
     });
-    node.files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+    node.files
+        .sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
     node.total_size = total_size;
     node.file_count = file_count;
 }
@@ -1044,8 +1166,11 @@ mod tests {
         });
 
         let fs = FakeFs::new(cx.executor());
-        fs.insert_tree("/project", serde_json::json!({ "src": { "main.rs": "fn main() {}\n" } }))
-            .await;
+        fs.insert_tree(
+            "/project",
+            serde_json::json!({ "src": { "main.rs": "fn main() {}\n" } }),
+        )
+        .await;
         let project = Project::test(fs, [Path::new("/project")], cx).await;
         let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
         let workspace = window
@@ -1085,5 +1210,55 @@ mod tests {
         RelPath::new(Path::new(path), PathStyle::local())
             .expect("valid test path")
             .into_arc()
+    }
+
+    #[test]
+    fn symbol_rows_carry_access_folding_and_signatures() {
+        let entry = |name: &str, kind: &str, row: u32, access: Option<&str>| {
+            crate::symbol_map::SymbolEntry {
+                name: name.into(),
+                kind: kind.into(),
+                row,
+                owner: Some("Widget".into()),
+                depth: 2,
+                access: access.map(Into::into),
+                signature: Some("(int x) -> int".into()),
+                local: false,
+            }
+        };
+        let mut symbols = vec![
+            entry("Widget", "class", 0, None),
+            entry("draw", "method", 3, Some("public")),
+            entry("colour", "field", 5, Some("private")),
+            entry("width", "field", 6, Some("private")),
+            entry("height", "field", 7, Some("private")),
+        ];
+        symbols[0].depth = 0;
+        symbols[0].owner = None;
+
+        let mut rows = Vec::new();
+        push_symbol_rows(&symbols, 1, false, &mut rows);
+        let access: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Access { access, .. } => Some(&**access),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(access, ["public", "private"]);
+        // Fields stay named instead of folding; only variables summarize.
+        assert_eq!(
+            rows.iter()
+                .filter(|row| matches!(row, Row::Symbol { .. }))
+                .count(),
+            5
+        );
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                Row::Symbol { signature: Some(signature), .. } if &**signature == "(int x) -> int"
+            )),
+            "signatures reach the panel"
+        );
     }
 }
