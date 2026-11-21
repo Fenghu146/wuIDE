@@ -986,13 +986,17 @@ fn http_client_never_proxies_the_loopback_server() {
     const CHILD: &str = "WU_OPENCODE_PROXY_PROBE";
     if std::env::var_os(CHILD).is_none() {
         // reqwest reads the proxy from the environment, so the body runs in a child process.
+        // NO_PROXY has to be set to something that matches nothing: when it is
+        // absent, reqwest falls back to Windows' registry ProxyOverride, which
+        // lists 127.0.0.1;localhost on this machine and would exempt loopback
+        // for the plain client as well.
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([NAME, "--exact", "--test-threads=1"])
             .env(CHILD, "1")
             .env("HTTP_PROXY", "http://127.0.0.1:1")
             .env("http_proxy", "http://127.0.0.1:1")
-            .env_remove("NO_PROXY")
-            .env_remove("no_proxy")
+            .env("NO_PROXY", "example.invalid")
+            .env("no_proxy", "example.invalid")
             .env_remove("REQUEST_METHOD")
             .output()
             .unwrap();

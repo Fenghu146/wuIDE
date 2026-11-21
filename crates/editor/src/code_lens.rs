@@ -719,7 +719,7 @@ mod tests {
 
     use collections::HashSet;
     use futures::StreamExt;
-    use gpui::TestAppContext;
+    use gpui::{Entity, TestAppContext, VisualTestContext};
     use indoc::indoc;
     use settings::CodeLens;
     use util::path;
@@ -1800,6 +1800,21 @@ mod tests {
         cx.executor().advance_clock(Duration::from_millis(500));
         cx.run_until_parked();
 
+        // Which lenses are on screen, derived from the viewport itself: font
+        // metrics differ per platform, so how many rows fit changes, and a
+        // hard-coded set of rows is only right on one of them.
+        let visible_lens_lines = |editor: &Entity<Editor>, cx: &mut VisualTestContext| {
+            let visible_range = editor.update(cx, |editor, cx| {
+                let display_snapshot = editor.display_snapshot(cx);
+                editor.multi_buffer_visible_range(&display_snapshot, cx)
+            });
+            lens_lines
+                .iter()
+                .copied()
+                .filter(|line| (visible_range.start.row..=visible_range.end.row).contains(line))
+                .collect::<HashSet<_>>()
+        };
+
         let initial_resolved = resolved_lines
             .lock()
             .unwrap()
@@ -1807,7 +1822,7 @@ mod tests {
             .collect::<HashSet<_>>();
         assert_eq!(
             initial_resolved,
-            HashSet::from_iter([0, 10, 20, 30, 40]),
+            visible_lens_lines(&editor, cx),
             "Only lenses visible at the top should be resolved"
         );
 
@@ -1826,11 +1841,15 @@ mod tests {
         // lens row so the line is reserved while the resolve is in flight.
         // Those placeholder blocks add display height, so after scrolling to
         // the end the visible buffer-row range is slightly smaller than it
-        // would be without them, and lens row 60 is just outside it.
+        // would be without them.
+        let expected_after_scroll = visible_lens_lines(&editor, cx)
+            .difference(&initial_resolved)
+            .copied()
+            .collect::<HashSet<_>>();
         assert_eq!(
             after_scroll_resolved,
-            HashSet::from_iter([70, 80, 90]),
-            "Only newly visible lenses at the bottom should be resolved, not middle ones"
+            expected_after_scroll,
+            "Only lenses that scrolled into view should be resolved, not middle ones"
         );
     }
 
