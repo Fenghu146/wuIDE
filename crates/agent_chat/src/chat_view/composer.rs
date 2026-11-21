@@ -239,12 +239,12 @@ impl ChatView {
                 }
             }))
             .capture_action(cx.listener(|this, _: &editor::actions::Backspace, _, cx| {
-                if this.delete_selection_ref_at_caret(false, cx) {
+                if this.delete_composer_ref_at_caret(false, cx) {
                     cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|this, _: &editor::actions::Delete, _, cx| {
-                if this.delete_selection_ref_at_caret(true, cx) {
+                if this.delete_composer_ref_at_caret(true, cx) {
                     cx.stop_propagation();
                 }
             }))

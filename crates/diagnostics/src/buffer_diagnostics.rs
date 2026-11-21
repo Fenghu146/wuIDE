@@ -28,12 +28,13 @@ use std::{
     ops::Range,
     sync::Arc,
 };
-use text::{Anchor, BufferSnapshot, OffsetRangeExt};
+use text::{Anchor, BufferId, BufferSnapshot, OffsetRangeExt, ToPoint as _};
 use ui::{Button, ButtonStyle, Icon, IconName, Label, Tooltip, h_flex, prelude::*};
 use workspace::{
     ItemHandle, ItemNavHistory, Workspace,
     item::{Item, ItemEvent, TabContentParams},
 };
+use wu_actions::DiagnosticCitation;
 
 actions!(
     diagnostics,
@@ -1009,6 +1010,48 @@ impl DiagnosticsToolbarEditor for WeakEntity<BufferDiagnosticsEditor> {
     ) -> Vec<language::DiagnosticEntry<text::Anchor>> {
         self.read_with(cx, |buffer_diagnostics_editor, _cx| {
             buffer_diagnostics_editor.diagnostics.clone()
+        })
+        .unwrap_or_default()
+    }
+
+    fn diagnostic_path(&self, _buffer_id: BufferId, cx: &App) -> Option<std::path::PathBuf> {
+        self.read_with(cx, |buffer_diagnostics_editor, cx| {
+            let buffer = buffer_diagnostics_editor.buffer.as_ref()?.read(cx);
+            let file = buffer.file()?;
+            Some(file.path().as_std_path().to_path_buf())
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation> {
+        self.read_with(cx, |buffer_diagnostics_editor, cx| {
+            let Some(buffer) = buffer_diagnostics_editor.buffer.as_ref() else {
+                return Vec::new();
+            };
+            let buffer = buffer.read(cx);
+            let Some(file) = buffer.file() else {
+                return Vec::new();
+            };
+            let path = file.path().as_std_path().to_path_buf();
+            let snapshot = buffer.snapshot();
+            let max_severity = crate::diagnostic_renderer::max_shown_severity(
+                buffer_diagnostics_editor.include_warnings,
+            );
+            let mut citations: Vec<DiagnosticCitation> = buffer_diagnostics_editor
+                .diagnostics
+                .iter()
+                .filter(|entry| entry.diagnostic.severity <= max_severity)
+                .map(|entry| {
+                    crate::diagnostic_renderer::citation_for(
+                        &path,
+                        entry.range.start.to_point(&snapshot),
+                        &entry.diagnostic,
+                    )
+                })
+                .collect();
+            citations.sort_by(|a, b| (a.line, a.column, &a.code).cmp(&(b.line, b.column, &b.code)));
+            citations
         })
         .unwrap_or_default()
     }
