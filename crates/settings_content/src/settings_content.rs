@@ -1077,6 +1077,11 @@ pub struct AgentChatSettingsContent {
     ///
     /// Default: false
     pub compact_transcript: Option<bool>,
+    /// Put a project digest chip in the message box of a new chat. It is sent with the first
+    /// message and stays readable in the transcript; remove the chip to leave it out.
+    ///
+    /// Default: true
+    pub inject_repo_map_digest: Option<bool>,
     /// The layout of the model and effort picker.
     ///
     /// Default: "full"

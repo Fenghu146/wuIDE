@@ -179,6 +179,7 @@ dependencies = [
  "markdown",
  "menu",
  "mermaid_render",
+ "path",
  "paths",
  "picker",
  "project",

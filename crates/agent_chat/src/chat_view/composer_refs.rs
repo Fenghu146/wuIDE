@@ -19,12 +19,14 @@ use gpui::{
     App, Focusable as _, IntoElement, ParentElement, SharedString, Styled, WeakEntity, div, px,
 };
 use i18n::t;
+use settings::Settings as _;
 use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use ui::{IconName, Tooltip, prelude::*};
+use util::ResultExt as _;
 pub(crate) use wu_actions::DiagnosticCitation;
 
 /// Selections longer than this are never inlined, not even as a fallback, so
@@ -37,6 +39,39 @@ const MAX_SUMMARY_CHARS: usize = 100;
 /// Diagnostics spelled out when a group chip expands. A larger group points at
 /// the `diagnostics` tool instead of pasting every message.
 pub(crate) const MAX_LISTED_DIAGNOSTICS: usize = 20;
+
+/// The project digest a new chat offers in its message box.
+///
+/// The digest is rendered once, when the chat is created, so the chip needs no
+/// background lookup when it expands: the text sent to the agent is the same
+/// text the transcript keeps, collapsed behind "Show more".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DigestRef {
+    /// Files the digest lists, after `DEFAULT_DIGEST_FILES` capped it.
+    pub files: usize,
+    /// The whole `SymbolMap::to_digest` result, sent verbatim.
+    pub digest: String,
+}
+
+impl DigestRef {
+    fn label(&self) -> String {
+        format!("项目摘要 · {} 文件", self.files)
+    }
+
+    fn token(&self) -> String {
+        format!("@digest {}", self.files)
+    }
+
+    fn tooltip(&self) -> String {
+        "仓库地图摘要会随这条消息一起发送给智能体；删除这个引用就不会发送。".to_string()
+    }
+
+    /// The transcript keeps the digest under the same name the chip shows, so a
+    /// sent message never hides the context the agent received.
+    fn context_text(&self) -> String {
+        format!("{}\n\n{}", self.label(), self.digest)
+    }
+}
 
 /// One code selection the user added to the composer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -171,6 +206,8 @@ pub(crate) enum ComposerRefTarget {
     Diagnostic(DiagnosticCitation),
     /// Several diagnostics added at once, summarised in the composer.
     Diagnostics(Vec<DiagnosticCitation>),
+    /// The project digest offered to a chat that has no messages yet.
+    Digest(DigestRef),
 }
 
 impl ComposerRefTarget {
@@ -183,6 +220,7 @@ impl ComposerRefTarget {
                     && a.iter()
                         .all(|reference| b.iter().any(|other| same_diagnostic(reference, other)))
             }
+            (Self::Digest(a), Self::Digest(b)) => a == b,
             _ => false,
         }
     }
@@ -190,7 +228,7 @@ impl ComposerRefTarget {
     /// True when this chip already points the agent at `citation`.
     fn references_diagnostic(&self, citation: &DiagnosticCitation) -> bool {
         match self {
-            Self::Selection(_) => false,
+            Self::Selection(_) | Self::Digest(_) => false,
             Self::Diagnostic(existing) => same_diagnostic(existing, citation),
             Self::Diagnostics(existing) => existing
                 .iter()
@@ -219,6 +257,7 @@ impl ComposerRef {
                 // The id keeps two same-sized groups from sharing a token.
                 format!("@diagnostics {} #{}", citations.len(), self.id)
             }
+            ComposerRefTarget::Digest(digest) => digest.token(),
         }
     }
 
@@ -229,6 +268,7 @@ impl ComposerRef {
             ComposerRefTarget::Diagnostics(citations) => {
                 t!("{count} diagnostics", count = citations.len()).to_string()
             }
+            ComposerRefTarget::Digest(digest) => digest.label(),
         }
     }
 
@@ -237,6 +277,7 @@ impl ComposerRef {
             ComposerRefTarget::Selection(_) => IconName::AgentDocument,
             ComposerRefTarget::Diagnostic(_) => IconName::AgentDangerTriangle,
             ComposerRefTarget::Diagnostics(_) => IconName::AgentChecklist,
+            ComposerRefTarget::Digest(_) => IconName::AgentFolderWithFiles,
         }
     }
 
@@ -265,6 +306,7 @@ impl ComposerRef {
                     format!("{listed}\n{hint}")
                 }
             }
+            ComposerRefTarget::Digest(digest) => digest.tooltip(),
         }
     }
 
@@ -290,6 +332,7 @@ impl ComposerRef {
                 }
                 text
             }
+            ComposerRefTarget::Digest(digest) => digest.context_text(),
         }
     }
 }
@@ -498,6 +541,7 @@ impl ChatView {
                 ComposerRefTarget::Diagnostic(citation)
             }
             selection @ ComposerRefTarget::Selection(_) => selection,
+            digest @ ComposerRefTarget::Digest(_) => digest,
         };
         if self
             .composer_refs
@@ -506,22 +550,42 @@ impl ChatView {
         {
             return;
         }
-        let cwd = self.session.read(cx).metadata().cwd.clone();
         let id = self.next_composer_ref_id;
         self.next_composer_ref_id += 1;
-        let reference = ComposerRef::new(id, target);
+        self.add_composer_ref(ComposerRef::new(id, target), false, window, cx);
+    }
+
+    /// Inserts a reference at the start of the composer, before anything the
+    /// user has already typed.
+    fn add_composer_ref(
+        &mut self,
+        reference: ComposerRef,
+        at_start: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.session.read(cx).metadata().cwd.clone();
         let token = reference.token(&cwd);
 
         let text = self.composer.read(cx).text(cx);
         let mut insertion = String::new();
-        if !text.is_empty() && !text.ends_with(char::is_whitespace) {
-            insertion.push(' ');
-        }
-        let start = text.len() + insertion.len();
-        insertion.push_str(&token);
+        let (offset, start) = if at_start {
+            insertion.push_str(&token);
+            if !text.is_empty() && !text.starts_with(char::is_whitespace) {
+                insertion.push(' ');
+            }
+            (0, 0)
+        } else {
+            if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+                insertion.push(' ');
+            }
+            let start = text.len() + insertion.len();
+            insertion.push_str(&token);
+            (text.len(), start)
+        };
         let end = start + token.len();
         self.composer.update(cx, |editor, cx| {
-            let offset = MultiBufferOffset(text.len());
+            let offset = MultiBufferOffset(offset);
             editor.edit([(offset..offset, insertion)], cx);
             editor.change_selections(
                 editor::SelectionEffects::default(),
@@ -542,6 +606,99 @@ impl ChatView {
         });
         self.composer_refs.push(reference);
         cx.notify();
+    }
+
+    /// Offers the project digest to a chat that has no messages yet.
+    ///
+    /// The symbol map is built off the foreground thread, so this returns as
+    /// soon as the build starts. A repository without definitions produces
+    /// nothing: no chip, no notice.
+    pub(crate) fn offer_repo_digest(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.subagent.is_some()
+            || self.digest_offered
+            || !crate::AgentChatSettings::get_global(cx).inject_repo_map_digest
+        {
+            return false;
+        }
+        if self
+            .session
+            .read(cx)
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, crate::session::Entry::User { .. }))
+        {
+            return false;
+        }
+        let map_task = repo_wiki::symbol_map::symbol_map_task(self.project.clone(), cx);
+        let root = self.session.read(cx).metadata().cwd.clone();
+        let prepare = cx.background_spawn(async move {
+            let map = map_task.await;
+            let ranked = map.ranked().count();
+            if ranked == 0 {
+                return None;
+            }
+            let files = ranked.min(repo_wiki::symbol_map::DEFAULT_DIGEST_FILES);
+            let digest = map.to_digest(
+                repo_wiki::symbol_map::DEFAULT_DIGEST_FILES,
+                repo_wiki::symbol_map::DEFAULT_DIGEST_SYMBOLS_PER_FILE,
+                repo_wiki::symbol_map::MAX_DIGEST_CHARS,
+            );
+            // Pi's MCP server reads the snapshot from the project directory, so
+            // a chat that never opened the repo map panel still gets one.
+            if let Err(error) =
+                repo_wiki::snapshot::write(&map, &root, &paths::repo_map_snapshots_dir())
+            {
+                log::error!("failed to write the repo map snapshot for {root:?}: {error}");
+            }
+            Some(DigestRef { files, digest })
+        });
+        self._digest_chip = cx.spawn_in(window, async move |this, cx| {
+            let Some(digest) = prepare.await else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.insert_digest_chip(digest, window, cx);
+            })
+            .log_err();
+        });
+        true
+    }
+
+    /// Adds the digest chip once. A chat keeps the decision afterwards: a chip
+    /// the user removes is never put back.
+    pub(crate) fn insert_digest_chip(
+        &mut self,
+        digest: DigestRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.digest_offered
+            || self
+                .session
+                .read(cx)
+                .entries()
+                .iter()
+                .any(|entry| matches!(entry, crate::session::Entry::User { .. }))
+        {
+            return false;
+        }
+        let target = ComposerRefTarget::Digest(digest);
+        if self
+            .composer_refs
+            .iter()
+            .any(|existing| existing.target.same_target(&target))
+        {
+            return false;
+        }
+        let id = self.next_composer_ref_id;
+        self.next_composer_ref_id += 1;
+        self.add_composer_ref(ComposerRef::new(id, target), true, window, cx);
+        self.digest_offered = true;
+        true
     }
 
     fn references_diagnostic(&self, citation: &DiagnosticCitation) -> bool {
@@ -890,5 +1047,85 @@ mod tests {
         assert!(expanded.contains("E0308 b"), "{expanded}");
         assert!(expanded.contains("error c"), "{expanded}");
         assert!(!expanded.contains("@diag"), "{expanded}");
+    }
+
+    fn digest_map(files: usize) -> repo_wiki::symbol_map::SymbolMap {
+        use repo_wiki::symbol_map::{FileSymbols, SymbolEntry, SymbolMap};
+        SymbolMap {
+            files: (0..files)
+                .map(|index| FileSymbols {
+                    rel: path::rel_path::RelPath::new(
+                        Path::new(&format!("src/file{index}.rs")),
+                        path::PathStyle::local(),
+                    )
+                    .expect("valid test path")
+                    .into_arc(),
+                    size: 120,
+                    rank: 1.0 - index as f32 / 10.0,
+                    lines: 12,
+                    in_degree: 1,
+                    out_degree: 1,
+                    symbols: vec![SymbolEntry {
+                        name: format!("item{index}").into(),
+                        kind: "function".into(),
+                        row: 0,
+                        owner: None,
+                        depth: 0,
+                        access: None,
+                        signature: None,
+                        local: false,
+                    }],
+                })
+                .collect(),
+            ..SymbolMap::default()
+        }
+    }
+
+    #[test]
+    fn a_digest_chip_names_its_files_and_expands_to_the_whole_digest() {
+        let digest = "仓库地图摘要（按被引用程度排序，共 2 个文件）：\n- src/main.rs";
+        let reference = ComposerRef::new(
+            0,
+            ComposerRefTarget::Digest(DigestRef {
+                files: 2,
+                digest: digest.to_string(),
+            }),
+        );
+        assert_eq!(reference.label(), "项目摘要 · 2 文件");
+        assert_eq!(reference.token(&cwd()), "@digest 2");
+
+        let text = format!("请先熟悉项目 {} 再动手", reference.token(&cwd()));
+        let expanded = expand(&text, std::slice::from_ref(&reference), &cwd());
+        assert_eq!(
+            expanded,
+            format!("请先熟悉项目 项目摘要 · 2 文件\n\n{digest} 再动手")
+        );
+        assert!(!expanded.contains("@digest"));
+    }
+
+    #[test]
+    fn the_digest_from_the_symbol_map_travels_whole() {
+        use repo_wiki::symbol_map::{
+            DEFAULT_DIGEST_FILES, DEFAULT_DIGEST_SYMBOLS_PER_FILE, MAX_DIGEST_CHARS,
+        };
+
+        let digest = digest_map(3).to_digest(
+            DEFAULT_DIGEST_FILES,
+            DEFAULT_DIGEST_SYMBOLS_PER_FILE,
+            MAX_DIGEST_CHARS,
+        );
+        assert!(digest.contains("仓库地图摘要"));
+        assert!(digest.contains("src/file0.rs"));
+
+        let reference = ComposerRef::new(
+            0,
+            ComposerRefTarget::Digest(DigestRef {
+                files: 3,
+                digest: digest.clone(),
+            }),
+        );
+        let expanded = expand(&reference.token(&cwd()), &[reference], &cwd());
+        assert_eq!(expanded, format!("项目摘要 · 3 文件\n\n{digest}"));
+        assert!(expanded.ends_with(&digest), "the body is not truncated");
     }
 }

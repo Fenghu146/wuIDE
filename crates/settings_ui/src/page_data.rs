@@ -7695,7 +7695,7 @@ fn agent_chat_page() -> SettingsPage {
         ]
     }
 
-    fn chat_section() -> [SettingsPageItem; 8] {
+    fn chat_section() -> [SettingsPageItem; 9] {
         [
             SettingsPageItem::SectionHeader(n!("Chat")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -7745,6 +7745,30 @@ fn agent_chat_page() -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.agent_chat.get_or_insert_default().compact_transcript = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Inject Project Digest"),
+                description: n!(
+                    "Put a project digest chip in a new chat's message box. It is sent with your first message and stays readable in the transcript; remove the chip to leave it out."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("agent_chat.inject_repo_map_digest"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent_chat
+                            .as_ref()?
+                            .inject_repo_map_digest
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .agent_chat
+                            .get_or_insert_default()
+                            .inject_repo_map_digest = value;
                     },
                 }),
                 metadata: None,
