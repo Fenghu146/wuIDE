@@ -35,7 +35,9 @@ impl CatalogFailure {
     pub fn classify(error: &HarnessError) -> CatalogFailureCode {
         match error {
             HarnessError::Discovery(error) => return error.code,
-            HarnessError::NotInstalled(_) | HarnessError::AgentMissing(_) => {
+            HarnessError::NotInstalled(_)
+            | HarnessError::AgentMissing(_)
+            | HarnessError::AgentIncomplete(_) => {
                 return CatalogFailureCode::MissingExecutable;
             }
             HarnessError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {

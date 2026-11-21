@@ -133,10 +133,21 @@ impl AcpHarness {
         if let Some(found) = find_program(self.preset.program) {
             return self.build_launch(found);
         }
-        Err(HarnessError::agent_missing(
-            self.preset.id,
-            self.preset.program,
-        ))
+        Err(self.unresolved_agent_error(&bundled_program_file(self.preset.program)))
+    }
+
+    /// A bundled runtime that lacks one of its files is a partial install or a
+    /// checkout that never ran `npm install`, so name the missing file. Only a
+    /// machine with no agent directory at all gets the plain "not available".
+    fn unresolved_agent_error(&self, missing: &str) -> HarnessError {
+        match bundled_runtime_dir() {
+            Some(dir) => HarnessError::AgentIncomplete(format!(
+                "{}: {missing} is missing from {}",
+                self.preset.display_name,
+                dir.display()
+            )),
+            None => HarnessError::agent_missing(self.preset.id, missing),
+        }
     }
 
     fn build_launch(&self, program: PathBuf) -> Result<Launch, HarnessError> {
@@ -179,7 +190,7 @@ impl AcpHarness {
         bundled_dirs()
             .into_iter()
             .find(|dir| dir.join(entry).is_file())
-            .ok_or_else(|| HarnessError::agent_missing(self.preset.id, entry))
+            .ok_or_else(|| self.unresolved_agent_error(entry))
     }
 
     /// Point the agent at an isolated data directory inside Wu's own folder so
@@ -1610,6 +1621,7 @@ fn bundled_dirs() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("WU_AGENT_BIN_DIR") {
         dirs.push(PathBuf::from(dir));
     }
+    let mut anchors = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
@@ -1624,8 +1636,60 @@ fn bundled_dirs() -> Vec<PathBuf> {
             dirs.push(contents.join("Resources").join("agents"));
         }
         dirs.push(parent.to_path_buf());
+        anchors.push(parent.to_path_buf());
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        anchors.push(cwd);
+    }
+    // Appended after every release location, so a directory shipped with the
+    // executable always wins.
+    dirs.extend(checkout_agent_dirs(&anchors));
+    dirs
+}
+
+/// The agent runtime of a source checkout, for `cargo build` binaries.
+///
+/// `script/bundle-*` copies `crates/wu/resources/agents` next to the executable
+/// for a release, but `cargo build` leaves the executable in `target/` with no
+/// `agents` directory beside it, so Pi looks uninstalled in a development build.
+/// The checkout is found at runtime by walking up from the executable and the
+/// working directory: embedding a build-time path such as `CARGO_MANIFEST_DIR`
+/// would put an absolute path in the binary, which breaks as soon as the
+/// checkout moves or the build happens somewhere else. Walking up only matches
+/// a machine with a checkout, and it is consulted after every path a release
+/// uses, so shipped builds are unaffected.
+fn checkout_agent_dirs(anchors: &[PathBuf]) -> Vec<PathBuf> {
+    const CHECKOUT_LAYOUTS: &[&str] = &["crates/wu/resources/agents", "agents"];
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for anchor in anchors {
+        for ancestor in anchor.ancestors() {
+            for layout in CHECKOUT_LAYOUTS {
+                let candidate = ancestor.join(layout);
+                if candidate.is_dir() && !dirs.contains(&candidate) {
+                    dirs.push(candidate);
+                }
+            }
+        }
     }
     dirs
+}
+
+/// The first bundled directory that ships the JS agent runtime. Every release
+/// bundle and checkout has one, so a missing file inside it is a partial
+/// install rather than an agent the user never installed.
+fn bundled_runtime_dir() -> Option<PathBuf> {
+    bundled_dirs()
+        .into_iter()
+        .find(|dir| dir.join("node_modules").is_dir())
+}
+
+/// The file name a bundled runtime uses for `name`.
+fn bundled_program_file(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -1919,5 +1983,30 @@ mod tests {
         assert!(missing.get("error").is_none(), "a missing snapshot is not a failure");
         let text = missing["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Problems panel"), "unhelpful message: {text}");
+    }
+
+    #[test]
+    fn a_checkout_supplies_the_agent_runtime_a_dev_build_lacks() {
+        let root = tempfile::tempdir().unwrap();
+        let agents = root.path().join("crates/wu/resources/agents");
+        std::fs::create_dir_all(agents.join("node_modules")).unwrap();
+        let exe_dir = root.path().join("target/release-fast");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+
+        // `cargo build` puts the executable in `target/` with no `agents` beside
+        // it; the checkout above it is what makes Pi available again.
+        let found = checkout_agent_dirs(&[exe_dir, root.path().to_path_buf()]);
+        assert_eq!(found.first(), Some(&agents));
+        assert_eq!(found.iter().filter(|dir| *dir == &agents).count(), 1);
+
+        let plain = tempfile::tempdir().unwrap();
+        let nested = plain.path().join("target/release-fast");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert!(
+            !checkout_agent_dirs(&[nested])
+                .iter()
+                .any(|dir| dir.starts_with(plain.path())),
+            "a tree without a checkout layout must not supply agents"
+        );
     }
 }

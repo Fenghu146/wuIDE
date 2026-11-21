@@ -13,6 +13,8 @@ pub enum HarnessError {
     NotInstalled(String),
     #[error("{}", missing_agent_message(*.0))]
     AgentMissing(HarnessId),
+    #[error("{}", i18n::t!("The agent runtime is incomplete: {detail}. Reinstall the editor, or in a source checkout run `npm install` in `crates/wu/resources/agents`.", detail = .0))]
+    AgentIncomplete(String),
     #[error("{}", i18n::t!("harness protocol error: {detail}", detail = translated_detail(.0)))]
     Protocol(String),
     #[error(transparent)]
