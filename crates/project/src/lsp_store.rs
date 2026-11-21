@@ -9033,6 +9033,28 @@ impl LspStore {
         }
     }
 
+    /// Every diagnostic the store currently holds, one entry at a time.
+    ///
+    /// The summaries are enough for the panel, but the snapshot Pi reads needs
+    /// severity, code and message text, which only the entries carry.
+    pub fn visit_diagnostics(
+        &self,
+        mut visit: impl FnMut(WorktreeId, &RelPath, &DiagnosticEntry<Unclipped<PointUtf16>>),
+    ) {
+        let LspStoreMode::Local(local_lsp_store) = &self.mode else {
+            return;
+        };
+        for (worktree_id, paths) in &local_lsp_store.diagnostics {
+            for (path, by_server) in paths {
+                for (_, diagnostics) in by_server {
+                    for entry in diagnostics {
+                        visit(*worktree_id, path, entry);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn diagnostic_summaries<'a>(
         &'a self,
         include_ignored: bool,

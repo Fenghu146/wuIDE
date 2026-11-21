@@ -3,6 +3,7 @@ pub mod buffer_store;
 pub mod color_extractor;
 pub mod debounced_delay;
 pub mod debugger;
+pub mod diagnostics_snapshot;
 pub mod git_store;
 pub mod image_store;
 pub mod lsp_command;
@@ -218,6 +219,7 @@ pub struct Project {
     _subscriptions: Vec<gpui::Subscription>,
     buffers_needing_diff: HashSet<WeakEntity<Buffer>>,
     git_diff_debouncer: DebouncedDelay<Self>,
+    diagnostics_snapshot_debouncer: DebouncedDelay<Self>,
     remotely_created_models: Arc<Mutex<RemotelyCreatedModels>>,
     terminals: Terminals,
     node: Option<NodeRuntime>,
@@ -1211,6 +1213,7 @@ impl Project {
 
                 buffers_needing_diff: Default::default(),
                 git_diff_debouncer: DebouncedDelay::new(),
+                diagnostics_snapshot_debouncer: DebouncedDelay::new(),
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
@@ -1424,6 +1427,7 @@ impl Project {
                 remote_client: Some(remote.clone()),
                 buffers_needing_diff: Default::default(),
                 git_diff_debouncer: DebouncedDelay::new(),
+                diagnostics_snapshot_debouncer: DebouncedDelay::new(),
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
@@ -2710,6 +2714,51 @@ impl Project {
         }
     }
 
+    fn schedule_diagnostics_snapshot(&mut self, cx: &mut Context<Self>) {
+        self.diagnostics_snapshot_debouncer.fire_new(
+            diagnostics_snapshot::DEBOUNCE,
+            cx,
+            |this, cx| this.write_diagnostics_snapshots(cx),
+        );
+    }
+
+    /// Writes one diagnostics snapshot per visible worktree.
+    ///
+    /// Pi's MCP server reads the file from `paths::diagnostics_snapshots_dir()`
+    /// and derives the same name from its working directory, so no IPC channel
+    /// is needed between the IDE and the agent.
+    fn write_diagnostics_snapshots(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        let mut by_worktree = HashMap::<WorktreeId, Vec<diagnostics_snapshot::Item>>::default();
+        self.lsp_store
+            .read(cx)
+            .visit_diagnostics(|worktree_id, path, entry| {
+                if let Some(item) = diagnostics_snapshot::Item::new(path, entry) {
+                    by_worktree.entry(worktree_id).or_default().push(item);
+                }
+            });
+
+        let mut snapshots = Vec::new();
+        for worktree in self.worktree_store.read(cx).visible_worktrees(cx) {
+            let root_path = worktree.read(cx).abs_path().to_path_buf();
+            let mut items = by_worktree
+                .remove(&worktree.read(cx).id())
+                .unwrap_or_default();
+            diagnostics_snapshot::sort_items(&mut items);
+            snapshots.push((root_path, items));
+        }
+
+        let dir = paths::diagnostics_snapshots_dir();
+        cx.background_spawn(async move {
+            for (root_path, items) in snapshots {
+                if let Err(error) = diagnostics_snapshot::write(&root_path, &dir, &items) {
+                    log::error!(
+                        "failed to write the diagnostics snapshot for {root_path:?}: {error}"
+                    );
+                }
+            }
+        })
+    }
+
     fn on_lsp_store_event(
         &mut self,
         _: Entity<LspStore>,
@@ -2718,6 +2767,9 @@ impl Project {
     ) {
         match event {
             LspStoreEvent::DiagnosticsUpdated { server_id, paths } => {
+                // Diagnostics arrive in bursts; the agent only needs the settled
+                // set, so the file is written once the burst is over.
+                self.schedule_diagnostics_snapshot(cx);
                 cx.emit(Event::DiagnosticsUpdated {
                     paths: paths.clone(),
                     language_server_id: *server_id,
