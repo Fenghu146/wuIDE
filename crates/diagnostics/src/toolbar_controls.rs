@@ -3,9 +3,9 @@ use gpui::{Context, EventEmitter, ParentElement, Render, Window};
 use i18n::t;
 use language::DiagnosticEntry;
 use text::{Anchor, BufferId};
-use ui::{Tooltip, prelude::*};
+use ui::{IconName, Tooltip, prelude::*};
 use workspace::{ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, item::ItemHandle};
-use wu_actions::buffer_search;
+use wu_actions::{AddDiagnosticsToChat, DiagnosticCitation, buffer_search};
 
 pub struct ToolbarControls {
     editor: Option<Box<dyn DiagnosticsToolbarEditor>>,
@@ -31,6 +31,10 @@ pub(crate) trait DiagnosticsToolbarEditor: Send + Sync {
         buffer_id: BufferId,
         cx: &App,
     ) -> Vec<DiagnosticEntry<Anchor>>;
+    /// Returns the file a buffer's diagnostics belong to, when it is on disk.
+    fn diagnostic_path(&self, buffer_id: BufferId, cx: &App) -> Option<std::path::PathBuf>;
+    /// Returns the diagnostics the panel is showing, for the "add all" button.
+    fn diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation>;
 }
 
 impl Render for ToolbarControls {
@@ -45,6 +49,11 @@ impl Render for ToolbarControls {
             }
             None => {}
         }
+        let citations = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.diagnostic_citations(cx))
+            .unwrap_or_default();
 
         let (warning_tooltip, warning_color) = if include_warnings {
             (t!("Exclude Warnings"), Color::Warning)
@@ -111,6 +120,23 @@ impl Render for ToolbarControls {
                         }
                     })),
             )
+            .when(!citations.is_empty(), |this| {
+                let citations = citations.clone();
+                this.child(
+                    IconButton::new("add-all-diagnostics-to-chat", IconName::AgentChatRoundLine)
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text(t!("Add All Diagnostics to Chat")))
+                        .aria_label(t!("Add All Diagnostics to Chat"))
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(AddDiagnosticsToChat {
+                                    citations: citations.clone(),
+                                }),
+                                cx,
+                            );
+                        }),
+                )
+            })
     }
 }
 

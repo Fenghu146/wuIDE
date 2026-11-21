@@ -1,6 +1,8 @@
 {
   "1 error": "1 个错误",
   "1 warning": "1 个警告",
+  "Add All Diagnostics to Chat": "将全部诊断加入对话",
+  "Add Diagnostic to Chat": "将诊断加入对话",
   "Buffer Diagnostics": "缓冲区诊断",
   "Buffer Diagnostics - {path}": "缓冲区诊断 - {path}",
   "Buffer Search": "缓冲区搜索",

@@ -11,11 +11,11 @@ mod outline;
 mod persistence;
 mod queue_panel;
 mod search;
-mod selection_refs;
+mod composer_refs;
 mod side_pane;
 mod todo_panel;
 
-pub(crate) use selection_refs::SelectionRef;
+pub(crate) use composer_refs::{ComposerRefTarget, DiagnosticCitation, SelectionRef};
 
 use crate::{
     AgentChatSettings, MoveChatToPanel, MoveChatToTab, RenameChat, Send, Stop, SubmitAnswer,
@@ -178,8 +178,8 @@ pub struct ChatView {
     mention_results: Vec<completion::MentionItem>,
     _mention_search: Task<()>,
     composer_skills: Vec<agent_harness::SkillRef>,
-    selection_refs: Vec<selection_refs::SelectionRef>,
-    next_selection_ref_id: u64,
+    composer_refs: Vec<composer_refs::ComposerRef>,
+    next_composer_ref_id: u64,
     attachments: Vec<std::path::PathBuf>,
     lightbox: Option<image_viewer::Lightbox>,
     generated_image_layouts: std::cell::RefCell<HashMap<std::path::PathBuf, Option<(Pixels, f32)>>>,
@@ -360,8 +360,8 @@ impl ChatView {
             mention_results: Vec::new(),
             _mention_search: Task::ready(()),
             composer_skills: Vec::new(),
-            selection_refs: Vec::new(),
-            next_selection_ref_id: 0,
+            composer_refs: Vec::new(),
+            next_composer_ref_id: 0,
             attachments: Vec::new(),
             lightbox: None,
             generated_image_layouts: Default::default(),
@@ -798,7 +798,7 @@ impl ChatView {
             .into_iter()
             .filter(|skill| text.contains(&format!("${}", skill.name)))
             .collect();
-        let text = self.expand_selection_refs(&text, cx);
+        let text = self.expand_composer_refs(&text, cx);
         let prompt = Prompt {
             text,
             attachments: std::mem::take(&mut self.attachments),
@@ -4485,7 +4485,7 @@ mod tests {
                     Some("rust".to_string()),
                     "pub fn visible_chat() {}\nfn second() {}\n",
                 );
-                view.insert_selection_reference(reference, window, cx);
+                view.insert_composer_reference(ComposerRefTarget::Selection(reference), window, cx);
             })
         };
         view.update_in(cx, |view, window, cx| {
@@ -4500,7 +4500,7 @@ mod tests {
             "please explain @src/panel.rs L11-L28",
             "the same region is only added once"
         );
-        view.read_with(cx, |view, _| assert_eq!(view.selection_refs.len(), 1));
+        view.read_with(cx, |view, _| assert_eq!(view.composer_refs.len(), 1));
         let shown = view.update(cx, |view, cx| {
             view.composer
                 .update(cx, |editor, cx| editor.display_text(cx))
@@ -4510,14 +4510,14 @@ mod tests {
             "the composer shows a chip instead of the code or the token"
         );
 
-        let removed = view.update(cx, |view, cx| view.delete_selection_ref_at_caret(false, cx));
+        let removed = view.update(cx, |view, cx| view.delete_composer_ref_at_caret(false, cx));
         assert!(removed, "backspace next to a chip removes the whole chip");
         assert_eq!(composer_text(&view, cx), "please explain");
-        view.read_with(cx, |view, _| assert!(view.selection_refs.is_empty()));
+        view.read_with(cx, |view, _| assert!(view.composer_refs.is_empty()));
 
         add(cx);
-        let id = view.read_with(cx, |view, _| view.selection_refs[0].id);
-        view.update(cx, |view, cx| view.remove_selection_ref(id, cx));
+        let id = view.read_with(cx, |view, _| view.composer_refs[0].id);
+        view.update(cx, |view, cx| view.remove_composer_ref(id, cx));
         assert_eq!(
             composer_text(&view, cx),
             "please explain",
@@ -4531,7 +4531,7 @@ mod tests {
 
         add(cx);
         let text = composer_text(&view, cx);
-        let prompt = view.update(cx, |view, cx| view.expand_selection_refs(&text, cx));
+        let prompt = view.update(cx, |view, cx| view.expand_composer_refs(&text, cx));
         assert_eq!(
             prompt,
             "please explain 选中代码：`src/panel.rs` L11-L28（共 18 行，首行 `pub fn visible_chat() {}`）。请读取该文件中的这段代码。"
@@ -4540,7 +4540,239 @@ mod tests {
             !prompt.contains("fn second()"),
             "the code itself never reaches the agent"
         );
-        view.read_with(cx, |view, _| assert!(view.selection_refs.is_empty()));
+        view.read_with(cx, |view, _| assert!(view.composer_refs.is_empty()));
+    }
+
+    #[gpui::test]
+    async fn a_diagnostic_becomes_one_removable_chip(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        let path = directory.path().join("src/worker.rs");
+        let citation = |line: u32, code: &str| DiagnosticCitation {
+            path: path.clone(),
+            line,
+            column: 5,
+            severity: "error".to_string(),
+            code: Some(code.to_string()),
+            message: "mismatched types".to_string(),
+        };
+        let add = |cx: &mut VisualTestContext, citation: DiagnosticCitation| {
+            view.update_in(cx, |view, window, cx| {
+                view.insert_composer_reference(
+                    ComposerRefTarget::Diagnostic(citation),
+                    window,
+                    cx,
+                );
+            })
+        };
+        view.update_in(cx, |view, window, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.set_text("please fix", window, cx))
+        });
+
+        add(cx, citation(42, "E0308"));
+        assert_eq!(
+            composer_text(&view, cx),
+            "please fix @diag src/worker.rs:42:5 E0308"
+        );
+        let shown = view.update(cx, |view, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.display_text(cx))
+        });
+        assert_eq!(
+            shown, "please fix ⋯",
+            "the composer shows a chip, not the token or the message"
+        );
+
+        add(cx, citation(42, "E0308"));
+        assert_eq!(
+            composer_text(&view, cx),
+            "please fix @diag src/worker.rs:42:5 E0308",
+            "the same file, line and code is only added once"
+        );
+        view.read_with(cx, |view, _| assert_eq!(view.composer_refs.len(), 1));
+
+        add(cx, citation(42, "E0309"));
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.composer_refs.len(),
+                2,
+                "another rule on the same line is its own diagnostic"
+            )
+        });
+
+        let removed = view.update(cx, |view, cx| view.delete_composer_ref_at_caret(false, cx));
+        assert!(removed, "backspace next to a chip removes the whole chip");
+        assert_eq!(composer_text(&view, cx), "please fix @diag src/worker.rs:42:5 E0308");
+
+        let text = composer_text(&view, cx);
+        let prompt = view.update(cx, |view, cx| view.expand_composer_refs(&text, cx));
+        assert_eq!(
+            prompt,
+            "please fix src/worker.rs:42:5 error E0308 mismatched types。请读取该文件这一行附近的代码。"
+        );
+        view.read_with(cx, |view, _| assert!(view.composer_refs.is_empty()));
+
+        // Sending clears the composer, so start the close-button check from an
+        // empty input instead of the token the sent message consumed.
+        view.update_in(cx, |view, window, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.set_text("please fix", window, cx))
+        });
+        add(cx, citation(42, "E0308"));
+        let id = view.read_with(cx, |view, _| view.composer_refs[0].id);
+        view.update(cx, |view, cx| view.remove_composer_ref(id, cx));
+        assert_eq!(
+            composer_text(&view, cx),
+            "please fix",
+            "the close button leaves the rest of the message alone"
+        );
+    }
+
+    #[gpui::test]
+    async fn a_diagnostic_group_is_one_chip_that_skips_diagnostics_already_cited(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        let path = directory.path().join("src/worker.rs");
+        let citation = |line: u32, message: &str| DiagnosticCitation {
+            path: path.clone(),
+            line,
+            column: 1,
+            severity: "warning".to_string(),
+            code: Some("W1".to_string()),
+            message: message.to_string(),
+        };
+        view.update_in(cx, |view, window, cx| {
+            view.insert_composer_reference(
+                ComposerRefTarget::Diagnostic(citation(1, "first")),
+                window,
+                cx,
+            );
+            view.insert_composer_reference(
+                ComposerRefTarget::Diagnostics(vec![
+                    citation(1, "first"),
+                    citation(7, "second"),
+                    citation(9, "third"),
+                ]),
+                window,
+                cx,
+            );
+        });
+        assert_eq!(
+            composer_text(&view, cx),
+            "@diag src/worker.rs:1:1 W1 @diagnostics 2 #1",
+            "the group leaves out the diagnostic an existing chip already points at"
+        );
+
+        view.update_in(cx, |view, window, cx| {
+            view.insert_composer_reference(
+                ComposerRefTarget::Diagnostics(vec![citation(7, "second")]),
+                window,
+                cx,
+            );
+        });
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.composer_refs.len(),
+                2,
+                "a group whose diagnostics are all cited already is skipped"
+            )
+        });
+
+        let text = composer_text(&view, cx);
+        let prompt = view.update(cx, |view, cx| view.expand_composer_refs(&text, cx));
+        assert!(
+            prompt.contains("诊断（共 2 条）：\n- src/worker.rs:7:1 warning W1 second"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("- src/worker.rs:9:1 warning W1 third"), "{prompt}");
+        assert!(prompt.contains("src/worker.rs:1:1 warning W1 first"), "{prompt}");
+        assert!(
+            !prompt.contains("@diagnostics"),
+            "the chips are gone once the message is sent: {prompt}"
+        );
+    }
+
+    #[gpui::test]
+    async fn adding_diagnostics_without_a_chat_explains_instead_of_opening_one(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+        workspace.update_in(cx, |workspace, window, cx| {
+            crate::editor_bridge::add_diagnostics_to_chat(
+                workspace,
+                vec![DiagnosticCitation {
+                    path: std::path::PathBuf::from("/work/repo/src/worker.rs"),
+                    line: 42,
+                    column: 5,
+                    severity: "error".to_string(),
+                    code: Some("E0308".to_string()),
+                    message: "mismatched types".to_string(),
+                }],
+                window,
+                cx,
+            );
+        });
+        workspace.read_with(cx, |workspace, cx| {
+            assert_eq!(
+                workspace.items_of_type::<ChatView>(cx).count(),
+                0,
+                "no chat is opened behind the user's back"
+            );
+            assert_eq!(
+                workspace.notification_ids().len(),
+                1,
+                "the user is told to open a chat first"
+            );
+        });
     }
 
     #[gpui::test]

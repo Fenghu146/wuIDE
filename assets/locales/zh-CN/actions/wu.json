@@ -3,6 +3,10 @@
     "description": "显示 IDE 的相关信息。",
     "name": "关于"
   },
+  "wu::AddDiagnosticsToChat": {
+    "description": "把 Problems 面板中的诊断作为引用加入正在查看的智能体对话，不发送。",
+    "name": "将诊断加入对话"
+  },
   "wu::AddSelectionToChat": {
     "description": "把当前编辑器中选中的代码作为引用加入正在查看的智能体对话，不发送。",
     "name": "将选中代码加入对话"

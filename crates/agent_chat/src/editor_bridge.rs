@@ -1,7 +1,7 @@
 //! Bridges the active editor with agent chat sessions: selections and
 //! diagnostics can be routed to an agent as a chat prompt.
 
-use crate::chat_view::{ChatView, SelectionRef};
+use crate::chat_view::{ChatView, ComposerRefTarget, DiagnosticCitation, SelectionRef};
 use editor::{Editor, MultiBufferOffset};
 use gpui::{App, Context, Window};
 use i18n::t;
@@ -64,7 +64,40 @@ pub fn add_selection_to_chat(
         return;
     };
     chat.update(cx, |chat, cx| {
-        chat.insert_selection_reference(reference, window, cx)
+        chat.insert_composer_reference(ComposerRefTarget::Selection(reference), window, cx)
+    });
+}
+
+/// Appends diagnostics chosen in the Problems panel to the chat the user is
+/// looking at: one chip for a single diagnostic, one summary chip for a group.
+/// Never starts a new chat; without a visible chat it explains what to do.
+pub fn add_diagnostics_to_chat(
+    workspace: &mut Workspace,
+    mut citations: Vec<DiagnosticCitation>,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if citations.is_empty() {
+        return;
+    }
+    let Some(chat) = crate::agent_panel::visible_chat(workspace, cx) else {
+        workspace.show_toast(
+            Toast::new(
+                NotificationId::unique::<ChatView>(),
+                t!("Open a chat before adding diagnostics.").to_string(),
+            )
+            .autohide(),
+            cx,
+        );
+        return;
+    };
+    let target = if citations.len() == 1 {
+        ComposerRefTarget::Diagnostic(citations.remove(0))
+    } else {
+        ComposerRefTarget::Diagnostics(citations)
+    };
+    chat.update(cx, |chat, cx| {
+        chat.insert_composer_reference(target, window, cx)
     });
 }
 

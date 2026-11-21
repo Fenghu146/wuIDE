@@ -39,7 +39,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use text::{BufferId, OffsetRangeExt};
+use text::{BufferId, OffsetRangeExt, ToPoint as _};
 use theme::ActiveTheme;
 use toolbar_controls::DiagnosticsToolbarEditor;
 pub use toolbar_controls::ToolbarControls;
@@ -50,6 +50,7 @@ use workspace::{
     item::{Item, ItemEvent, ItemHandle, SaveOptions, TabContentParams},
     searchable::SearchableItemHandle,
 };
+use wu_actions::DiagnosticCitation;
 
 actions!(
     diagnostics,
@@ -976,7 +977,61 @@ impl DiagnosticsToolbarEditor for WeakEntity<ProjectDiagnosticsEditor> {
         })
         .unwrap_or_default()
     }
+
+    fn diagnostic_path(&self, buffer_id: BufferId, cx: &App) -> Option<std::path::PathBuf> {
+        self.read_with(cx, |project_diagnostics_editor, cx| {
+            diagnostic_renderer::buffer_path(&project_diagnostics_editor.multibuffer, buffer_id, cx)
+        })
+        .ok()
+        .flatten()
+    }
+
+    fn diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation> {
+        self.read_with(cx, |project_diagnostics_editor, cx| {
+            let max_severity = diagnostic_renderer::max_shown_severity(
+                project_diagnostics_editor.include_warnings,
+            );
+            let mut citations = Vec::new();
+            for (buffer_id, entries) in &project_diagnostics_editor.diagnostics {
+                let Some(buffer) = project_diagnostics_editor
+                    .multibuffer
+                    .read(cx)
+                    .buffer(*buffer_id)
+                else {
+                    continue;
+                };
+                let buffer = buffer.read(cx);
+                let Some(file) = buffer.file() else {
+                    continue;
+                };
+                let path = file.path().as_std_path().to_path_buf();
+                let snapshot = buffer.snapshot();
+                for entry in entries {
+                    if entry.diagnostic.severity > max_severity {
+                        continue;
+                    }
+                    citations.push(diagnostic_renderer::citation_for(
+                        &path,
+                        entry.range.start.to_point(&snapshot),
+                        &entry.diagnostic,
+                    ));
+                }
+            }
+            sort_citations(&mut citations);
+            citations
+        })
+        .unwrap_or_default()
+    }
 }
+
+/// The panel order: file, then position, so a group chip expands in a readable
+/// order and identical diagnostics produce identical tokens.
+fn sort_citations(citations: &mut [DiagnosticCitation]) {
+    citations.sort_by(|a, b| {
+        (&a.path, a.line, a.column, &a.code).cmp(&(&b.path, b.line, b.column, &b.code))
+    });
+}
+
 const DIAGNOSTIC_EXPANSION_ROW_LIMIT: u32 = 32;
 
 async fn context_range_for_entry(

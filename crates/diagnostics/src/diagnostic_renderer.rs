@@ -1,4 +1,8 @@
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use editor::{
     Anchor, Editor, EditorSnapshot, ToOffset,
@@ -13,8 +17,9 @@ use markdown::{CopyButtonVisibility, Markdown, MarkdownElement};
 use settings::Settings;
 use text::Point;
 use theme_settings::ThemeSettings;
-use ui::{CopyButton, prelude::*};
+use ui::{CopyButton, IconButton, IconName, IconSize, Tooltip, prelude::*};
 use util::maybe;
+use wu_actions::{AddDiagnosticsToChat, DiagnosticCitation};
 
 use crate::toolbar_controls::DiagnosticsToolbarEditor;
 
@@ -36,6 +41,9 @@ impl DiagnosticRenderer {
         };
         let primary = &diagnostic_group[primary_ix];
         let group_id = primary.diagnostic.group_id;
+        let citation_path = diagnostics_editor
+            .as_ref()
+            .and_then(|editor| editor.diagnostic_path(buffer_id, cx));
         let mut results = vec![];
         for entry in diagnostic_group.iter() {
             let mut markdown = Self::markdown(&entry.diagnostic);
@@ -58,6 +66,9 @@ impl DiagnosticRenderer {
                     severity: primary.diagnostic.severity,
                     diagnostics_editor: diagnostics_editor.clone(),
                     copy_message: primary.diagnostic.message.as_shared_string().clone(),
+                    citation: citation_path
+                        .as_deref()
+                        .map(|path| citation_for(path, primary.range.start, &primary.diagnostic)),
                     markdown: cx.new(|cx| {
                         Markdown::new(markdown.into(), language_registry.clone(), None, cx)
                     }),
@@ -74,6 +85,9 @@ impl DiagnosticRenderer {
                     severity: entry.diagnostic.severity,
                     diagnostics_editor: diagnostics_editor.clone(),
                     copy_message: entry.diagnostic.message.as_shared_string().clone(),
+                    citation: citation_path
+                        .as_deref()
+                        .map(|path| citation_for(path, entry.range.start, &entry.diagnostic)),
                     markdown: cx.new(|cx| {
                         Markdown::new(markdown.into(), language_registry.clone(), None, cx)
                     }),
@@ -94,6 +108,56 @@ impl DiagnosticRenderer {
         };
         markdown
     }
+}
+
+/// The name the chat uses for a diagnostic severity.
+pub(crate) fn severity_name(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::ERROR => "error",
+        DiagnosticSeverity::WARNING => "warning",
+        DiagnosticSeverity::INFORMATION => "information",
+        DiagnosticSeverity::HINT => "hint",
+        _ => "information",
+    }
+}
+
+/// A diagnostic as the chat cites it: one-based position and the message that
+/// stays out of the composer.
+pub(crate) fn citation_for(
+    path: &Path,
+    position: Point,
+    diagnostic: &Diagnostic,
+) -> DiagnosticCitation {
+    DiagnosticCitation {
+        path: path.to_path_buf(),
+        line: position.row + 1,
+        column: position.column + 1,
+        severity: severity_name(diagnostic.severity).to_string(),
+        code: diagnostic.code.as_ref().map(|code| code.to_string()),
+        message: diagnostic.message.as_str().to_string(),
+    }
+}
+
+/// Highest severity the panel currently shows, which is also the highest one
+/// worth citing.
+pub(crate) fn max_shown_severity(include_warnings: bool) -> DiagnosticSeverity {
+    if include_warnings {
+        DiagnosticSeverity::WARNING
+    } else {
+        DiagnosticSeverity::ERROR
+    }
+}
+
+/// Path of a buffer in the diagnostics multibuffer, when it is on disk.
+pub(crate) fn buffer_path(
+    multibuffer: &Entity<editor::MultiBuffer>,
+    buffer_id: BufferId,
+    cx: &gpui::App,
+) -> Option<PathBuf> {
+    let buffer = multibuffer.read(cx).buffer(buffer_id)?;
+    let buffer = buffer.read(cx);
+    let file = buffer.file()?;
+    Some(file.path().as_std_path().to_path_buf())
 }
 
 fn append_source_and_code(markdown: &mut String, diagnostic: &Diagnostic) {
@@ -204,6 +268,9 @@ pub(crate) struct DiagnosticBlock {
     pub(crate) markdown: Entity<Markdown>,
     pub(crate) diagnostics_editor: Option<Arc<dyn DiagnosticsToolbarEditor>>,
     pub(crate) copy_message: SharedString,
+    /// Present when the diagnostic can be cited in a chat, which needs the file
+    /// it belongs to.
+    pub(crate) citation: Option<DiagnosticCitation>,
 }
 
 impl DiagnosticBlock {
@@ -229,6 +296,13 @@ impl DiagnosticBlock {
 
         let copy_button_id = format!(
             "copy-diagnostic-{}-{}-{}-{}",
+            self.initial_range.start.row,
+            self.initial_range.start.column,
+            self.initial_range.end.row,
+            self.initial_range.end.column
+        );
+        let chat_button_id = format!(
+            "chat-diagnostic-{}-{}-{}-{}",
             self.initial_range.start.row,
             self.initial_range.start.column,
             self.initial_range.end.row,
@@ -267,6 +341,22 @@ impl DiagnosticBlock {
                     }),
                 ),
             )
+            .when_some(self.citation.clone(), |this, citation| {
+                this.child(
+                    IconButton::new(chat_button_id, IconName::AgentChatRoundLine)
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text(t!("Add Diagnostic to Chat")))
+                        .aria_label(t!("Add Diagnostic to Chat"))
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(AddDiagnosticsToChat {
+                                    citations: vec![citation.clone()],
+                                }),
+                                cx,
+                            );
+                        }),
+                )
+            })
             .child(
                 CopyButton::new(copy_button_id, self.copy_message.clone())
                     .tooltip_label(t!("Copy Diagnostic")),

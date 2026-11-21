@@ -84,6 +84,31 @@ actions!(
     ]
 );
 
+/// One problem from the Problems panel, in the form the chat keeps as a chip.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiagnosticCitation {
+    /// Absolute path of the file the diagnostic belongs to.
+    pub path: PathBuf,
+    /// One-based line of the diagnostic's start.
+    pub line: u32,
+    /// One-based column of the diagnostic's start.
+    pub column: u32,
+    /// `error`, `warning`, `information` or `hint`.
+    pub severity: String,
+    /// Rule code, such as an LSP code, when the server provided one.
+    pub code: Option<String>,
+    pub message: String,
+}
+
+/// Adds diagnostics chosen in the Problems panel to the chat the user is
+/// looking at, as one reference chip instead of pasted messages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Action)]
+#[action(namespace = wu)]
+#[serde(deny_unknown_fields)]
+pub struct AddDiagnosticsToChat {
+    pub citations: Vec<DiagnosticCitation>,
+}
+
 #[derive(PartialEq, Clone, Copy, Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionCategoryFilter {
