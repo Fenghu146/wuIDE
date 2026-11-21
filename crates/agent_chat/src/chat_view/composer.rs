@@ -238,6 +238,16 @@ impl ChatView {
                     cx.stop_propagation();
                 }
             }))
+            .capture_action(cx.listener(|this, _: &editor::actions::Backspace, _, cx| {
+                if this.delete_selection_ref_at_caret(false, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &editor::actions::Delete, _, cx| {
+                if this.delete_selection_ref_at_caret(true, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .when(show_commands, |this| this.child(self.render_command_menu(cx)))
             .w_full()
             .rounded(px(radius))
