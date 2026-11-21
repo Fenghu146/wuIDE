@@ -173,9 +173,10 @@ impl SymbolMap {
 
     /// Renders the paged, top-level-first repository map.
     ///
-    /// `limit` and `offset` page over the files that define something; the
-    /// character budget only trims the tail and every file left out is listed
-    /// by path at the end, so an agent always knows what exists.
+    /// `limit` and `offset` page over the files that define something; it is an
+    /// upper bound, because the character budget can end the page earlier, and
+    /// the header then says the budget did it. Every file left out is listed by
+    /// path at the end, so an agent always knows what exists.
     pub fn repo_map_markdown(&self, options: &RepoMapOptions, max_chars: usize) -> String {
         let files: Vec<&FileSymbols> = self.ranked().collect();
         let total = files.len();
@@ -188,17 +189,26 @@ impl SymbolMap {
             );
         }
 
-        // The budget is a last resort: `limit` decides how many files are
-        // shown, so only a pathological file list can shorten the page. The
-        // body is built first so the header can state what was really written.
+        // The body is built first so the header can state what was really
+        // written, and whether `limit` or the budget stopped the page.
         let (body, written) = render_ranked(&files, start, end, max_chars, |file| {
             self.file_block(file, options)
         });
 
+        let mut header = format!(
+            "showing {}–{written} of {total} files with definitions",
+            start + 1
+        );
+        // Only the budget needs an explanation: a page cut by `limit` is the
+        // page the caller asked for, and the paging hint below covers it.
+        if written < end {
+            header.push_str(&format!(
+                " (output budget reached; use offset={written} for the next page, or call \
+                 symbols(path) for one file)"
+            ));
+        }
         let mut out = format!(
-            "## Repository map\n\n\
-             {total} files with definitions, showing {}–{written}.\n{}\n",
-            start + 1,
+            "## Repository map\n\n{header}.\n{}\n",
             Self::order_description()
         );
         if let Some(truncated) = self.truncation_note() {
@@ -213,7 +223,7 @@ impl SymbolMap {
             for file in files[written..].iter() {
                 out.push_str(&format!("{}\n", file.rel.display(path::PathStyle::Unix)));
             }
-            if written > start {
+            if written > start && written == end {
                 out.push_str(&format!(
                     "\nNext page: offset={written}, limit={}.\n",
                     options.limit
@@ -248,9 +258,20 @@ impl SymbolMap {
         if options.files_only {
             return block;
         }
-        for line in symbol_tree_lines(&file.symbols, options.include_locals) {
+        let visible: Vec<SymbolEntry> = file
+            .symbols
+            .iter()
+            .filter(|symbol| options.include_locals || !symbol.local)
+            .cloned()
+            .collect();
+        let kept = visible.len().min(MAX_SYMBOLS_PER_FILE_IN_MARKDOWN);
+        // Locals were filtered above; the tree renderer must not filter again.
+        for line in symbol_tree_lines(&visible[..kept], true) {
             block.push_str(&line);
             block.push('\n');
+        }
+        if kept < visible.len() {
+            block.push_str(&format!("… +{} more symbols\n", visible.len() - kept));
         }
         block
     }
@@ -1543,9 +1564,18 @@ fn resolve_spec(
 ///
 /// This is the single source of truth for the agent-facing map: the snapshot
 /// records it as `max_chars` and the bundled MCP server reads it from there, so
-/// the IDE's rendering and the server's cannot drift apart. Only the last file
-/// that does not fit is trimmed; `limit` decides how many files a page holds.
+/// the IDE's rendering and the server's cannot drift apart. `limit` is an upper
+/// bound on the files of one page; the budget can end the page earlier and the
+/// header says so.
 pub const MAX_REPO_MAP_CHARS: usize = 48_000;
+
+/// Definitions one file block shows before it summarizes the rest.
+///
+/// A file with two hundred definitions is not more useful than its first forty:
+/// an agent that wants the rest calls `symbols` for that one file. Without a cap
+/// a single such block can spend a third of [`MAX_REPO_MAP_CHARS`], which makes
+/// `limit` unobservable.
+pub const MAX_SYMBOLS_PER_FILE_IN_MARKDOWN: usize = 40;
 
 /// PageRank over the cross-file reference graph.
 ///
@@ -1978,6 +2008,86 @@ mod tests {
         );
         assert!(second.contains("`src/file2.rs`"), "{second}");
         assert!(!second.contains("`src/file0.rs`"), "{second}");
+    }
+
+    #[test]
+    fn a_block_shows_at_most_forty_symbols_and_counts_the_rest() {
+        let symbols = (0..MAX_SYMBOLS_PER_FILE_IN_MARKDOWN + 5)
+            .map(|index| entry(&format!("item{index}"), "function", index as u32))
+            .collect();
+        let map = SymbolMap {
+            files: vec![file_symbols("src/big.rs", 1., symbols)],
+            stats: BuildStats::default(),
+        };
+
+        let text = map.to_markdown(100_000);
+        assert_eq!(
+            text.matches("- function item").count(),
+            MAX_SYMBOLS_PER_FILE_IN_MARKDOWN,
+            "{text}"
+        );
+        assert!(text.contains("… +5 more symbols"), "{text}");
+        assert!(
+            !text.contains("item44 (line 45)"),
+            "the tail belongs to `symbols`, not the page: {text}"
+        );
+
+        // `files_only` lists no symbols, so it needs no note either.
+        let files_only = map.repo_map_markdown(
+            &RepoMapOptions {
+                files_only: true,
+                ..RepoMapOptions::default()
+            },
+            100_000,
+        );
+        assert!(!files_only.contains("more symbols"), "{files_only}");
+    }
+
+    #[test]
+    fn a_page_ended_by_the_budget_says_so_in_the_header() {
+        let map = SymbolMap {
+            files: (0..3)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/file{index}.rs"),
+                        (3 - index) as f32,
+                        vec![entry(&format!("item{index}"), "function", 0)],
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        // Room for one block and nothing more.
+        let squeezed = map.repo_map_markdown(&RepoMapOptions::default(), 70);
+        assert!(
+            squeezed.contains("showing 1–1 of 3 files with definitions"),
+            "{squeezed}"
+        );
+        assert!(squeezed.contains("output budget reached"), "{squeezed}");
+        assert!(
+            squeezed.contains("offset=1 for the next page"),
+            "{squeezed}"
+        );
+        assert!(
+            !squeezed.contains("Next page: offset=1"),
+            "the header already carries the paging hint: {squeezed}"
+        );
+
+        // A page cut by `limit` is the page that was asked for.
+        let paged = map.repo_map_markdown(
+            &RepoMapOptions {
+                limit: 1,
+                ..RepoMapOptions::default()
+            },
+            100_000,
+        );
+        assert!(
+            paged.contains("showing 1–1 of 3 files with definitions"),
+            "{paged}"
+        );
+        assert!(!paged.contains("output budget reached"), "{paged}");
+        assert!(paged.contains("Next page: offset=1, limit=1."), "{paged}");
     }
 
     #[test]

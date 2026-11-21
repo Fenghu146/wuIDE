@@ -17,6 +17,10 @@ const SNAPSHOT_VERSION = 2;
 const LEGACY_SNAPSHOT_VERSION = 1;
 const DEFAULT_FILE_LIMIT = 40;
 const MAX_FILE_LIMIT = 400;
+// Mirrors `repo_wiki::symbol_map::MAX_SYMBOLS_PER_FILE_IN_MARKDOWN`: a file with
+// hundreds of definitions is summarized after its first few, and `symbols`
+// returns the rest.
+const MAX_SYMBOLS_PER_FILE = 40;
 const DIAGNOSTICS_SNAPSHOT_VERSION = 1;
 const DEFAULT_DIAGNOSTICS_LIMIT = 50;
 const MAX_DIAGNOSTICS_LIMIT = 500;
@@ -217,6 +221,16 @@ function symbolLines(symbols, includeLocals) {
   return lines;
 }
 
+// Mirrors the cap in `SymbolMap::file_block`: the first visible definitions, then
+// one line saying how many were left for the `symbols` tool.
+function cappedSymbolLines(symbols, includeLocals) {
+  const visible = (symbols || []).filter((symbol) => includeLocals || !symbol.local);
+  const kept = Math.min(visible.length, MAX_SYMBOLS_PER_FILE);
+  const lines = symbolLines(visible.slice(0, kept), includeLocals);
+  if (kept < visible.length) lines.push(`… +${visible.length - kept} more symbols`);
+  return lines;
+}
+
 function fileHeader(file) {
   if (file.in == null && file.out == null && file.lines == null) {
     // Version 1 snapshots carry no counts; do not invent zeros.
@@ -244,9 +258,8 @@ function renderRepoMap(doc, options) {
     return "## Repository map\n\nNo definitions were found in this repository.";
   }
 
-  // The character budget is a last resort: `limit` decides how many files are
-  // shown, so even an oversized first file is rendered and the rest are listed.
-  // The body is built first so the header states what was really written.
+  // The character budget bounds the page: `limit` is an upper bound on its
+  // files, and when the budget ends the page first the header says so.
   // Each block starts with a blank line, exactly like the IDE's renderer, so
   // both surfaces produce the same text for the same snapshot.
   const body = [];
@@ -255,7 +268,7 @@ function renderRepoMap(doc, options) {
   let written = start;
   for (const file of files.slice(start, end)) {
     const lines = [fileHeader(file)];
-    if (!options.filesOnly) lines.push(...symbolLines(file.symbols, options.includeLocals));
+    if (!options.filesOnly) lines.push(...cappedSymbolLines(file.symbols, options.includeLocals));
     const block = `\n${lines.join("\n")}\n`;
     if (block.length > budget && written > start) break;
     budget -= block.length;
@@ -264,7 +277,15 @@ function renderRepoMap(doc, options) {
   }
 
   const head = ["## Repository map", ""];
-  head.push(`${total} files with definitions, showing ${start + 1}\u2013${written}.`);
+  let header = `showing ${start + 1}\u2013${written} of ${total} files with definitions`;
+  // Only the budget needs an explanation: a page cut by `limit` is the page the
+  // caller asked for, and the paging hint below covers it.
+  if (written < end) {
+    header +=
+      ` (output budget reached; use offset=${written} for the next page, or call ` +
+      "symbols(path) for one file)";
+  }
+  head.push(`${header}.`);
   head.push(typeof doc.order === "string" ? doc.order : DEFAULT_ORDER);
 
   const stats = doc.stats;
@@ -284,7 +305,9 @@ function renderRepoMap(doc, options) {
   if (skipped > 0) {
     text += `\nOmitted files (${skipped}, paths only):\n`;
     for (const file of files.slice(written)) text += `${file.path}\n`;
-    if (written > start) text += `\nNext page: offset=${written}, limit=${options.limit}.\n`;
+    if (written > start && written === end) {
+      text += `\nNext page: offset=${written}, limit=${options.limit}.\n`;
+    }
   }
   if (options.includeLocals) text += "\nIncludes local variables.\n";
   return text;
@@ -449,7 +472,10 @@ const TOOLS = [
           type: "integer",
           minimum: 1,
           maximum: MAX_FILE_LIMIT,
-          description: `How many files to include (default ${DEFAULT_FILE_LIMIT}).`,
+          description:
+            `How many files to include at most (default ${DEFAULT_FILE_LIMIT}). The page can ` +
+            "end earlier when the output budget runs out; the header says so and `offset` " +
+            "pages on.",
         },
         offset: {
           type: "integer",
