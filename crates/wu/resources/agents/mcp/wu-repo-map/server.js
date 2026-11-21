@@ -21,6 +21,9 @@ const MAX_FILE_LIMIT = 400;
 // hundreds of definitions is summarized after its first few, and `symbols`
 // returns the rest.
 const MAX_SYMBOLS_PER_FILE = 40;
+// Mirrors `repo_wiki::symbol_map::MAX_OMITTED_PATHS`: the list of files a page
+// left out is summarized after this many names, so it cannot outgrow the map.
+const MAX_OMITTED_PATHS = 100;
 const DIAGNOSTICS_SNAPSHOT_VERSION = 1;
 const DEFAULT_DIAGNOSTICS_LIMIT = 50;
 const MAX_DIAGNOSTICS_LIMIT = 500;
@@ -248,35 +251,26 @@ function clampLimit(requested) {
     : DEFAULT_FILE_LIMIT;
 }
 
-function renderRepoMap(doc, options) {
-  const files = doc.files;
-  const total = files.length;
-  const start = Math.min(Math.max(0, options.offset), total);
-  const end = Math.min(start + options.limit, total);
-
-  if (total === 0) {
-    return "## Repository map\n\nNo definitions were found in this repository.";
-  }
-
-  // The character budget bounds the page: `limit` is an upper bound on its
-  // files, and when the budget ends the page first the header says so.
-  // Each block starts with a blank line, exactly like the IDE's renderer, so
-  // both surfaces produce the same text for the same snapshot.
+// Renders the file blocks of one page, best-ranked first, until the budget for
+// the body runs out. Mirrors `render_ranked` in `repo_wiki::symbol_map`.
+function renderPageBody(files, start, end, budget, options) {
   const body = [];
-  let budget =
-    Number.isFinite(doc.max_chars) && doc.max_chars > 0 ? doc.max_chars : FALLBACK_MAX_CHARS;
   let written = start;
   for (const file of files.slice(start, end)) {
     const lines = [fileHeader(file)];
     if (!options.filesOnly) lines.push(...cappedSymbolLines(file.symbols, options.includeLocals));
     const block = `\n${lines.join("\n")}\n`;
     if (block.length > budget && written > start) break;
-    budget -= block.length;
+    budget = Math.max(0, budget - block.length);
     body.push(block);
     written += 1;
   }
+  return { body: body.join(""), written };
+}
 
-  const head = ["## Repository map", ""];
+// Everything before the body: the header, the ordering note and the count of
+// files the scan could not index.
+function renderPageHead(doc, written, start, end, total, options) {
   let header = `showing ${start + 1}\u2013${written} of ${total} files with definitions`;
   // Only the budget needs an explanation: a page cut by `limit` is the page the
   // caller asked for, and the paging hint below covers it.
@@ -285,7 +279,7 @@ function renderRepoMap(doc, options) {
       ` (output budget reached; use offset=${written} for the next page, or call ` +
       "symbols(path) for one file)";
   }
-  head.push(`${header}.`);
+  const head = ["## Repository map", "", `${header}.`];
   head.push(typeof doc.order === "string" ? doc.order : DEFAULT_ORDER);
 
   const stats = doc.stats;
@@ -299,15 +293,84 @@ function renderRepoMap(doc, options) {
     }
   }
   if (options.legacy) head.push(LEGACY_SNAPSHOT);
+  return `${head.join("\n")}\n`;
+}
 
-  let text = `${head.join("\n")}\n${body.join("")}`;
+// Everything after the body, with the widest "+N more omitted" line its count
+// can produce, so the body budget never eats that room.
+function renderPageTailReserve(written, start, end, total, options) {
+  let tail = "";
+  const skipped = total - written;
+  if (skipped > 0) {
+    tail += `\nOmitted files (${skipped}, paths only):\n`;
+    tail += `… +${skipped} more omitted (call files_only or raise offset to list them)\n`;
+  }
+  if (written > start && written === end) {
+    tail += `\nNext page: offset=${written}, limit=${options.limit}.\n`;
+  }
+  if (options.includeLocals) tail += "\nIncludes local variables.\n";
+  return tail;
+}
+
+function renderRepoMap(doc, options) {
+  const files = doc.files;
+  const total = files.length;
+  const start = Math.min(Math.max(0, options.offset), total);
+  const end = Math.min(start + options.limit, total);
+
+  if (total === 0) {
+    return "## Repository map\n\nNo definitions were found in this repository.";
+  }
+
+  // The whole page shares one budget: the body is measured against what the
+  // framing and the omitted list leave behind. Each block starts with a blank
+  // line, exactly like the IDE's renderer, so both surfaces produce the same
+  // text for the same snapshot.
+  const maxChars =
+    Number.isFinite(doc.max_chars) && doc.max_chars > 0 ? doc.max_chars : FALLBACK_MAX_CHARS;
+  let bodyBudget = maxChars;
+  let attempts = 0;
+  let head = "";
+  let body = "";
+  let written = start;
+  let reserveLen = 0;
+  for (;;) {
+    const rendered = renderPageBody(files, start, end, bodyBudget, options);
+    head = renderPageHead(doc, rendered.written, start, end, total, options);
+    reserveLen = renderPageTailReserve(rendered.written, start, end, total, options).length;
+    body = rendered.body;
+    written = rendered.written;
+    const used = head.length + body.length + reserveLen;
+    // A page always keeps its first file, so a budget too small for the framing
+    // alone cannot be satisfied and is left as best effort.
+    if (used <= maxChars || written <= start + 1 || attempts >= 8) break;
+    bodyBudget = Math.max(0, bodyBudget - Math.max(1, used - maxChars));
+    attempts += 1;
+  }
+
+  let text = head + body;
+  // The whole tail is reserved before any path is printed, so the list can only
+  // use what the header, the body and the trailing notes leave.
+  let room = Math.max(0, maxChars - (text.length + reserveLen));
   const skipped = total - written;
   if (skipped > 0) {
     text += `\nOmitted files (${skipped}, paths only):\n`;
-    for (const file of files.slice(written)) text += `${file.path}\n`;
-    if (written > start && written === end) {
-      text += `\nNext page: offset=${written}, limit=${options.limit}.\n`;
+    // Show whole paths while they fit, never more than `MAX_OMITTED_PATHS`, and
+    // name the rest in one line.
+    let shown = 0;
+    for (const file of files.slice(written, written + MAX_OMITTED_PATHS)) {
+      const line = `${file.path}\n`;
+      if (line.length > room) break;
+      room -= line.length;
+      text += line;
+      shown += 1;
     }
+    if (shown < skipped) {
+      text += `… +${skipped - shown} more omitted (call files_only or raise offset to list them)\n`;
+    }
+  }
+  if (written > start && written === end) {
+    text += `\nNext page: offset=${written}, limit=${options.limit}.\n`;
   }
   if (options.includeLocals) text += "\nIncludes local variables.\n";
   return text;

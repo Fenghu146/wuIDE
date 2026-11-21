@@ -175,8 +175,10 @@ impl SymbolMap {
     ///
     /// `limit` and `offset` page over the files that define something; it is an
     /// upper bound, because the character budget can end the page earlier, and
-    /// the header then says the budget did it. Every file left out is listed by
-    /// path at the end, so an agent always knows what exists.
+    /// the header then says the budget did it. The budget covers the whole
+    /// page — header, notes, body and the list of files left out — because a
+    /// list of every omitted path can cost more than the body it describes.
+    /// What still does not fit is summarized in one line.
     pub fn repo_map_markdown(&self, options: &RepoMapOptions, max_chars: usize) -> String {
         let files: Vec<&FileSymbols> = self.ranked().collect();
         let total = files.len();
@@ -189,12 +191,66 @@ impl SymbolMap {
             );
         }
 
-        // The body is built first so the header can state what was really
-        // written, and whether `limit` or the budget stopped the page.
-        let (body, written) = render_ranked(&files, start, end, max_chars, |file| {
-            self.file_block(file, options)
-        });
+        // The body is measured against what the framing and the omitted list
+        // leave behind, so shrinking the body never overshoots the budget.
+        let mut body_budget = max_chars;
+        let mut attempts = 0;
+        let (head, body, written, reserve_len) = loop {
+            let (body, written) = render_ranked(&files, start, end, body_budget, |file| {
+                self.file_block(file, options)
+            });
+            let head = self.page_head(written, start, end, total);
+            let reserve_len = self
+                .page_tail_reserve(written, start, end, total, options)
+                .chars()
+                .count();
+            let used = head.chars().count() + body.chars().count() + reserve_len;
+            // A page always keeps its first file, so a budget too small for the
+            // framing alone cannot be satisfied and is left as best effort.
+            if used <= max_chars || written <= start + 1 || attempts >= 8 {
+                break (head, body, written, reserve_len);
+            }
+            body_budget = body_budget.saturating_sub((used - max_chars).max(1));
+            attempts += 1;
+        };
 
+        let mut out = head;
+        out.push_str(&body);
+        // The whole tail is reserved before any path is printed, so the list can
+        // only use what the header, the body and the trailing notes leave.
+        let mut room = max_chars.saturating_sub(out.chars().count() + reserve_len);
+        let skipped = total.saturating_sub(written);
+        if skipped > 0 {
+            out.push_str(&omitted_files_header(skipped));
+            // Show whole paths while they fit, never more than
+            // `MAX_OMITTED_PATHS`, and name the rest in one line.
+            let mut shown = 0;
+            for file in files[written..].iter().take(MAX_OMITTED_PATHS) {
+                let line = format!("{}\n", file.rel.display(path::PathStyle::Unix));
+                let cost = line.chars().count();
+                if cost > room {
+                    break;
+                }
+                room -= cost;
+                out.push_str(&line);
+                shown += 1;
+            }
+            if shown < skipped {
+                out.push_str(&more_omitted_line(skipped - shown));
+            }
+        }
+        if written > start && written == end {
+            out.push_str(&next_page_line(written, options.limit));
+        }
+        if options.include_locals {
+            out.push_str("\nIncludes local variables.\n");
+        }
+        out
+    }
+
+    /// Everything before the body: the header, the ordering note and the count
+    /// of files the scan could not index.
+    fn page_head(&self, written: usize, start: usize, end: usize, total: usize) -> String {
         let mut header = format!(
             "showing {}–{written} of {total} files with definitions",
             start + 1
@@ -207,33 +263,40 @@ impl SymbolMap {
                  symbols(path) for one file)"
             ));
         }
-        let mut out = format!(
+        let mut head = format!(
             "## Repository map\n\n{header}.\n{}\n",
             Self::order_description()
         );
-        if let Some(truncated) = self.truncation_note() {
-            out.push_str(&truncated);
-            out.push('\n');
+        if let Some(note) = self.truncation_note() {
+            head.push_str(&note);
+            head.push('\n');
         }
-        out.push_str(&body);
+        head
+    }
 
+    /// Everything after the body, with the widest "+N more omitted" line its
+    /// `skipped` count can produce, so the body budget never eats that room.
+    fn page_tail_reserve(
+        &self,
+        written: usize,
+        start: usize,
+        end: usize,
+        total: usize,
+        options: &RepoMapOptions,
+    ) -> String {
+        let mut tail = String::new();
         let skipped = total.saturating_sub(written);
         if skipped > 0 {
-            out.push_str(&format!("\nOmitted files ({skipped}, paths only):\n"));
-            for file in files[written..].iter() {
-                out.push_str(&format!("{}\n", file.rel.display(path::PathStyle::Unix)));
-            }
-            if written > start && written == end {
-                out.push_str(&format!(
-                    "\nNext page: offset={written}, limit={}.\n",
-                    options.limit
-                ));
-            }
+            tail.push_str(&omitted_files_header(skipped));
+            tail.push_str(&more_omitted_line(skipped));
+        }
+        if written > start && written == end {
+            tail.push_str(&next_page_line(written, options.limit));
         }
         if options.include_locals {
-            out.push_str("\nIncludes local variables.\n");
+            tail.push_str("\nIncludes local variables.\n");
         }
-        out
+        tail
     }
 
     fn truncation_note(&self) -> Option<String> {
@@ -311,6 +374,21 @@ fn render_ranked(
         written += 1;
     }
     (body, written)
+}
+
+/// The line that opens the list of files a page left out.
+fn omitted_files_header(skipped: usize) -> String {
+    format!("\nOmitted files ({skipped}, paths only):\n")
+}
+
+/// The line that closes a page when even the omitted paths did not all fit.
+fn more_omitted_line(remaining: usize) -> String {
+    format!("… +{remaining} more omitted (call files_only or raise offset to list them)\n")
+}
+
+/// The paging hint for a page that `limit`, not the budget, ended.
+fn next_page_line(written: usize, limit: usize) -> String {
+    format!("\nNext page: offset={written}, limit={limit}.\n")
 }
 
 /// The line a digest ends with when something was left out.
@@ -1566,7 +1644,8 @@ fn resolve_spec(
 /// records it as `max_chars` and the bundled MCP server reads it from there, so
 /// the IDE's rendering and the server's cannot drift apart. `limit` is an upper
 /// bound on the files of one page; the budget can end the page earlier and the
-/// header says so.
+/// header says so. It covers the whole page, the list of omitted paths
+/// included.
 pub const MAX_REPO_MAP_CHARS: usize = 48_000;
 
 /// Definitions one file block shows before it summarizes the rest.
@@ -1576,6 +1655,14 @@ pub const MAX_REPO_MAP_CHARS: usize = 48_000;
 /// a single such block can spend a third of [`MAX_REPO_MAP_CHARS`], which makes
 /// `limit` unobservable.
 pub const MAX_SYMBOLS_PER_FILE_IN_MARKDOWN: usize = 40;
+
+/// Paths one page lists after its body before summarizing the rest.
+///
+/// The list exists so an agent knows what it did not see, but eight hundred
+/// paths cost more than the map they describe. Hundred names plus a count keep
+/// the page honest and inside [`MAX_REPO_MAP_CHARS`]; `files_only` and `offset`
+/// show the rest.
+pub const MAX_OMITTED_PATHS: usize = 100;
 
 /// PageRank over the cross-file reference graph.
 ///
@@ -1961,11 +2048,11 @@ mod tests {
         assert!(full.contains("Order: include fan-in"));
 
         // The byte budget is a last resort: the first file is always shown even
-        // when it does not fit, and the rest are listed by path.
+        // when it does not fit, and the rest are counted rather than listed.
         let tiny = map.to_markdown(10);
         assert!(tiny.contains("src/lib.rs"), "{tiny}");
         assert!(tiny.contains("Omitted files"), "{tiny}");
-        assert!(tiny.contains("src/big.rs"), "{tiny}");
+        assert!(tiny.contains("… +1 more omitted"), "{tiny}");
     }
 
     #[test]
@@ -2088,6 +2175,95 @@ mod tests {
         );
         assert!(!paged.contains("output budget reached"), "{paged}");
         assert!(paged.contains("Next page: offset=1, limit=1."), "{paged}");
+    }
+
+    #[test]
+    fn every_page_fits_the_character_budget() {
+        // 240 files with a dozen definitions each: the body and the omitted
+        // list together used to cost more than the budget.
+        let map = SymbolMap {
+            files: (0..240)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/module{}/file{index}.rs", index % 12),
+                        (240 - index) as f32,
+                        (0..12)
+                            .map(|symbol| entry(&format!("item{symbol}"), "function", symbol))
+                            .collect(),
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        for limit in [10usize, 20, 40] {
+            let text = map.repo_map_markdown(
+                &RepoMapOptions {
+                    limit,
+                    ..RepoMapOptions::default()
+                },
+                MAX_REPO_MAP_CHARS,
+            );
+            assert!(
+                text.chars().count() <= MAX_REPO_MAP_CHARS,
+                "limit {limit} wrote {} characters",
+                text.chars().count()
+            );
+        }
+
+        // `files_only` pages the same way and obeys the same budget.
+        let files_only = map.repo_map_markdown(
+            &RepoMapOptions {
+                limit: 240,
+                files_only: true,
+                ..RepoMapOptions::default()
+            },
+            MAX_REPO_MAP_CHARS,
+        );
+        assert!(
+            files_only.chars().count() <= MAX_REPO_MAP_CHARS,
+            "files_only wrote {} characters",
+            files_only.chars().count()
+        );
+    }
+
+    #[test]
+    fn the_omitted_list_stops_at_a_hundred_paths_and_counts_the_rest() {
+        let map = SymbolMap {
+            files: (0..250)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/file{index}.rs"),
+                        (250 - index) as f32,
+                        vec![entry("item", "function", 0)],
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        let text = map.repo_map_markdown(
+            &RepoMapOptions {
+                limit: 1,
+                ..RepoMapOptions::default()
+            },
+            1_000_000,
+        );
+        assert!(text.contains("Omitted files (249, paths only)"), "{text}");
+        let listed = text
+            .lines()
+            .filter(|line| line.starts_with("src/file"))
+            .count();
+        // The page's own file is written in backticks, so only list paths match.
+        assert_eq!(listed, MAX_OMITTED_PATHS, "{text}");
+        assert!(text.contains("`src/file0.rs`"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "… +{} more omitted (call files_only or raise offset to list them)",
+                249 - MAX_OMITTED_PATHS
+            )),
+            "{text}"
+        );
     }
 
     #[test]
