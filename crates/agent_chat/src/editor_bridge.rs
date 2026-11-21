@@ -1,7 +1,7 @@
 //! Bridges the active editor with agent chat sessions: selections and
 //! diagnostics can be routed to an agent as a chat prompt.
 
-use crate::chat_view::ChatView;
+use crate::chat_view::{ChatView, SelectionRef};
 use editor::{Editor, MultiBufferOffset};
 use gpui::{App, Context, Window};
 use i18n::t;
@@ -69,7 +69,7 @@ pub fn add_selection_to_chat(
 }
 
 struct Selection {
-    file_name: Option<String>,
+    path: Option<std::path::PathBuf>,
     start_row: u32,
     end_row: u32,
     language: Option<String>,
@@ -100,7 +100,7 @@ fn selection(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<Selec
             .map(|language| language.name().to_string());
         let file_name = singleton_file_name(editor, cx);
         Some(Selection {
-            file_name,
+            path: file_name,
             start_row,
             end_row,
             language,
@@ -112,10 +112,12 @@ fn selection(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<Selec
 fn selection_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
     let selection = selection(workspace, cx)?;
     let mut prompt = String::from("请解释以下选中的代码");
-    if let Some(file_name) = &selection.file_name {
+    if let Some(path) = &selection.path {
         prompt.push_str(&format!(
-            "（文件 `{file_name}`，第 {}-{} 行）",
-            selection.start_row, selection.end_row
+            "（文件 `{}`，第 {}-{} 行）",
+            path.display(),
+            selection.start_row,
+            selection.end_row
         ));
     }
     prompt.push_str("：\n\n");
@@ -129,38 +131,17 @@ fn selection_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Optio
     Some(prompt)
 }
 
-/// A quoted snippet for an existing chat: file and line range, then the code.
-fn selection_reference(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
+/// A cited region for an existing chat: the chat turns it into a chip that
+/// points the agent at the file instead of pasting the code.
+fn selection_reference(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<SelectionRef> {
     let selection = selection(workspace, cx)?;
-    Some(format_reference(
-        selection.file_name.as_deref(),
+    Some(SelectionRef::new(
+        selection.path,
         selection.start_row,
         selection.end_row,
-        selection.language.as_deref(),
+        selection.language,
         &selection.text,
     ))
-}
-
-fn format_reference(
-    file_name: Option<&str>,
-    start_row: u32,
-    end_row: u32,
-    language: Option<&str>,
-    text: &str,
-) -> String {
-    let mut reference = match file_name {
-        Some(file_name) => format!("`{file_name}` L{start_row}-L{end_row}"),
-        None => format!("L{start_row}-L{end_row}"),
-    };
-    reference.push_str("\n\n");
-    if let Some(language) = language {
-        reference.push_str(&format!("```{language}\n"));
-    }
-    reference.push_str(&truncate(text, MAX_SELECTION_CHARS));
-    if language.is_some() {
-        reference.push_str("\n```");
-    }
-    reference
 }
 
 fn diagnostics_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Option<String> {
@@ -278,10 +259,10 @@ fn diagnostics_prompt(workspace: &Workspace, cx: &mut Context<Workspace>) -> Opt
     })
 }
 
-fn singleton_file_name(editor: &Editor, cx: &App) -> Option<String> {
+fn singleton_file_name(editor: &Editor, cx: &App) -> Option<std::path::PathBuf> {
     let buffer = editor.buffer().read(cx).as_singleton()?;
     let file = buffer.read(cx).file()?;
-    Some(file.path().to_string())
+    Some(file.path().as_std_path().to_path_buf())
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -298,25 +279,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_reference_names_the_file_and_line_range_before_the_code() {
-        let reference = format_reference(Some("src/panel.rs"), 12, 20, Some("rust"), "fn main() {}");
-        assert_eq!(
-            reference,
-            "`src/panel.rs` L12-L20\n\n```rust\nfn main() {}\n```"
-        );
-    }
-
-    #[test]
-    fn a_reference_without_a_language_is_still_a_valid_snippet() {
-        let reference = format_reference(None, 3, 4, None, "plain text");
-        assert_eq!(reference, "L3-L4\n\nplain text");
-    }
-
-    #[test]
-    fn a_reference_is_truncated_like_the_explanation_prompt() {
+    fn a_prompt_excerpt_is_truncated_with_a_marker() {
         let long = "x".repeat(MAX_SELECTION_CHARS + 100);
-        let reference = format_reference(Some("big.rs"), 1, 2, Some("rust"), &long);
-        assert!(reference.len() < MAX_SELECTION_CHARS + 100);
-        assert!(reference.contains("已截断"));
+        let excerpt = truncate(&long, MAX_SELECTION_CHARS);
+        assert_eq!(excerpt.chars().count(), MAX_SELECTION_CHARS + "\n…（已截断）".chars().count());
+        assert!(excerpt.ends_with("（已截断）"));
+        assert_eq!(truncate("short", MAX_SELECTION_CHARS), "short");
     }
 }

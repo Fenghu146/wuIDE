@@ -11,8 +11,11 @@ mod outline;
 mod persistence;
 mod queue_panel;
 mod search;
+mod selection_refs;
 mod side_pane;
 mod todo_panel;
+
+pub(crate) use selection_refs::SelectionRef;
 
 use crate::{
     AgentChatSettings, MoveChatToPanel, MoveChatToTab, RenameChat, Send, Stop, SubmitAnswer,
@@ -175,6 +178,8 @@ pub struct ChatView {
     mention_results: Vec<completion::MentionItem>,
     _mention_search: Task<()>,
     composer_skills: Vec<agent_harness::SkillRef>,
+    selection_refs: Vec<selection_refs::SelectionRef>,
+    next_selection_ref_id: u64,
     attachments: Vec<std::path::PathBuf>,
     lightbox: Option<image_viewer::Lightbox>,
     generated_image_layouts: std::cell::RefCell<HashMap<std::path::PathBuf, Option<(Pixels, f32)>>>,
@@ -355,6 +360,8 @@ impl ChatView {
             mention_results: Vec::new(),
             _mention_search: Task::ready(()),
             composer_skills: Vec::new(),
+            selection_refs: Vec::new(),
+            next_selection_ref_id: 0,
             attachments: Vec::new(),
             lightbox: None,
             generated_image_layouts: Default::default(),
@@ -791,6 +798,7 @@ impl ChatView {
             .into_iter()
             .filter(|skill| text.contains(&format!("${}", skill.name)))
             .collect();
+        let text = self.expand_selection_refs(&text, cx);
         let prompt = Prompt {
             text,
             attachments: std::mem::take(&mut self.attachments),
@@ -952,26 +960,6 @@ impl ChatView {
     ) {
         let text = self.composer.read(cx).text(cx);
         self.fill_context_command(command, text, window, cx);
-    }
-
-    /// Appends a quoted selection to the composer without sending it, so the
-    /// user can add context to the chat they are already having.
-    pub(crate) fn insert_selection_reference(
-        &mut self,
-        reference: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let text = self.composer.read(cx).text(cx);
-        let expanded = if text.trim().is_empty() {
-            reference
-        } else {
-            format!("{}\n\n{reference}", text.trim_end())
-        };
-        self.composer.update(cx, |editor, cx| {
-            editor.set_text(expanded.as_str(), window, cx);
-        });
-        cx.notify();
     }
 
     /// Expands every context command line in `text` in place and leaves the
@@ -4462,6 +4450,97 @@ mod tests {
             })
         });
         assert_eq!(composer_text(&view, cx), "look at ");
+    }
+
+    #[gpui::test]
+    async fn a_selection_becomes_one_removable_chip(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        let path = directory.path().join("src/panel.rs");
+        let add = |cx: &mut VisualTestContext| {
+            view.update_in(cx, |view, window, cx| {
+                let reference = SelectionRef::new(
+                    Some(path.clone()),
+                    11,
+                    28,
+                    Some("rust".to_string()),
+                    "pub fn visible_chat() {}\nfn second() {}\n",
+                );
+                view.insert_selection_reference(reference, window, cx);
+            })
+        };
+        view.update_in(cx, |view, window, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.set_text("please explain", window, cx))
+        });
+
+        add(cx);
+        add(cx);
+        assert_eq!(
+            composer_text(&view, cx),
+            "please explain @src/panel.rs L11-L28",
+            "the same region is only added once"
+        );
+        view.read_with(cx, |view, _| assert_eq!(view.selection_refs.len(), 1));
+        let shown = view.update(cx, |view, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.display_text(cx))
+        });
+        assert_eq!(
+            shown, "please explain ⋯",
+            "the composer shows a chip instead of the code or the token"
+        );
+
+        let removed = view.update(cx, |view, cx| view.delete_selection_ref_at_caret(false, cx));
+        assert!(removed, "backspace next to a chip removes the whole chip");
+        assert_eq!(composer_text(&view, cx), "please explain");
+        view.read_with(cx, |view, _| assert!(view.selection_refs.is_empty()));
+
+        add(cx);
+        let id = view.read_with(cx, |view, _| view.selection_refs[0].id);
+        view.update(cx, |view, cx| view.remove_selection_ref(id, cx));
+        assert_eq!(
+            composer_text(&view, cx),
+            "please explain",
+            "the close button leaves the rest of the message alone"
+        );
+        let shown = view.update(cx, |view, cx| {
+            view.composer
+                .update(cx, |editor, cx| editor.display_text(cx))
+        });
+        assert_eq!(shown, "please explain", "the chip is gone as well");
+
+        add(cx);
+        let text = composer_text(&view, cx);
+        let prompt = view.update(cx, |view, cx| view.expand_selection_refs(&text, cx));
+        assert_eq!(
+            prompt,
+            "please explain 选中代码：`src/panel.rs` L11-L28（共 18 行，首行 `pub fn visible_chat() {}`）。请读取该文件中的这段代码。"
+        );
+        assert!(
+            !prompt.contains("fn second()"),
+            "the code itself never reaches the agent"
+        );
+        view.read_with(cx, |view, _| assert!(view.selection_refs.is_empty()));
     }
 
     #[gpui::test]
