@@ -2,6 +2,18 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## 1.4.3 - 2026-11-21
+
+- Fix the Windows test suite: 17 tests that drove a POSIX shell harness are skipped there instead of failing, the loopback proxy test no longer depends on the registry, and the code lens test derives its expected set from the viewport.
+- Repository map: symbols get readable kinds, function parameters and nested declarators are gone, local variables are hidden by default, and each file carries its include fan-in and fan-out.
+- Repository map paging: `limit`, `offset` and `files_only` behave as documented, each file block keeps at most 40 symbols, and a whole page stays inside its character budget including the list of omitted files.
+- Add a `diagnostics` MCP tool, so the built-in Pi agent reads the project's diagnostics itself instead of being handed pasted text.
+- Add **Add Selection to Chat** as a compact reference: the composer keeps a `path Lx-Ly` chip and the agent receives a pointer instead of up to 8000 characters of code.
+- Add **Add Diagnostic to Chat** and **Add All Diagnostics to Chat**: diagnostics become chips too, and a batch larger than 20 points the agent at the `diagnostics` tool.
+- Fix the built-in Pi agent being reported as missing in a local build: the runtime is still resolved from the bundled app first, with the checkout as a last resort, and a missing file is named in the error.
+- Add a first-turn repository map digest, about 700 tokens for a 99-file project and seventeen times smaller than the full map.
+- Add the **project digest** chip to a new chat: it carries that digest into the first message, stays visible in the transcript, is on by default and can be switched off in settings.
+
 ## 1.4.2 - 2026-11-20
 
 - Repository map: symbols now carry a readable kind (function, method, class, struct and so on) instead of a raw syntax node name, function parameters and nested declarators are no longer listed, each file's top-level symbols come first, and duplicates are dropped.
