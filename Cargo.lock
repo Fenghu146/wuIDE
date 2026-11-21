@@ -8364,6 +8364,7 @@ dependencies = [
  "const_format",
  "dirs",
  "ignore",
+ "sha2",
  "tempfile",
  "util",
 ]
@@ -9320,6 +9321,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "buffer_diff",
+ "chrono",
  "circular-buffer",
  "client",
  "clock",
@@ -10324,7 +10326,6 @@ dependencies = [
  "paths",
  "project",
  "serde_json",
- "sha2",
  "streaming-iterator",
  "tempfile",
  "tree-sitter",

@@ -8,7 +8,6 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 
 use crate::symbol_map::SymbolMap;
 
@@ -16,33 +15,11 @@ use crate::symbol_map::SymbolMap;
 /// name/line/kind for version 1 files, and refuses files it does not know.
 pub const SNAPSHOT_VERSION: u32 = 2;
 
-/// Bytes of the SHA-256 digest that name a project's snapshot (16 hex digits).
-const KEY_BYTES: usize = 8;
-
-/// A stable file name for one project root.
+/// A stable file name for one project root, shared with the diagnostics
+/// snapshots so both kinds of file land under the same key.
 ///
-/// The server only sees its working directory, so both sides normalize the same
-/// way: forward slashes, no trailing slash, lowercased on Windows.
 /// `agents/mcp/wu-repo-map/server.js` repeats this rule and must stay in step.
-pub fn project_key(project_root: &Path) -> String {
-    let normalized = normalize_project_root(project_root);
-    let digest = Sha256::digest(normalized.as_bytes());
-    digest[..KEY_BYTES]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn normalize_project_root(project_root: &Path) -> String {
-    let mut path = project_root.to_string_lossy().replace('\\', "/");
-    while path.len() > 1 && path.ends_with('/') {
-        path.pop();
-    }
-    if cfg!(windows) {
-        path = path.to_lowercase();
-    }
-    path
-}
+pub use paths::project_key;
 
 /// Where the snapshot for `key` lives inside `dir`.
 pub fn snapshot_path(dir: &Path, key: &str) -> PathBuf {
@@ -151,20 +128,14 @@ mod tests {
         assert_eq!(key, project_key(Path::new("D:/work/project/")));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn key_ignores_case_on_windows() {
+    fn snapshot_path_uses_the_shared_project_key() {
+        let dir = Path::new("/agent/repo-maps");
+        let root = Path::new("/work/project");
         assert_eq!(
-            project_key(Path::new("D:/Work/Project")),
-            project_key(Path::new("d:/work/project"))
-        );
-    }
-
-    #[test]
-    fn different_roots_get_different_keys() {
-        assert_ne!(
-            project_key(Path::new("/work/one")),
-            project_key(Path::new("/work/two"))
+            snapshot_path(dir, &project_key(root)),
+            dir.join(format!("{}.json", paths::project_key(root))),
+            "the repo map snapshot must land under the same key as other snapshots"
         );
     }
 

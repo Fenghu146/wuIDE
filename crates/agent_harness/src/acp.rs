@@ -51,7 +51,7 @@ const PI_THINKING_CONFIG_ID: &str = "thought_level";
 
 // Bump when the addendum text changes, so a file written by an older build is
 // recognizable. Pi reads it from the agent directory on every start.
-const PI_ADDENDUM_VERSION: u32 = 2;
+const PI_ADDENDUM_VERSION: u32 = 3;
 
 #[derive(Clone)]
 struct AcpPreset {
@@ -636,6 +636,11 @@ time it starts you.
   directory listings or search results. If it reports that no snapshot exists
   yet, ask the user to open the Repository Map panel and try again; never invent
   the map.
+- Wu also records the language-server diagnostics of the project and serves them
+  as `diagnostics`. When you need to know about compile errors or warnings, call
+  `diagnostics` first instead of guessing from the source or asking the user to
+  paste errors. If it reports that no snapshot exists yet, ask the user to open
+  the Problems panel so the IDE can write one, then call it again.
 - This file is shared by every project and every chat, so it holds no project or
   session state. Derive anything project-specific from the working directory.
 - Reply in the language the user writes in.
@@ -686,7 +691,7 @@ fn pi_mcp_server_entry(agent_root: &Path, node: &Path, agent_dir: &Path) -> Valu
         "args": [pi_mcp_server_script(agent_root)],
         "env": { "PI_CODING_AGENT_DIR": agent_dir },
         "exposure": "direct",
-        "description": "Wu's repository map: file and symbol structure of the open project."
+        "description": "Wu's repository map and language-server diagnostics for the open project."
     })
 }
 
@@ -1725,6 +1730,7 @@ mod tests {
             "working directory is the project root",
             "`AGENTS.md`",
             "`repo_map`",
+            "`diagnostics`",
             "Reply in the language the user writes in",
         ] {
             assert!(text.contains(needle), "addendum lost {needle:?}");
@@ -1870,6 +1876,7 @@ mod tests {
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}),
             json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
             json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "repo_map", "arguments": {}}}),
+            json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "diagnostics", "arguments": {}}}),
         ] {
             writeln!(stdin, "{request}").unwrap();
         }
@@ -1893,7 +1900,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(tools, ["repo_map", "symbols"]);
+        assert_eq!(tools, ["repo_map", "symbols", "diagnostics"]);
 
         // No snapshot in a fresh agent directory: the model must be told what to
         // do, not handed a protocol error it cannot act on.
@@ -1904,5 +1911,13 @@ mod tests {
         assert!(missing.get("error").is_none(), "a missing snapshot is not a failure");
         let text = missing["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Repository Map panel"), "unhelpful message: {text}");
+
+        let missing = responses
+            .iter()
+            .find(|response| response["id"] == 4)
+            .expect("diagnostics answered");
+        assert!(missing.get("error").is_none(), "a missing snapshot is not a failure");
+        let text = missing["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Problems panel"), "unhelpful message: {text}");
     }
 }

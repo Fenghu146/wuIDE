@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Wu's repository map for Pi, served over MCP on stdio.
+// Wu's repository map and LSP diagnostics for Pi, served over MCP on stdio.
 //
 // The IDE writes one snapshot per project root into
-// `<PI_CODING_AGENT_DIR>/repo-maps/<project-key>.json`; this server reads the
-// one belonging to its working directory. No IPC, no third-party packages:
+// `<PI_CODING_AGENT_DIR>/repo-maps/<project-key>.json` and
+// `<PI_CODING_AGENT_DIR>/diagnostics/<project-key>.json`; this server reads the
+// ones belonging to its working directory. No IPC, no third-party packages:
 // Pi runs us inside the project, so the directory itself is the contract.
 "use strict";
 
@@ -16,6 +17,10 @@ const SNAPSHOT_VERSION = 2;
 const LEGACY_SNAPSHOT_VERSION = 1;
 const DEFAULT_FILE_LIMIT = 40;
 const MAX_FILE_LIMIT = 400;
+const DIAGNOSTICS_SNAPSHOT_VERSION = 1;
+const DEFAULT_DIAGNOSTICS_LIMIT = 50;
+const MAX_DIAGNOSTICS_LIMIT = 500;
+const DIAGNOSTIC_SEVERITIES = new Set(["error", "warning", "info"]);
 // Only a fallback for snapshots written before `max_chars` existed; the IDE
 // records the real budget in the snapshot so both sides render identically.
 const FALLBACK_MAX_CHARS = 48_000;
@@ -30,6 +35,12 @@ const STALE_SNAPSHOT =
 const LEGACY_SNAPSHOT =
   "This snapshot was written by an older Wu build, so it has no signatures, access levels or " +
   "include counts. Ask the user to open the Repository Map panel in Wu to rebuild it.";
+const NO_DIAGNOSTICS_SNAPSHOT =
+  "No diagnostics snapshot is available yet. Ask the user to open the Problems panel in Wu " +
+  "(or trigger a diagnostic) so the IDE can write one, then call this tool again.";
+const STALE_DIAGNOSTICS_SNAPSHOT =
+  "The diagnostics snapshot cannot be read, probably because Wu wrote it in a different " +
+  "format. Ask the user to open the Problems panel in Wu to refresh it, then call again.";
 
 const DEFAULT_ORDER =
   "Order: include fan-in (desc), then reference PageRank (desc), then path.";
@@ -73,6 +84,14 @@ function snapshotPath() {
   return join(agentDir, "repo-maps", `${projectKey(process.cwd())}.json`);
 }
 
+// Same key, same directory scheme as the repository map, so both snapshots for
+// one project sit next to each other.
+function diagnosticsSnapshotPath() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR;
+  if (!agentDir) return null;
+  return join(agentDir, "diagnostics", `${projectKey(process.cwd())}.json`);
+}
+
 function loadSnapshot() {
   const path = snapshotPath();
   if (!path) return { error: NO_SNAPSHOT };
@@ -102,6 +121,32 @@ function loadSnapshot() {
     return { error: STALE_SNAPSHOT };
   }
   return { doc, legacy: false };
+}
+
+function loadDiagnosticsSnapshot() {
+  const path = diagnosticsSnapshotPath();
+  if (!path) return { error: NO_DIAGNOSTICS_SNAPSHOT };
+
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { error: NO_DIAGNOSTICS_SNAPSHOT };
+  }
+
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return { error: STALE_DIAGNOSTICS_SNAPSHOT };
+  }
+  if (!doc || !Array.isArray(doc.items)) {
+    return { error: STALE_DIAGNOSTICS_SNAPSHOT };
+  }
+  if (doc.version !== DIAGNOSTICS_SNAPSHOT_VERSION) {
+    return { error: STALE_DIAGNOSTICS_SNAPSHOT };
+  }
+  return { doc };
 }
 
 function normalizePath(path) {
@@ -308,6 +353,87 @@ function renderSymbols(doc, requested, options) {
   return head.join("\n");
 }
 
+const TRUNCATED_DIAGNOSTICS =
+  "The snapshot was capped when the IDE wrote it, so older diagnostics are missing from this list.";
+
+function clampDiagnosticsLimit(requested) {
+  return Number.isFinite(requested) && requested >= 1
+    ? Math.min(Math.floor(requested), MAX_DIAGNOSTICS_LIMIT)
+    : DEFAULT_DIAGNOSTICS_LIMIT;
+}
+
+function matchesPath(item, wanted) {
+  return (
+    !wanted ||
+    item.path === wanted ||
+    item.path.endsWith(`/${wanted}`) ||
+    wanted.endsWith(`/${item.path}`)
+  );
+}
+
+// One line per diagnostic, grouped under the file it belongs to, so an agent
+// can read the list and open the exact position.
+function renderDiagnostics(doc, options) {
+  const wanted = options.path ? normalizePath(options.path) : "";
+  const matched = (doc.items || []).filter(
+    (item) =>
+      (!options.severity || item.severity === options.severity) &&
+      matchesPath(item, wanted),
+  );
+  const head = ["## Diagnostics", ""];
+  if (matched.length === 0) {
+    const scope =
+      (options.severity ? ` with severity \`${options.severity}\`` : "") +
+      (wanted ? ` in \`${wanted}\`` : "");
+    head.push(`No diagnostics${scope}.`);
+    if (doc.truncated) head.push(TRUNCATED_DIAGNOSTICS);
+    return head.join("\n");
+  }
+
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const item of matched) {
+    if (item.severity in counts) counts[item.severity] += 1;
+  }
+  const shown = matched
+    .slice()
+    .sort(
+      (left, right) =>
+        String(left.path).localeCompare(String(right.path)) ||
+        Number(left.line) - Number(right.line) ||
+        Number(left.column) - Number(right.column),
+    )
+    .slice(0, options.limit);
+  const fileCount = new Set(matched.map((item) => item.path)).size;
+  const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+  head.push(
+    `${plural(matched.length, "diagnostic")} (${plural(counts.error, "error")}, ` +
+      `${plural(counts.warning, "warning")}, ${counts.info} info) in ` +
+      `${plural(fileCount, "file")}, showing ${shown.length}.`,
+  );
+  if (doc.truncated) head.push(TRUNCATED_DIAGNOSTICS);
+
+  const body = [];
+  let currentPath = null;
+  for (const item of shown) {
+    if (item.path !== currentPath) {
+      currentPath = item.path;
+      body.push("", `\`${item.path}\``);
+    }
+    const code = item.code ? ` (${item.code})` : "";
+    const message = String(item.message).replace(/\s+/g, " ").trim();
+    body.push(`- ${item.path}:${item.line}:${item.column} ${item.severity}${code} ${message}`);
+  }
+
+  let text = `${head.join("\n")}\n${body.join("\n")}`;
+  if (matched.length > shown.length) {
+    text +=
+      `\n\nShowing ${shown.length} of ${matched.length}. Raise \`limit\` ` +
+      `(max ${MAX_DIAGNOSTICS_LIMIT}), or filter by \`path\` or \`severity\`.`;
+  }
+  return `${text}\n`;
+}
+
 const TOOLS = [
   {
     name: "repo_map",
@@ -363,6 +489,35 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "diagnostics",
+    description:
+      "The language-server diagnostics Wu currently holds for this project: compile errors, " +
+      "warnings and info, each with its file, line, column, code and message. Use it to find " +
+      "out what is broken instead of asking the user to paste errors. Filter by `path` or " +
+      "`severity`, and page with `limit`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Only diagnostics in this file; project-relative or absolute.",
+        },
+        severity: {
+          type: "string",
+          enum: ["error", "warning", "info"],
+          description: "Only diagnostics with this severity.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_DIAGNOSTICS_LIMIT,
+          description: `How many diagnostics to list (default ${DEFAULT_DIAGNOSTICS_LIMIT}).`,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function textResult(text) {
@@ -375,6 +530,21 @@ function intOption(value, fallback) {
 }
 
 function callTool(name, args) {
+  if (name === "diagnostics") {
+    const { doc, error } = loadDiagnosticsSnapshot();
+    if (error) return textResult(error);
+    const severity =
+      typeof args.severity === "string" && DIAGNOSTIC_SEVERITIES.has(args.severity)
+        ? args.severity
+        : undefined;
+    return textResult(
+      renderDiagnostics(doc, {
+        path: typeof args.path === "string" ? args.path : "",
+        severity,
+        limit: clampDiagnosticsLimit(Number(args.limit)),
+      }),
+    );
+  }
   if (name !== "repo_map" && name !== "symbols") {
     return undefined;
   }
@@ -418,7 +588,7 @@ function handle(message) {
       reply({
         protocolVersion: (message.params && message.params.protocolVersion) || "2025-06-18",
         capabilities: { tools: {} },
-        serverInfo: { name: "wu-repo-map", version: "1.1.0" },
+        serverInfo: { name: "wu-repo-map", version: "1.2.0" },
       });
       return;
     case "ping":

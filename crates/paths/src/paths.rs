@@ -1,6 +1,7 @@
 //! Paths to locations used by WuIDE.
 
 use anyhow::Context as _;
+use sha2::Digest as _;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
@@ -219,6 +220,37 @@ pub fn pi_agent_dir() -> PathBuf {
 /// `agents/mcp/wu-repo-map/server.js` reads it through `PI_CODING_AGENT_DIR`.
 pub fn repo_map_snapshots_dir() -> PathBuf {
     pi_agent_dir().join("repo-maps")
+}
+
+/// Where the IDE drops LSP diagnostics snapshots for Pi's MCP server.
+///
+/// Same shape as [`repo_map_snapshots_dir`]: one `<project-key>.json` per
+/// project root, read by the bundled MCP server through `PI_CODING_AGENT_DIR`.
+pub fn diagnostics_snapshots_dir() -> PathBuf {
+    pi_agent_dir().join("diagnostics")
+}
+
+/// The stable file name Wu gives one project root's snapshot.
+///
+/// The MCP server only sees its working directory, so both sides normalize the
+/// same way: forward slashes, no trailing slash, lowercased on Windows, then the
+/// first 16 hex digits of the SHA-256 digest. `agents/mcp/wu-repo-map/server.js`
+/// repeats this rule and must stay in step.
+pub fn project_key(project_root: &Path) -> String {
+    const KEY_BYTES: usize = 8;
+
+    let mut normalized = project_root.to_string_lossy().replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if cfg!(windows) {
+        normalized = normalized.to_lowercase();
+    }
+    let digest = sha2::Sha256::digest(normalized.as_bytes());
+    digest[..KEY_BYTES]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub fn state_dir() -> &'static PathBuf {
@@ -799,6 +831,33 @@ pub fn global_gitignore_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_key_is_hex_and_stable_across_separators() {
+        let key = project_key(Path::new("D:/work/project"));
+        assert_eq!(key.len(), 16);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+
+        assert_eq!(key, project_key(Path::new("D:\\work\\project")));
+        assert_eq!(key, project_key(Path::new("D:/work/project/")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_key_ignores_case_on_windows() {
+        assert_eq!(
+            project_key(Path::new("D:/Work/Project")),
+            project_key(Path::new("d:/work/project"))
+        );
+    }
+
+    #[test]
+    fn project_key_differs_between_roots() {
+        assert_ne!(
+            project_key(Path::new("/work/one")),
+            project_key(Path::new("/work/two"))
+        );
+    }
 
     #[test]
     fn copy_dir_contents_copies_nested_files() {
