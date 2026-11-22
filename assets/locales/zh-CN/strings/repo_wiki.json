@@ -3,12 +3,17 @@
   "Create AGENTS.md": "创建 AGENTS.md",
   "Failed to create {path}: {error}": "创建 {path} 失败：{error}",
   "Locals": "局部变量",
+  "Map: {files} files, built {age}": "地图：{files} 个文件，生成于{age}",
   "No project is open": "没有打开的项目",
   "Open AGENTS.md": "打开 AGENTS.md",
   "Scanning symbols…": "正在扫描符号…",
   "Show local variables": "显示函数体内的局部变量",
   "in {inbound} / out {outbound}": "入 {inbound} / 出 {outbound}",
+  "just now": "刚刚",
   "{count} files · {size}": "{count} 个文件 · {size}",
   "{count} symbols": "{count} 个符号",
-  "{kind} x{count} (lines {first}–{last})": "{kind} ×{count}（第 {first}–{last} 行）"
+  "{days} d ago": "{days} 天前",
+  "{hours} h ago": "{hours} 小时前",
+  "{kind} x{count} (lines {first}–{last})": "{kind} ×{count}（第 {first}–{last} 行）",
+  "{minutes} min ago": "{minutes} 分钟前"
 }

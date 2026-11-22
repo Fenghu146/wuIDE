@@ -12,16 +12,20 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
+use chrono::{DateTime, Utc};
 use fs::Fs;
 use gpui::{App, AppContext as _, Entity, Task};
 use language::{Language, LanguageRegistry};
 use path::rel_path::RelPath;
 use project::Project;
+use serde::{Deserialize, Serialize};
 use streaming_iterator::StreamingIterator as _;
+
+use crate::symbol_cache::{self, CacheEntry, FileStamp};
 
 /// Upper bound on how many files one build parses. A file costs roughly ten
 /// milliseconds to read, parse and walk for identifiers, so this cap is worth
@@ -84,7 +88,7 @@ const VENDORED_DIRS: &[&str] = &[
 const PAGERANK_ITERATIONS: usize = 24;
 const PAGERANK_DAMPING: f32 = 0.85;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolEntry {
     pub name: Arc<str>,
     /// The normalized category of the definition, e.g. `function`.
@@ -711,6 +715,23 @@ pub struct SourceFile {
     pub rel: Arc<RelPath>,
     pub abs_path: PathBuf,
     pub size: u64,
+    /// The worktree snapshot's modification time in nanoseconds since the Unix
+    /// epoch, or `None` when the snapshot has none.
+    ///
+    /// The cache fingerprints files with this rather than a fresh `stat`: the
+    /// snapshot is maintained by the worktree watcher, so it is exactly as
+    /// fresh as the file list the panel draws from, and reading it costs no
+    /// syscall. A stat of this repository's two thousand sources measured
+    /// about 0.3 s on Windows, which would be most of a cache hit's budget.
+    pub modified_ns: Option<i64>,
+}
+
+/// The snapshot's mtime for one file, in the units [`SourceFile`] carries.
+pub fn modified_nanos(mtime: Option<fs::MTime>) -> Option<i64> {
+    let (seconds, nanos) = mtime?.to_seconds_and_nanos_for_persistence()?;
+    (seconds as i64)
+        .checked_mul(1_000_000_000)
+        .and_then(|nanos_since_epoch| nanos_since_epoch.checked_add(nanos as i64))
 }
 
 /// Applies the vendored, size, count and byte budgets to a candidate list.
@@ -878,21 +899,216 @@ fn is_vendored_path(rel: &RelPath) -> bool {
         .any(|component| component.starts_with('.') || VENDORED_DIRS.contains(&component))
 }
 
-/// Parses `sources` and ranks them. Must run off the foreground thread.
+/// What one build produced, and how much of it was already known.
+pub struct BuildOutcome {
+    pub map: Arc<SymbolMap>,
+    /// When this map was built, which is earlier than now when the in-memory
+    /// cache answered. Callers show it so a reused map says how old it is
+    /// instead of claiming to be fresh.
+    pub built_at: DateTime<Utc>,
+    /// Files parsed in this build.
+    pub parsed: usize,
+    /// Files whose cached parse was reused.
+    pub reused: usize,
+    /// Whether the whole map came from memory without reading any file.
+    pub from_memory: bool,
+}
+
+/// Parses `sources` and ranks them, reading and parsing every file.
+///
+/// This is the uncached path; [`build_cached`] is what the panel and the chat
+/// call. It exists so a test can prove the cache changes nothing about the map.
+///
+/// Must run off the foreground thread.
 pub async fn build(
     sources: Vec<SourceFile>,
     fs: Arc<dyn Fs>,
     languages: Arc<LanguageRegistry>,
 ) -> SymbolMap {
-    let (kept, mut stats) = select(sources, |source| {
+    let (kept, stats) = select(sources, |source| {
         languages.language_for_file_path(&source.abs_path).is_some()
     });
+    let stamps = stamp_index(&kept);
+    let parsed = parse_sources(kept, stats, fs, languages, None, &stamps).await;
+    finish(parsed.files, parsed.stats)
+}
 
+/// Parses `sources` and ranks them, reusing what an earlier build of the same
+/// map already learned.
+///
+/// `roots` names the map: the worktree roots whose files it covers. A map over
+/// several worktrees is not the map of any one of them, so the caller has to
+/// say which it wants. The in-memory map is reused only when every source still
+/// has the stamp it had then, and the per-file parses in `cache_dir` are reused
+/// file by file, so an edit costs one parse instead of a whole rebuild.
+///
+/// Must run off the foreground thread.
+pub async fn build_cached(
+    sources: Vec<SourceFile>,
+    fs: Arc<dyn Fs>,
+    languages: Arc<LanguageRegistry>,
+    roots: &[PathBuf],
+    cache_dir: &Path,
+) -> BuildOutcome {
+    let (kept, stats) = select(sources, |source| {
+        languages.language_for_file_path(&source.abs_path).is_some()
+    });
+    let stamps = stamp_index(&kept);
+    let key = symbol_cache::key(roots);
+
+    // Comparing every source's stamp against the filesystem is what makes a
+    // stale map impossible to hand out: an edit, a deletion, an addition and a
+    // branch switch all change some file's stat, and cost one stat each.
+    if let Some((map, built_at)) = symbol_cache::reuse(&key, &stamps.stamps) {
+        let reused = map.files.len();
+        log::info!("repo map: {reused} files reused from memory, built at {built_at}");
+        return BuildOutcome {
+            map,
+            built_at,
+            parsed: 0,
+            reused,
+            from_memory: true,
+        };
+    }
+
+    let cached = symbol_cache::load::<CachedParse>(cache_dir, &key);
+    let cached_files = cached.as_ref().map_or(0, Vec::len);
+    // Keyed by absolute path: two worktrees of one project can hold the same
+    // relative path, and their parses must not be confused for one another.
+    let by_path: HashMap<String, CacheEntry<CachedParse>> = cached
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| (entry.payload.path.clone(), entry))
+        .collect();
+
+    let parsed = parse_sources(kept, stats, fs, languages, Some(&by_path), &stamps).await;
+    // Rewriting the document is only worth its bytes when a file changed: an
+    // unchanged rebuild keeps the one already on disk, untouched.
+    if parsed.parsed > 0 || cached_files != parsed.files.len() {
+        let entries: Vec<CacheEntry<CachedParseRef<'_>>> = parsed
+            .files
+            .iter()
+            .filter_map(|file| {
+                // Only a file the snapshot can vouch for is worth storing; one
+                // without a time could never be validated again.
+                let (file_size, modified_ns) = stamps.by_path.get(&file.path).copied()?;
+                Some(CacheEntry {
+                    file_size,
+                    modified_ns,
+                    payload: CachedParseRef::from(file),
+                })
+            })
+            .collect();
+        let project = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        symbol_cache::store(cache_dir, &key, &project, &entries);
+    }
+
+    let built_at = Utc::now();
+    log::info!(
+        "repo map: {} files reused, {} parsed, built at {built_at}",
+        parsed.reused,
+        parsed.parsed
+    );
+    let map = Arc::new(finish(parsed.files, parsed.stats));
+    symbol_cache::remember(&key, map.clone(), built_at, stamps.stamps);
+    BuildOutcome {
+        map,
+        built_at,
+        parsed: parsed.parsed,
+        reused: parsed.reused,
+        from_memory: false,
+    }
+}
+
+/// Drops the remembered map covering `roots`, so the next build re-reads the
+/// filesystem. A manual refresh asks for a fresh look at the files, not for
+/// every one of them to be parsed again, so the disk cache stays.
+pub fn forget_cached_map(roots: &[PathBuf]) {
+    symbol_cache::forget(&symbol_cache::key(roots));
+}
+
+/// What one parse pass produced: the files the map holds, in source order.
+struct ParsedSources {
+    files: Vec<ParsedFile>,
+    stats: BuildStats,
+    /// Files parsed now.
+    parsed: usize,
+    /// Files whose parse came from the cache.
+    reused: usize,
+}
+
+/// Every source's stat, taken once per build.
+struct StampIndex {
+    /// Ordered by path, so two indexes of one file set compare equal.
+    stamps: Vec<FileStamp>,
+    by_path: HashMap<String, (u64, i64)>,
+}
+
+fn stamp_index(sources: &[SourceFile]) -> StampIndex {
+    let mut stamps: Vec<FileStamp> = sources
+        .iter()
+        .filter_map(|source| {
+            // A file the snapshot has no time for cannot be validated from the
+            // cache, so it is left out of the index: it is parsed every build
+            // and never stored.
+            let modified_ns = source.modified_ns?;
+            Some(FileStamp {
+                path: absolute_key(&source.abs_path),
+                file_size: source.size,
+                modified_ns,
+            })
+        })
+        .collect();
+    stamps.sort_by(|left, right| left.path.cmp(&right.path));
+    let by_path = stamps
+        .iter()
+        .map(|stamp| (stamp.path.clone(), (stamp.file_size, stamp.modified_ns)))
+        .collect();
+    StampIndex { stamps, by_path }
+}
+
+/// A file's identity for the cache: its absolute path, in one spelling for
+/// every platform, so a document written on Windows is still found there.
+fn absolute_key(path: &Path) -> String {
+    let key = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
+/// Reads and parses `kept`, taking each file's parse from `cached` when its
+/// stat still matches. Must run off the foreground thread.
+async fn parse_sources(
+    kept: Vec<SourceFile>,
+    mut stats: BuildStats,
+    fs: Arc<dyn Fs>,
+    languages: Arc<LanguageRegistry>,
+    cached: Option<&HashMap<String, CacheEntry<CachedParse>>>,
+    stamps: &StampIndex,
+) -> ParsedSources {
     let mut parsed: Vec<ParsedFile> = Vec::with_capacity(kept.len());
+    let mut reused = 0usize;
+    let mut fresh = 0usize;
     for source in kept {
         // Yielding between files lets the task be dropped promptly when the
         // panel closes or a newer build starts.
         futures::future::ready(()).await;
+        let path = absolute_key(&source.abs_path);
+        let (file_size, modified_ns) = stamps.by_path.get(&path).copied().unwrap_or_default();
+        if let Some(entry) = cached.and_then(|cached| cached.get(&path))
+            && entry.file_size == file_size
+            && entry.modified_ns == modified_ns
+        {
+            parsed.push(entry.payload.to_parsed(source.rel.clone(), source.size));
+            reused += 1;
+            continue;
+        }
         // Unreadable files are common (vendored blobs, binaries, non-UTF-8
         // sources such as coq's SharedStack) and say nothing about the
         // project, so they stay at debug level.
@@ -931,8 +1147,19 @@ pub async fn build(
             continue;
         };
         parsed.push(file);
+        fresh += 1;
     }
 
+    ParsedSources {
+        files: parsed,
+        stats,
+        parsed: fresh,
+        reused,
+    }
+}
+
+/// Ranks the parsed files and turns them into the map's public shape.
+fn finish(mut parsed: Vec<ParsedFile>, mut stats: BuildStats) -> SymbolMap {
     stats.parsed = parsed.len();
     resolve_includes(&mut parsed);
     rank(&mut parsed);
@@ -960,8 +1187,11 @@ pub async fn build(
     }
 }
 
+#[derive(Clone, Debug)]
 struct ParsedFile {
     rel: Arc<RelPath>,
+    /// Absolute path, in the same spelling the cache uses as its key.
+    path: String,
     size: u64,
     lines: u32,
     rank: f32,
@@ -973,6 +1203,73 @@ struct ParsedFile {
     mentions: HashSet<Arc<str>>,
     /// Include paths, module paths and import specifiers naming other files.
     includes: Vec<String>,
+}
+
+/// One file's parse as the cache document holds it.
+///
+/// The path is a string because the document is read back without the project:
+/// it is what tells two worktrees' copies of `src/lib.rs` apart. The fields
+/// the ranking computes (`rank`, the degrees) are not stored, because they
+/// depend on every other file in the map and are recomputed on each build.
+#[derive(Deserialize)]
+struct CachedParse {
+    path: String,
+    lines: u32,
+    symbols: Vec<SymbolEntry>,
+    #[serde(default)]
+    mentions: Vec<Arc<str>>,
+    #[serde(default)]
+    includes: Vec<String>,
+}
+
+impl CachedParse {
+    /// The parsed file, with the identity and size the current build knows.
+    ///
+    /// The size comes from the source list rather than the document so a
+    /// reused file reports exactly what an uncached build would report, even
+    /// when the worktree snapshot is a moment behind the disk.
+    fn to_parsed(&self, rel: Arc<RelPath>, size: u64) -> ParsedFile {
+        ParsedFile {
+            rel,
+            path: self.path.clone(),
+            size,
+            lines: self.lines,
+            rank: 0.,
+            in_degree: 0,
+            out_degree: 0,
+            symbols: self.symbols.clone(),
+            mentions: self.mentions.iter().cloned().collect(),
+            includes: self.includes.clone(),
+        }
+    }
+}
+
+/// A [`ParsedFile`] as it is written to the cache document.
+///
+/// Borrowed rather than copied so a build writes what it just parsed without
+/// duplicating the symbols first. Mentions are sorted, which keeps the document
+/// byte-for-byte stable across builds of the same content.
+#[derive(Serialize)]
+struct CachedParseRef<'a> {
+    path: &'a str,
+    lines: u32,
+    symbols: &'a [SymbolEntry],
+    mentions: Vec<&'a str>,
+    includes: &'a [String],
+}
+
+impl<'a> From<&'a ParsedFile> for CachedParseRef<'a> {
+    fn from(file: &'a ParsedFile) -> Self {
+        let mut mentions: Vec<&str> = file.mentions.iter().map(|mention| &**mention).collect();
+        mentions.sort_unstable();
+        Self {
+            path: &file.path,
+            lines: file.lines,
+            symbols: &file.symbols,
+            mentions,
+            includes: &file.includes,
+        }
+    }
 }
 
 /// Whether the language has both a grammar and the outline query the symbol
@@ -994,6 +1291,7 @@ fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Opti
     let includes = collect_includes(tree.root_node(), text);
     Some(ParsedFile {
         rel: source.rel.clone(),
+        path: absolute_key(&source.abs_path),
         size: source.size,
         lines: text.lines().count() as u32,
         rank: 0.,
@@ -1911,9 +2209,15 @@ fn rank(files: &mut [ParsedFile]) {
                 }
             }
         }
-        let total: f32 = weights.values().sum();
+        // Sorted, because floating point addition is not associative: two
+        // builds of one file set must produce the same ranks bit for bit, and
+        // a cached parse restores the mentions in a different order than the
+        // parse that wrote it collected them.
+        let mut outgoing: Vec<(usize, f32)> = weights.into_iter().collect();
+        outgoing.sort_by_key(|(target, _)| *target);
+        let total: f32 = outgoing.iter().map(|(_, weight)| weight).sum();
         if total > 0. {
-            edges[index] = weights.into_iter().collect();
+            edges[index] = outgoing;
             totals[index] = total;
         }
     }
@@ -1955,24 +2259,36 @@ pub fn project_sources(project: &Entity<Project>, cx: &App) -> Vec<SourceFile> {
                 rel: entry.path.clone(),
                 abs_path: root.join(entry.path.as_std_path()),
                 size: entry.size,
+                modified_ns: modified_nanos(entry.mtime),
             });
         }
     }
     sources
 }
 
-/// Builds a symbol map for the whole project off the foreground thread. The
-/// returned task is cancelled when dropped.
-pub fn symbol_map_task(project: Entity<Project>, cx: &App) -> Task<SymbolMap> {
+/// Builds a symbol map for the whole project off the foreground thread, reusing
+/// the cache. The returned task is cancelled when dropped.
+pub fn symbol_map_task(project: Entity<Project>, cx: &App) -> Task<Arc<SymbolMap>> {
     let sources = project_sources(&project, cx);
+    let roots: Vec<PathBuf> = project
+        .read(cx)
+        .visible_worktrees(cx)
+        .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+        .collect();
     let fs = project.read(cx).fs().clone();
     let languages = project.read(cx).languages().clone();
-    cx.background_spawn(async move { build(sources, fs, languages).await })
+    let cache_dir = paths::repo_map_cache_dir();
+    cx.background_spawn(async move {
+        build_cached(sources, fs, languages, &roots, &cache_dir)
+            .await
+            .map
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::snapshot;
 
     fn entry(name: &str, kind: &str, row: u32) -> SymbolEntry {
         SymbolEntry {
@@ -2008,6 +2324,7 @@ mod tests {
     fn file(rel: &'static str, defs: &[&'static str], mentions: &[&'static str]) -> ParsedFile {
         ParsedFile {
             rel: test_rel(rel),
+            path: rel.to_owned(),
             size: 1,
             lines: 1,
             rank: 0.,
@@ -2066,6 +2383,28 @@ mod tests {
                 .into_arc(),
             abs_path: PathBuf::from(rel),
             size,
+            modified_ns: None,
+        }
+    }
+
+    /// What a worktree snapshot records for one file.
+    fn file_mtime_nanos(path: &Path) -> Option<i64> {
+        let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+        let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+        i64::try_from(since_epoch.as_nanos()).ok()
+    }
+
+    /// Re-reads size and mtime the way the worktree watcher would, so a test
+    /// edit looks like an edit to the cache instead of a stale entry.
+    fn refresh_sources(sources: &mut [SourceFile]) {
+        for source in sources {
+            match std::fs::metadata(&source.abs_path) {
+                Ok(metadata) => {
+                    source.size = metadata.len();
+                    source.modified_ns = file_mtime_nanos(&source.abs_path);
+                }
+                Err(_) => source.modified_ns = None,
+            }
         }
     }
 
@@ -2102,8 +2441,9 @@ mod tests {
                 };
                 sources.push(SourceFile {
                     rel: rel.into_arc(),
-                    abs_path: path,
+                    abs_path: path.clone(),
                     size: metadata.len(),
+                    modified_ns: file_mtime_nanos(&path),
                 });
             }
         }
@@ -2127,6 +2467,347 @@ mod tests {
         assert!(markdown.contains("Repository map"));
     }
 
+    /// A small Rust project on disk: its root, and the sources a worktree
+    /// snapshot would list for it.
+    fn rust_project(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, Vec<SourceFile>) {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let root = directory.path().to_path_buf();
+        let mut sources = Vec::with_capacity(files.len());
+        for (rel, text) in files {
+            let rel = *rel;
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("parent directory");
+            }
+            std::fs::write(&path, text).expect("source file");
+            sources.push(SourceFile {
+                rel: RelPath::new(Path::new(rel), path::PathStyle::local())
+                    .expect("valid path")
+                    .into_arc(),
+                size: text.len() as u64,
+                modified_ns: file_mtime_nanos(&path),
+                abs_path: path,
+            });
+        }
+        (directory, root, sources)
+    }
+
+    fn rust_registry(cx: &gpui::TestAppContext) -> Arc<LanguageRegistry> {
+        let registry = Arc::new(language::LanguageRegistry::new(
+            cx.background_executor.clone(),
+        ));
+        registry.add(languages::language(
+            "rust",
+            tree_sitter_rust::LANGUAGE.into(),
+        ));
+        registry
+    }
+
+    fn project_files() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "src/main.rs",
+                "mod store;\nuse crate::store::Store;\nfn main() {\n    let store = Store::new();\n    store.save();\n}\n",
+            ),
+            (
+                "src/store.rs",
+                "pub struct Store {\n    items: Vec<u8>,\n}\n\nimpl Store {\n    pub fn new() -> Self {\n        Store { items: Vec::new() }\n    }\n\n    pub fn save(&self) {}\n}\n",
+            ),
+            ("src/util.rs", "pub fn helper() -> u32 {\n    1\n}\n"),
+        ]
+    }
+
+    /// The renderings must not be able to tell a cached build from an uncached
+    /// one: same markdown, same digest, same snapshot bytes, same clipboard
+    /// export.
+    fn assert_same_output(cached: &SymbolMap, uncached: &SymbolMap, root: &Path) {
+        assert_eq!(cached.stats.parsed, uncached.stats.parsed);
+        assert_eq!(
+            cached.to_markdown(MAX_REPO_MAP_CHARS),
+            uncached.to_markdown(MAX_REPO_MAP_CHARS),
+            "markdown differs"
+        );
+        assert_eq!(
+            cached.to_digest(
+                DEFAULT_DIGEST_FILES,
+                DEFAULT_DIGEST_SYMBOLS_PER_FILE,
+                MAX_DIGEST_CHARS
+            ),
+            uncached.to_digest(
+                DEFAULT_DIGEST_FILES,
+                DEFAULT_DIGEST_SYMBOLS_PER_FILE,
+                MAX_DIGEST_CHARS
+            ),
+            "digest differs"
+        );
+        let cached_snapshot = snapshot::to_json(cached, root, "2026-01-02T03:04:05Z");
+        let uncached_snapshot = snapshot::to_json(uncached, root, "2026-01-02T03:04:05Z");
+        assert_eq!(
+            serde_json::to_string(&cached_snapshot).expect("snapshot serializes"),
+            serde_json::to_string(&uncached_snapshot).expect("snapshot serializes"),
+            "snapshot bytes differ"
+        );
+        assert_eq!(
+            serde_json::to_string(&cached.json_entries()).expect("export serializes"),
+            serde_json::to_string(&uncached.json_entries()).expect("export serializes"),
+            "clipboard export bytes differ"
+        );
+    }
+
+    #[gpui::test]
+    async fn a_cached_build_matches_the_uncached_map_and_reuses_the_second_time(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (directory, root, sources) = rust_project(&project_files());
+        let cache_dir = directory.path().join("repo-maps/.cache");
+        let fs = Arc::new(fs::RealFs::new(None, cx.background_executor.clone()));
+        let roots = std::slice::from_ref(&root);
+
+        let uncached = build(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+        )
+        .await;
+
+        let first = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert_eq!(first.parsed, 3, "the first build parses everything");
+        assert_eq!(first.reused, 0);
+        assert!(!first.from_memory);
+        assert_same_output(&first.map, &uncached, &root);
+
+        // Same process, files untouched: the map itself is reused, so nothing is
+        // even read.
+        let second = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert!(second.from_memory, "an unchanged map comes from memory");
+        assert_eq!(second.parsed, 0);
+        assert_eq!(second.built_at, first.built_at);
+        assert_same_output(&second.map, &uncached, &root);
+
+        // A new process would remember nothing, so the parses come from disk.
+        forget_cached_map(roots);
+        let from_disk = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert!(!from_disk.from_memory);
+        assert_eq!(from_disk.parsed, 0, "every file came from the disk cache");
+        assert_eq!(from_disk.reused, 3);
+        assert_same_output(&from_disk.map, &uncached, &root);
+        assert!(
+            cache_dir.join(format!("{}.json", symbol_cache::key(roots))).is_file(),
+            "the build leaves a cache document behind"
+        );
+    }
+
+    #[gpui::test]
+    async fn each_kind_of_file_change_retries_only_the_files_it_touched(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (directory, root, mut sources) = rust_project(&project_files());
+        let cache_dir = directory.path().join("repo-maps/.cache");
+        let fs = Arc::new(fs::RealFs::new(None, cx.background_executor.clone()));
+        let registry = rust_registry(cx);
+        let roots = std::slice::from_ref(&root);
+
+        // A fresh build every time, so each step exercises the cache document
+        // and not the in-memory map.
+        let rebuild = |sources: Vec<SourceFile>| {
+            forget_cached_map(roots);
+            let fs = fs.clone();
+            let registry = registry.clone();
+            let cache_dir = cache_dir.clone();
+            let roots = vec![root.clone()];
+            async move { build_cached(sources, fs, registry, &roots, &cache_dir).await }
+        };
+
+        let first = rebuild(sources.clone()).await;
+        assert_eq!(first.parsed, 3);
+
+        // A modification time bump with the same bytes must not be trusted.
+        let touched = root.join("src/util.rs");
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&touched)
+            .expect("the file opens")
+            .set_modified(later)
+            .expect("the file is touched");
+        refresh_sources(&mut sources);
+        let after_touch = rebuild(sources.clone()).await;
+        assert_eq!(after_touch.parsed, 1, "the touched file is parsed again");
+        assert_eq!(after_touch.reused, 2);
+
+        // A size change is caught even when the clock is not.
+        let grown = root.join("src/store.rs");
+        let text = std::fs::read_to_string(&grown).expect("the file reads");
+        std::fs::write(&grown, format!("{text}\npub fn extra() {{}}\n")).expect("the file grows");
+        refresh_sources(&mut sources);
+        let after_grow = rebuild(sources.clone()).await;
+        assert_eq!(after_grow.parsed, 1, "the resized file is parsed again");
+        assert_eq!(after_grow.reused, 2);
+
+        // A deletion drops the file from the map and from the cache.
+        std::fs::remove_file(root.join("src/util.rs")).expect("the file is removed");
+        sources.retain(|source| source.abs_path != root.join("src/util.rs"));
+        let after_delete = rebuild(sources.clone()).await;
+        assert_eq!(after_delete.parsed, 0);
+        assert_eq!(after_delete.reused, 2);
+        assert_eq!(after_delete.map.files.len(), 2);
+        let document = std::fs::read_to_string(cache_dir.join(format!("{}.json", symbol_cache::key(roots))))
+            .expect("the document is written");
+        assert!(
+            !document.contains("util.rs"),
+            "a deleted file must not stay in the cache"
+        );
+
+        // An addition is parsed while everything else is reused.
+        let added = "src/extra.rs";
+        std::fs::write(root.join(added), "pub fn added() -> u8 {\n    3\n}\n").expect("the file is added");
+        let size = std::fs::metadata(root.join(added)).expect("the file stats").len();
+        sources.push(SourceFile {
+            rel: RelPath::new(Path::new(added), path::PathStyle::local())
+                .expect("valid path")
+                .into_arc(),
+            abs_path: root.join(added),
+            size,
+            modified_ns: file_mtime_nanos(&root.join(added)),
+        });
+        let after_add = rebuild(sources.clone()).await;
+        assert_eq!(after_add.parsed, 1, "the new file is parsed");
+        assert_eq!(after_add.reused, 2);
+        assert_eq!(after_add.map.files.len(), 3);
+
+        // Whatever the history, the map equals one built from scratch.
+        let uncached = build(sources, fs.clone(), rust_registry(cx)).await;
+        assert_same_output(&after_add.map, &uncached, &root);
+    }
+
+    #[gpui::test]
+    async fn a_truncated_cache_document_is_discarded_instead_of_trusted(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (directory, root, sources) = rust_project(&project_files());
+        let cache_dir = directory.path().join("repo-maps/.cache");
+        let fs = Arc::new(fs::RealFs::new(None, cx.background_executor.clone()));
+        let roots = std::slice::from_ref(&root);
+
+        let first = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert_eq!(first.parsed, 3);
+
+        let document = cache_dir.join(format!("{}.json", symbol_cache::key(roots)));
+        let bytes = std::fs::read(&document).expect("the document was written");
+        std::fs::write(&document, &bytes[..bytes.len() / 2]).expect("the document is truncated");
+
+        forget_cached_map(roots);
+        let second = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert_eq!(second.parsed, 3, "a corrupt document means parsing everything");
+        assert_same_output(&second.map, &first.map, &root);
+
+        // The next build finds a document it can use again.
+        forget_cached_map(roots);
+        let third = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert_eq!(third.parsed, 0);
+        assert_eq!(third.reused, 3);
+    }
+
+    #[gpui::test]
+    async fn the_in_memory_map_is_dropped_when_a_file_changes_or_on_request(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (directory, root, mut sources) = rust_project(&project_files());
+        let cache_dir = directory.path().join("repo-maps/.cache");
+        let fs = Arc::new(fs::RealFs::new(None, cx.background_executor.clone()));
+        let roots = std::slice::from_ref(&root);
+
+        build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        let reused = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert!(reused.from_memory);
+
+        // A real edit (here: a size change) is enough; no event is needed for the
+        // map to notice.
+        let edited = root.join("src/main.rs");
+        std::fs::write(&edited, "fn main() {\n    println!(\"changed\");\n}\n").expect("the file is edited");
+        refresh_sources(&mut sources);
+        let after_edit = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert!(!after_edit.from_memory, "an edited file drops the map");
+        assert_eq!(after_edit.reused, 2);
+        assert_eq!(after_edit.parsed, 1);
+
+        // A manual refresh drops the map even when nothing changed since.
+        forget_cached_map(roots);
+        let after_refresh = build_cached(
+            sources.clone(),
+            fs.clone(),
+            rust_registry(cx),
+            roots,
+            &cache_dir,
+        )
+        .await;
+        assert!(!after_refresh.from_memory);
+        assert_eq!(after_refresh.reused, 3);
+    }
+
     #[test]
     fn extracts_definitions_from_real_rust_source() {
         let language = languages::language("rust", tree_sitter_rust::LANGUAGE.into());
@@ -2141,6 +2822,7 @@ mod tests {
             .into_arc(),
             abs_path: path,
             size: text.len() as u64,
+            modified_ns: None,
         };
 
         let parsed = parse_file(&source, &text, &language).expect("file parses");

@@ -222,6 +222,15 @@ pub fn repo_map_snapshots_dir() -> PathBuf {
     pi_agent_dir().join("repo-maps")
 }
 
+/// Where the repo map keeps its per-file parse cache.
+///
+/// Beside the snapshots but in its own directory, because the snapshots are the
+/// agent-facing document and the cache is the IDE's own bookkeeping: the
+/// snapshot layout must not gain fields the MCP server does not know.
+pub fn repo_map_cache_dir() -> PathBuf {
+    repo_map_snapshots_dir().join(".cache")
+}
+
 /// Where the IDE drops LSP diagnostics snapshots for Pi's MCP server.
 ///
 /// Same shape as [`repo_map_snapshots_dir`]: one `<project-key>.json` per

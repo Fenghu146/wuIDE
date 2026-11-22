@@ -87,19 +87,26 @@ pub struct RepoMapPanel {
 /// A symbol map plus a path index, so rendering a file row does not scan the
 /// whole map.
 struct SymbolIndex {
-    map: SymbolMap,
+    map: Arc<SymbolMap>,
     by_rel: HashMap<Arc<RelPath>, usize>,
+    /// When this map was built. A reused map says so in the header instead of
+    /// pretending to be fresh.
+    built_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl SymbolIndex {
-    fn new(map: SymbolMap) -> Self {
+    fn new(map: Arc<SymbolMap>, built_at: chrono::DateTime<chrono::Utc>) -> Self {
         let by_rel = map
             .files
             .iter()
             .enumerate()
             .map(|(index, file)| (file.rel.clone(), index))
             .collect();
-        Self { map, by_rel }
+        Self {
+            map,
+            by_rel,
+            built_at,
+        }
     }
 
     fn file(&self, rel: &Arc<RelPath>) -> Option<&crate::symbol_map::FileSymbols> {
@@ -147,6 +154,9 @@ struct FileRow {
     name: Arc<str>,
     rel: Arc<RelPath>,
     size: u64,
+    /// The snapshot's mtime, so a symbol map can tell which files changed
+    /// without reading every one of them.
+    modified_ns: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -339,17 +349,21 @@ impl RepoMapPanel {
         (json, symbols)
     }
 
-    /// Starts background symbol builds for worktrees that do not have one yet.
+    /// Starts background symbol builds for worktrees that are not being built.
+    ///
+    /// A worktree whose map is already shown is rebuilt too: the build reuses
+    /// the map when every file still has the stamp it had, so an activation
+    /// costs a stat per file instead of a parse per file, and an edit made
+    /// while the panel was closed shows up without a manual refresh.
     fn request_symbol_maps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let project = self.project.clone();
         let fs = project.read(cx).fs().clone();
         let languages = project.read(cx).languages().clone();
+        let cache_dir = paths::repo_map_cache_dir();
 
         let mut jobs: Vec<(WorktreeId, PathBuf, Vec<SourceFile>)> = Vec::new();
         for structure in &self.structures {
-            if self.symbol_maps.contains_key(&structure.worktree_id)
-                || self.building.contains(&structure.worktree_id)
-            {
+            if self.building.contains(&structure.worktree_id) {
                 continue;
             }
             let mut sources = Vec::new();
@@ -368,17 +382,35 @@ impl RepoMapPanel {
 
         self._symbol_task = cx.spawn_in(window, async move |this, cx| {
             for (worktree_id, root_path, sources) in jobs {
-                let map = symbol_map::build(sources, fs.clone(), languages.clone()).await;
+                let outcome = symbol_map::build_cached(
+                    sources,
+                    fs.clone(),
+                    languages.clone(),
+                    std::slice::from_ref(&root_path),
+                    &cache_dir,
+                )
+                .await;
+                let symbol_map::BuildOutcome {
+                    map,
+                    built_at,
+                    from_memory,
+                    ..
+                } = outcome;
                 // Pi's MCP server reads this file with no IPC channel, so it has
-                // to be written wherever the map itself was produced.
-                if let Err(error) =
-                    snapshot::write(&map, &root_path, &paths::repo_map_snapshots_dir())
+                // to be written wherever the map itself was produced. A map that
+                // came from memory is already on disk, under the time it was
+                // actually built, which is what the document says.
+                if !from_memory
+                    && let Err(error) =
+                        snapshot::write(&map, &root_path, &paths::repo_map_snapshots_dir())
                 {
                     log::error!("failed to write the repo map snapshot for {root_path:?}: {error}");
                 }
                 this.update_in(cx, |panel, _window, cx| {
                     panel.building.remove(&worktree_id);
-                    panel.symbol_maps.insert(worktree_id, SymbolIndex::new(map));
+                    panel
+                        .symbol_maps
+                        .insert(worktree_id, SymbolIndex::new(map, built_at));
                     cx.notify();
                 })
                 .log_err();
@@ -415,6 +447,10 @@ impl RepoMapPanel {
                     return div().into_any_element();
                 };
                 let building = self.building.contains(&structure.worktree_id);
+                let mapped = self
+                    .symbol_maps
+                    .get(&structure.worktree_id)
+                    .map(|index| (index.map.ranked().count(), index.built_at));
                 h_flex()
                     .id(("worktree-header", ix))
                     .px_2()
@@ -435,7 +471,20 @@ impl RepoMapPanel {
                                 })
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
-                            ),
+                            )
+                            // A map that was reused says how old it is, so nobody
+                            // reads a stale map as a fresh one.
+                            .when_some(mapped, |this, (files, built_at)| {
+                                this.child(
+                                    Label::new(t!(
+                                        "Map: {files} files, built {age}",
+                                        files = files,
+                                        age = format_age(built_at)
+                                    ))
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                                )
+                            }),
                     )
                     .child(
                         Checkbox::new(("include-locals", ix), self.include_locals.into())
@@ -456,6 +505,16 @@ impl RepoMapPanel {
                                 // previous one, so its in-flight markers must go
                                 // with it or those worktrees would never rebuild.
                                 this.building.clear();
+                                // A refresh is a request to look at the files as
+                                // they are now, not to parse all of them again:
+                                // dropping the remembered maps makes the rebuild
+                                // re-read every file's stat and keep the parses
+                                // that still match.
+                                for structure in &this.structures {
+                                    symbol_map::forget_cached_map(std::slice::from_ref(
+                                        &structure.root_path,
+                                    ));
+                                }
                                 this.request_symbol_maps(window, cx);
                             }),
                         ),
@@ -750,6 +809,7 @@ fn collect_sources(node: &DirNode, root_path: &Path, out: &mut Vec<SourceFile>) 
             rel: file.rel.clone(),
             abs_path: root_path.join(file.rel.as_std_path()),
             size: file.size,
+            modified_ns: file.modified_ns,
         });
     }
 }
@@ -980,6 +1040,7 @@ fn build_structures(project: &Entity<Project>, cx: &App) -> Vec<WorktreeStructur
                         name: name.into(),
                         rel: path.clone(),
                         size: entry.size,
+                        modified_ns: symbol_map::modified_nanos(entry.mtime),
                     });
                     structure.total_files += 1;
                     structure.total_size += entry.size;
@@ -1057,6 +1118,24 @@ fn format_size(size: u64) -> String {
     }
 }
 
+/// How long ago a map was built, in the coarse units a reader needs to decide
+/// whether the map is worth refreshing.
+fn format_age(built_at: chrono::DateTime<chrono::Utc>) -> String {
+    let seconds = chrono::Utc::now()
+        .signed_duration_since(built_at)
+        .num_seconds()
+        .max(0);
+    if seconds < 60 {
+        t!("just now").to_string()
+    } else if seconds < 3_600 {
+        t!("{minutes} min ago", minutes = seconds / 60).to_string()
+    } else if seconds < 86_400 {
+        t!("{hours} h ago", hours = seconds / 3_600).to_string()
+    } else {
+        t!("{days} d ago", days = seconds / 86_400).to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1082,16 +1161,19 @@ mod tests {
             name: "a.rs".into(),
             rel: test_rel("big/a.rs"),
             size: 100,
+            modified_ns: None,
         });
         chain(&mut root, &["small"]).files.push(FileRow {
             name: "b.rs".into(),
             rel: test_rel("small/b.rs"),
             size: 1,
+            modified_ns: None,
         });
         chain(&mut root, &[]).files.push(FileRow {
             name: "root.rs".into(),
             rel: test_rel("root.rs"),
             size: 10,
+            modified_ns: None,
         });
         finalize(&mut root);
         assert_eq!(&*root.dirs[0].name, "big");

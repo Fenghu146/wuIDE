@@ -5,6 +5,7 @@ pub mod conventions;
 pub mod repo_map_panel;
 pub mod snapshot;
 pub mod symbol_map;
+mod symbol_cache;
 
 pub use repo_map_panel::RepoMapPanel;
 
