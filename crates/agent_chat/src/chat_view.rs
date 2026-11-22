@@ -269,7 +269,8 @@ impl ChatView {
             editor
         });
         store.update(cx, |store, cx| {
-            store.ensure_models(kind, cx);
+            let cwd = session.read(cx).metadata().cwd.clone();
+            store.ensure_models(kind, Some(cwd), cx);
             store.refresh_plan_usage(kind, false, cx);
         });
         let markdown = store.read(cx).languages().language_for_name("Markdown");

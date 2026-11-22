@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -76,6 +76,7 @@ pub struct AcpHarness {
     kill_grace: Duration,
 }
 
+#[derive(Clone)]
 struct Launch {
     program: PathBuf,
     args: Vec<String>,
@@ -126,38 +127,49 @@ impl AcpHarness {
         self
     }
 
-    fn resolve_launch(&self) -> Result<Launch, HarnessError> {
+    /// `project_roots` are the folders the session works in. Search them after
+    /// every location a release ships a runtime in, so an executable that was
+    /// copied out of its bundle still finds the checkout the project lives in.
+    fn resolve_launch(&self, project_roots: &[PathBuf]) -> Result<Launch, HarnessError> {
         if let Some(path) = &self.program_override {
-            return self.build_launch(path.clone());
+            return self.build_launch(path.clone(), &bundled_dirs(project_roots));
         }
-        if let Some(found) = find_program(self.preset.program) {
-            return self.build_launch(found);
+        if let Some(launch) = remembered_launch(self.preset.id) {
+            return Ok(launch);
         }
-        Err(self.unresolved_agent_error(&bundled_program_file(self.preset.program)))
+        let dirs = bundled_dirs(project_roots);
+        let found = find_program(self.preset.program, &dirs).ok_or_else(|| {
+            self.unresolved_agent_error(&bundled_program_file(self.preset.program), &dirs)
+        })?;
+        let launch = self.build_launch(found, &dirs)?;
+        remember_launch(self.preset.id, &launch);
+        Ok(launch)
     }
 
     /// A bundled runtime that lacks one of its files is a partial install or a
     /// checkout that never ran `npm install`, so name the missing file. Only a
-    /// machine with no agent directory at all gets the plain "not available".
-    fn unresolved_agent_error(&self, missing: &str) -> HarnessError {
-        match bundled_runtime_dir() {
+    /// machine with no agent directory at all gets the plain "not available",
+    /// which now lists the folders that were tried so the user can tell where a
+    /// runtime belongs.
+    fn unresolved_agent_error(&self, missing: &str, dirs: &[PathBuf]) -> HarnessError {
+        match dirs.iter().find(|dir| dir.join("node_modules").is_dir()) {
             Some(dir) => HarnessError::AgentIncomplete(format!(
                 "{}: {missing} is missing from {}",
                 self.preset.display_name,
                 dir.display()
             )),
-            None => HarnessError::agent_missing(self.preset.id, missing),
+            None => HarnessError::agent_missing(self.preset.id, &searched(missing, dirs)),
         }
     }
 
-    fn build_launch(&self, program: PathBuf) -> Result<Launch, HarnessError> {
+    fn build_launch(&self, program: PathBuf, dirs: &[PathBuf]) -> Result<Launch, HarnessError> {
         let mut args: Vec<String> = Vec::new();
         let mut agent_dir = program
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         if let Some(entry) = self.preset.js_entry {
-            agent_dir = self.agent_dir_for_entry(&program, entry)?;
+            agent_dir = self.agent_dir_for_entry(&program, entry, dirs)?;
             args.push(agent_dir.join(entry).to_string_lossy().into_owned());
         }
         args.extend(self.preset.args.iter().map(|a| (*a).to_owned()));
@@ -182,15 +194,20 @@ impl AcpHarness {
     /// `node_modules` in it. A bundled `node` lives right next to those, but a
     /// Node runtime picked up from `PATH` (distro package, Homebrew) does not,
     /// so the bundled agent directories are searched as a fallback.
-    fn agent_dir_for_entry(&self, program: &Path, entry: &str) -> Result<PathBuf, HarnessError> {
+    fn agent_dir_for_entry(
+        &self,
+        program: &Path,
+        entry: &str,
+        dirs: &[PathBuf],
+    ) -> Result<PathBuf, HarnessError> {
         let parent = program.parent().unwrap_or_else(|| Path::new("."));
         if parent.join(entry).is_file() {
             return Ok(parent.to_path_buf());
         }
-        bundled_dirs()
-            .into_iter()
+        dirs.iter()
             .find(|dir| dir.join(entry).is_file())
-            .ok_or_else(|| self.unresolved_agent_error(entry))
+            .cloned()
+            .ok_or_else(|| self.unresolved_agent_error(entry, dirs))
     }
 
     /// Point the agent at an isolated data directory inside Wu's own folder so
@@ -241,16 +258,20 @@ impl Harness for AcpHarness {
     }
 
     fn installed(&self) -> bool {
-        self.resolve_launch().is_ok()
+        self.resolve_launch(&[]).is_ok()
     }
 
     fn executable_path(&self) -> Option<PathBuf> {
-        self.resolve_launch().ok().map(|launch| launch.program)
+        self.resolve_launch(&[]).ok().map(|launch| launch.program)
     }
 
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        self.models_in(Path::new("")).await
+    }
+
+    async fn models_in(&self, cwd: &Path) -> Result<Vec<Model>, HarnessError> {
         if self.preset.id == HarnessId::Pi {
-            if let Some(models) = self.pi_models() {
+            if let Some(models) = self.pi_models(&session_roots(cwd)) {
                 return Ok(models);
             }
         }
@@ -282,7 +303,7 @@ impl Harness for AcpHarness {
         request: RunRequest,
         controls: crate::RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-        let launch = self.resolve_launch()?;
+        let launch = self.resolve_launch(&session_roots(Path::new(&request.cwd)))?;
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         let harness_id = self.preset.id;
         let interrupt_grace = self.interrupt_grace;
@@ -311,8 +332,8 @@ impl AcpHarness {
     /// `models.json` cc-switch writes for Pi (mirrored into the isolated home by
     /// `prepare_pi_home`), so the picker follows whatever the user configures
     /// there. Providers without a credential are skipped — Pi cannot use them.
-    fn pi_models(&self) -> Option<Vec<Model>> {
-        let launch = self.resolve_launch().ok()?;
+    fn pi_models(&self, project_roots: &[PathBuf]) -> Option<Vec<Model>> {
+        let launch = self.resolve_launch(project_roots).ok()?;
         let (_home, agent_dir) = prepare_pi_home(&launch.program, &launch.agent_dir)?;
         let ladder = PI_REASONING_LEVELS.to_vec();
         let mut models = Vec::new();
@@ -1249,6 +1270,18 @@ fn resolve_cwd(cwd: &str) -> Result<PathBuf, HarnessError> {
     Ok(path)
 }
 
+/// The folders a run works in, searched for a bundled agent runtime. A turn
+/// knows its project even when the process does not: an executable copied out
+/// of its bundle can be started anywhere, but the project it opens may be a
+/// checkout that carries `crates/wu/resources/agents`.
+fn session_roots(cwd: &Path) -> Vec<PathBuf> {
+    if cwd.as_os_str().is_empty() {
+        Vec::new()
+    } else {
+        vec![cwd.to_path_buf()]
+    }
+}
+
 fn prompt_blocks(request: &RunRequest) -> Vec<Value> {
     vec![json!({ "type": "text", "text": request.prompt })]
 }
@@ -1537,9 +1570,9 @@ fn map_commands(update: &Value) -> Vec<SlashCommand> {
         .unwrap_or_default()
 }
 
-fn find_program(name: &str) -> Option<PathBuf> {
+fn find_program(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     let file_names = program_file_names(name);
-    for dir in bundled_dirs() {
+    for dir in dirs {
         for file in &file_names {
             let candidate = dir.join(file);
             if candidate.is_file() {
@@ -1577,7 +1610,14 @@ fn program_file_names(name: &str) -> Vec<String> {
     names
 }
 
-fn bundled_dirs() -> Vec<PathBuf> {
+/// Every place a bundled agent runtime can live, in priority order.
+///
+/// `project_roots` are the folders the current session works in. They come
+/// after the release locations, so a bundle shipped next to the executable
+/// always wins, but before nothing: an executable copied out of its bundle has
+/// no `agents/` beside it, and the project it was pointed at may be a checkout
+/// that carries the runtime.
+fn bundled_dirs(project_roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("WU_AGENT_BIN_DIR") {
         dirs.push(PathBuf::from(dir));
@@ -1602,6 +1642,7 @@ fn bundled_dirs() -> Vec<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         anchors.push(cwd);
     }
+    anchors.extend(project_roots.iter().cloned());
     // Appended after every release location, so a directory shipped with the
     // executable always wins.
     dirs.extend(checkout_agent_dirs(&anchors));
@@ -1613,12 +1654,12 @@ fn bundled_dirs() -> Vec<PathBuf> {
 /// `script/bundle-*` copies `crates/wu/resources/agents` next to the executable
 /// for a release, but `cargo build` leaves the executable in `target/` with no
 /// `agents` directory beside it, so Pi looks uninstalled in a development build.
-/// The checkout is found at runtime by walking up from the executable and the
-/// working directory: embedding a build-time path such as `CARGO_MANIFEST_DIR`
-/// would put an absolute path in the binary, which breaks as soon as the
-/// checkout moves or the build happens somewhere else. Walking up only matches
-/// a machine with a checkout, and it is consulted after every path a release
-/// uses, so shipped builds are unaffected.
+/// The checkout is found at runtime by walking up from the executable, the
+/// working directory and the folders the session works in: embedding a
+/// build-time path such as `CARGO_MANIFEST_DIR` would put an absolute path in
+/// the binary, which breaks as soon as the checkout moves or the build happens
+/// somewhere else. Walking up only matches a machine with a checkout, and it is
+/// consulted after every path a release uses, so shipped builds are unaffected.
 fn checkout_agent_dirs(anchors: &[PathBuf]) -> Vec<PathBuf> {
     const CHECKOUT_LAYOUTS: &[&str] = &["crates/wu/resources/agents", "agents"];
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -1635,13 +1676,47 @@ fn checkout_agent_dirs(anchors: &[PathBuf]) -> Vec<PathBuf> {
     dirs
 }
 
-/// The first bundled directory that ships the JS agent runtime. Every release
-/// bundle and checkout has one, so a missing file inside it is a partial
-/// install rather than an agent the user never installed.
-fn bundled_runtime_dir() -> Option<PathBuf> {
-    bundled_dirs()
-        .into_iter()
-        .find(|dir| dir.join("node_modules").is_dir())
+/// What a failed lookup looked for and the folders it checked, for the error
+/// message. Without it the user only learns that the agent is missing, not
+/// where a copied-out executable expects the bundled `agents` folder to be.
+fn searched(missing: &str, dirs: &[PathBuf]) -> String {
+    const SHOWN: usize = 8;
+    let mut description = missing.to_owned();
+    for dir in dirs.iter().take(SHOWN) {
+        description.push_str("\n  ");
+        description.push_str(&dir.display().to_string());
+    }
+    if dirs.len() > SHOWN {
+        description.push_str("\n  …");
+    }
+    description
+}
+
+/// A launch that already resolved in this process.
+///
+/// Resolution reads the executable's location and the process working
+/// directory, both fixed for the life of the process but easy to get wrong (a
+/// shortcut with a different "Start in", an executable started by a shell in
+/// another folder). A runtime found once must stay found, so later turns never
+/// depend on that ambient state matching the current session.
+static REMEMBERED_LAUNCHES: Mutex<Vec<(HarnessId, Launch)>> = Mutex::new(Vec::new());
+
+fn remembered_launch(id: HarnessId) -> Option<Launch> {
+    REMEMBERED_LAUNCHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|(cached, _)| *cached == id)
+        .map(|(_, launch)| launch.clone())
+}
+
+fn remember_launch(id: HarnessId, launch: &Launch) {
+    let mut launches = REMEMBERED_LAUNCHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !launches.iter().any(|(cached, _)| *cached == id) {
+        launches.push((id, launch.clone()));
+    }
 }
 
 /// The file name a bundled runtime uses for `name`.
@@ -1969,5 +2044,63 @@ mod tests {
                 .any(|dir| dir.starts_with(plain.path())),
             "a tree without a checkout layout must not supply agents"
         );
+    }
+
+    #[test]
+    fn a_projects_checkout_supplies_the_runtime_a_copied_exe_lacks() {
+        let project = tempfile::tempdir().unwrap();
+        let agents = project.path().join("crates/wu/resources/agents");
+        std::fs::create_dir_all(agents.join("node_modules")).unwrap();
+        let nested = project.path().join("crates/wu/src");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        // The executable sits in a folder with nothing beside it, which is what
+        // copying it out of a release produces; only the session's project can
+        // still reach the runtime.
+        let dirs = bundled_dirs(&[nested]);
+        assert!(
+            dirs.contains(&agents),
+            "the project the session works in must be searched: {dirs:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_agent_error_names_the_folders_it_checked() {
+        let dirs = [
+            PathBuf::from("C:/app/agents"),
+            PathBuf::from("C:/project/crates/wu/resources/agents"),
+        ];
+        let error = HarnessError::agent_missing(
+            HarnessId::Pi,
+            &searched("node_modules/pi-acp/dist/index.js", &dirs),
+        );
+
+        let message = error.to_string();
+        for needle in [
+            "node_modules/pi-acp/dist/index.js",
+            "C:/app/agents",
+            "C:/project/crates/wu/resources/agents",
+        ] {
+            assert!(message.contains(needle), "{message}");
+        }
+    }
+
+    #[test]
+    fn the_first_launch_resolved_for_a_harness_sticks() {
+        let launch = |program: &str| Launch {
+            program: program.into(),
+            args: Vec::new(),
+            agent_dir: PathBuf::from("agents"),
+            path_prepend: Vec::new(),
+        };
+
+        // No other test resolves DeepSeek, so the process-wide cache starts
+        // empty for it. A later resolution from another folder must not replace
+        // a runtime the session already started.
+        remember_launch(HarnessId::Dsh, &launch("first"));
+        remember_launch(HarnessId::Dsh, &launch("second"));
+
+        let remembered = remembered_launch(HarnessId::Dsh).expect("the launch is kept");
+        assert_eq!(remembered.program, PathBuf::from("first"));
     }
 }

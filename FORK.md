@@ -51,6 +51,7 @@
 - `script/fetch-node`：macOS / Linux 打包时下载固定版本（当前 `24.22.1`，与仓库里的 `node.exe` 对齐）的官方 Node，并按 `SHASUMS256.txt` 校验；Windows 直接使用仓库里的 `node.exe`。
 - 三个平台的打包脚本都会在缺少 `dsh-acp` 或 `node_modules/` 时直接失败，避免发出一个“设置里能看到智能体、点开却起不来”的包；缺少 `node` 只警告，因为 macOS/Linux 可以退回到 `PATH` 里的系统 Node。
 - 运行期在 exe 同级的 `agents/`、`resources/agents/`、macOS `Contents/Resources/agents/`、Linux `libexec/agents/` 中查找内置二进制。
+- **单独拷 exe 使用时，必须把 `agents/` 一起拷到 exe 旁边（或设置 `WU_AGENT_BIN_DIR`）**，否则 DeepSeek 与 Pi 不可用。查找顺序：`WU_AGENT_BIN_DIR` → exe 旁的发版位置（同上）→ 从 exe 目录、进程 cwd 与当前会话的项目根目录向上找 `crates/wu/resources/agents` 或 `agents/` → `PATH`。成功解析一次后在同一进程内记住，后续轮次不再依赖 cwd；解析失败时错误信息会列出尝试过的目录。
 - 许可证随包分发（GPL 要求）：三个平台的脚本都把 `LICENSE-GPL`、`LICENSE-APACHE`、`NOTICE` 放进包里（macOS `Contents/Resources/`、Linux `share/licenses/`、Windows 安装目录），Windows 安装器还用拼好的 `LICENSE.txt` 作为 `LicenseFile` 在安装前展示。内置运行时的许可证在 `crates/wu/resources/agents/licenses/`，版本与校验方式记在 `agents/VERSIONS.md`，缺文件时打包直接失败。
 
 ## 7. 产品名称改为 IDE

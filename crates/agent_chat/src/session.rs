@@ -2865,7 +2865,15 @@ impl AgentStore {
             .map(|catalog| catalog.models.as_slice())
     }
 
-    pub fn ensure_models(&mut self, kind: AgentKind, cx: &mut Context<Self>) {
+    /// `cwd` is the folder of the session asking for the catalogue, when there is
+    /// one. A project checkout supplies the bundled runtime that an executable
+    /// copied out of its release cannot find on its own.
+    pub fn ensure_models(
+        &mut self,
+        kind: AgentKind,
+        cwd: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         let harness = self.harness(kind);
         let env_loaded = shell_env_is_loaded(cx);
         let catalog = self.catalogs.entry(kind).or_default();
@@ -2875,13 +2883,18 @@ impl AgentStore {
         if catalog.loaded || catalog._task.is_some() {
             return;
         }
-        self.discover_models(kind, harness, cx);
+        self.discover_models(kind, cwd, harness, cx);
     }
 
     /// Re-read a catalogue that comes from a config file the user edits while Wu
     /// runs (Pi's `models.json`, which cc-switch rewrites). Without this the
     /// picker would keep showing whatever was there at launch.
-    pub fn refresh_models_if_editable(&mut self, kind: AgentKind, cx: &mut Context<Self>) {
+    pub fn refresh_models_if_editable(
+        &mut self,
+        kind: AgentKind,
+        cwd: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         let harness = self.harness(kind);
         if !harness.models_follow_config_file() {
             return;
@@ -2893,17 +2906,23 @@ impl AgentStore {
                     .is_none_or(|refreshed_at| refreshed_at.elapsed() >= CONFIG_CATALOG_REFRESH)
         });
         if stale {
-            self.discover_models(kind, harness, cx);
+            self.discover_models(kind, cwd, harness, cx);
         }
     }
 
     fn discover_models(
         &mut self,
         kind: AgentKind,
+        cwd: Option<PathBuf>,
         harness: Arc<dyn Harness>,
         cx: &mut Context<Self>,
     ) {
-        let discovery = spawn_agent_work(cx, async move { harness.models().await });
+        let discovery = spawn_agent_work(cx, async move {
+            match &cwd {
+                Some(cwd) => harness.models_in(cwd).await,
+                None => harness.models().await,
+            }
+        });
         let task = cx.spawn(async move |this, cx| {
             let models = match discovery.await {
                 Ok(Ok(models)) => {
@@ -3148,7 +3167,7 @@ impl AgentStore {
                     catalog.loaded = false;
                 }
                 this.refresh_plan_usage(kind, true, cx);
-                this.ensure_models(kind, cx);
+                this.ensure_models(kind, None, cx);
                 this.refresh_accounts(kind, cx);
             })
             .log_err();

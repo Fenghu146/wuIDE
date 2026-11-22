@@ -37,7 +37,7 @@ pub fn generate_commit_message(
                 .map(<[Model]>::to_vec);
             let harness = store.update(cx, |store, cx| {
                 if kind == AgentKind::Codex {
-                    store.ensure_models(kind, cx);
+                    store.ensure_models(kind, None, cx);
                 }
                 store.harness(kind)
             });
@@ -228,7 +228,7 @@ pub fn commit_message_menu(
     let kinds = AgentChatSettings::get_global(cx).agents().to_vec();
     store.update(cx, |store, cx| {
         for kind in &kinds {
-            store.ensure_models(*kind, cx);
+            store.ensure_models(*kind, None, cx);
         }
     });
     ContextMenu::build(window, cx, move |mut menu, _, cx| {
