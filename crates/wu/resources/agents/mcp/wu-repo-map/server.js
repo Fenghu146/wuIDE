@@ -9,7 +9,7 @@
 "use strict";
 
 const { createHash } = require("node:crypto");
-const { readFileSync } = require("node:fs");
+const { existsSync, readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { createInterface } = require("node:readline");
 
@@ -21,9 +21,38 @@ const MAX_FILE_LIMIT = 400;
 // hundreds of definitions is summarized after its first few, and `symbols`
 // returns the rest.
 const MAX_SYMBOLS_PER_FILE = 40;
-// Mirrors `repo_wiki::symbol_map::MAX_OMITTED_PATHS`: the list of files a page
-// left out is summarized after this many names, so it cannot outgrow the map.
-const MAX_OMITTED_PATHS = 100;
+// Mirrors `repo_wiki::symbol_map::MAX_OMITTED_PATHS` and
+// `MAX_OMITTED_PATHS_SMALL`: the list of files a page left out is summarized
+// after this many names, so it cannot outgrow the map, and a page that asked
+// for very few files gets the smaller list.
+const MAX_OMITTED_PATHS = 20;
+const MAX_OMITTED_PATHS_SMALL = 10;
+// Mirrors `repo_wiki::symbol_map::MAX_FILES`: the file count one build indexes.
+const MAX_FILES = 900;
+// Mirrors `repo_wiki::symbol_map::VENDORED_DIRS`: used only to explain why a
+// path is absent from the snapshot, since the IDE excludes it while scanning.
+const VENDORED_DIRS = new Set([
+  "node_modules",
+  "vendor",
+  "third_party",
+  "third-party",
+  "dist",
+  "site-packages",
+  "target",
+  ".venv",
+  "venv",
+  "bower_components",
+  ".yarn",
+  ".pnpm-store",
+  "out",
+  "Pods",
+  "__pycache__",
+  ".tox",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".gradle",
+]);
 const DIAGNOSTICS_SNAPSHOT_VERSION = 1;
 const DEFAULT_DIAGNOSTICS_LIMIT = 50;
 const MAX_DIAGNOSTICS_LIMIT = 500;
@@ -268,8 +297,35 @@ function renderPageBody(files, start, end, budget, options) {
   return { body: body.join(""), written };
 }
 
-// Everything before the body: the header, the ordering note and the count of
-// files the scan could not index.
+// Paths one page may list after its body, mirroring `omitted_path_limit` in
+// `repo_wiki::symbol_map`.
+function omittedPathLimit(limit) {
+  return limit <= 5 ? MAX_OMITTED_PATHS_SMALL : MAX_OMITTED_PATHS;
+}
+
+// Honest coverage for the whole build, mirroring `SymbolMap::coverage_notes`:
+// how many candidates became map entries, why the rest did not, and what never
+// became a candidate at all.
+function coverageNotes(stats) {
+  const notes = [];
+  if (Number.isFinite(stats.considered) && stats.considered > 0) {
+    const reasons = [];
+    if (stats.unsupported > 0) reasons.push(`${stats.unsupported} unsupported language`);
+    if (stats.too_large > 0) reasons.push(`${stats.too_large} over 256 KiB`);
+    if (stats.over_budget > 0) reasons.push(`${stats.over_budget} over the byte budget`);
+    if (stats.file_limit > 0) reasons.push(`${stats.file_limit} beyond the ${MAX_FILES}-file limit`);
+    if (stats.unreadable > 0) reasons.push(`${stats.unreadable} unreadable`);
+    const suffix = reasons.length === 0 ? "" : ` (${reasons.join(", ")})`;
+    notes.push(`Indexed ${stats.parsed} / ${stats.considered} candidate files${suffix}.`);
+  }
+  if (stats.vendored_skipped > 0) {
+    notes.push(`Excluded before scanning: ${stats.vendored_skipped} vendored or generated paths.`);
+  }
+  return notes;
+}
+
+// Everything before the body: the header, the ordering note and the coverage
+// of the build the page was cut from.
 function renderPageHead(doc, written, start, end, total, options) {
   let header = `showing ${start + 1}\u2013${written} of ${total} files with definitions`;
   // Only the budget needs an explanation: a page cut by `limit` is the page the
@@ -284,13 +340,7 @@ function renderPageHead(doc, written, start, end, total, options) {
 
   const stats = doc.stats;
   if (stats && Number.isFinite(stats.considered) && Number.isFinite(stats.parsed)) {
-    const unindexed = stats.considered - stats.parsed;
-    if (unindexed > 0) {
-      head.push(
-        `${unindexed} candidate files were not indexed (${stats.too_large || 0} too large, ` +
-          `${stats.unsupported || 0} unsupported language).`,
-      );
-    }
+    head.push(...coverageNotes(stats));
   }
   if (options.legacy) head.push(LEGACY_SNAPSHOT);
   return `${head.join("\n")}\n`;
@@ -355,10 +405,10 @@ function renderRepoMap(doc, options) {
   const skipped = total - written;
   if (skipped > 0) {
     text += `\nOmitted files (${skipped}, paths only):\n`;
-    // Show whole paths while they fit, never more than `MAX_OMITTED_PATHS`, and
-    // name the rest in one line.
+    // Show whole paths while they fit, never more than the page's cap, and name
+    // the rest in one line.
     let shown = 0;
-    for (const file of files.slice(written, written + MAX_OMITTED_PATHS)) {
+    for (const file of files.slice(written, written + omittedPathLimit(options.limit))) {
       const line = `${file.path}\n`;
       if (line.length > room) break;
       room -= line.length;
@@ -397,6 +447,15 @@ function isSourcePath(path) {
   return dot >= 0 && SOURCE_EXTENSIONS.has(name.slice(dot));
 }
 
+// Same rule as `is_vendored_path` in `repo_wiki::symbol_map`: a hidden or
+// known vendored directory anywhere before the file name.
+function isVendoredPath(path) {
+  const parts = normalizePath(path).split("/");
+  return parts
+    .slice(0, -1)
+    .some((part) => part.startsWith(".") || VENDORED_DIRS.has(part));
+}
+
 function renderSymbols(doc, requested, options) {
   if (typeof requested !== "string" || requested.trim() === "") {
     return "Pass the file path, relative to the project root.";
@@ -404,6 +463,13 @@ function renderSymbols(doc, requested, options) {
   const wanted = normalizePath(requested);
   const file = findFile(doc, requested);
   if (!file) {
+    if (isVendoredPath(wanted)) {
+      return (
+        `\`${wanted}\` is inside a vendored or generated directory, which the repository map ` +
+        "deliberately skips (for example `node_modules`, `dist`, `target`, or `vendor`), so it " +
+        "has no symbols."
+      );
+    }
     if (!isSourcePath(wanted)) {
       return (
         `\`${wanted}\` is not a source file the repository map indexes, so it has no symbols. ` +
@@ -411,10 +477,29 @@ function renderSymbols(doc, requested, options) {
         "generated files are not."
       );
     }
+    let onDisk = false;
+    try {
+      onDisk = existsSync(wanted);
+    } catch {
+      onDisk = false;
+    }
+    if (!onDisk) {
+      return (
+        `\`${wanted}\` is not on disk in this project. Check the path (it is relative to the ` +
+        "project root) and call again."
+      );
+    }
+    const budget =
+      doc.stats && (Number(doc.stats.over_budget) > 0 || Number(doc.stats.file_limit) > 0);
     return (
-      `\`${wanted}\` is not in the repository map snapshot. It may be new, excluded by ` +
-      ".gitignore, or skipped because it is too large. Ask the user to open the Repository " +
-      "Map panel in Wu to rebuild the snapshot."
+      `\`${wanted}\` exists on disk but is not in the repository map snapshot. ` +
+      (budget
+        ? "The build skipped it because the scan reached its output budget, which covers the " +
+          "byte budget and the file limit. Ask the user to rebuild the Repository Map with a " +
+          "larger budget, or call `repo_map` with `files_only` to list the files it did index."
+        : "It may be new, ignored by `.gitignore`, or unreadable. Ask the user to open the " +
+          "Repository Map panel in Wu to rebuild the snapshot, or call `repo_map` with " +
+          "`files_only` to list the files it did index.")
     );
   }
   const path = typeof file === "string" ? file : file.path;
@@ -701,15 +786,21 @@ function handle(message) {
   }
 }
 
-const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-input.on("line", (line) => {
-  const trimmed = line.trim();
-  if (!trimmed) return;
-  let message;
-  try {
-    message = JSON.parse(trimmed);
-  } catch {
-    return;
-  }
-  handle(message);
-});
+// Pi starts this file directly; the guard keeps `require` from a test from
+// taking over its stdin.
+if (require.main === module) {
+  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  input.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let message;
+    try {
+      message = JSON.parse(trimmed);
+    } catch {
+      return;
+    }
+    handle(message);
+  });
+}
+
+module.exports = { renderRepoMap, renderSymbols, omittedPathLimit, coverageNotes };

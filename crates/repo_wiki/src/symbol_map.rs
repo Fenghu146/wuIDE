@@ -37,6 +37,36 @@ const MAX_SYMBOLS_PER_FILE: usize = 200;
 /// Cap on the total bytes parsed in one build, so the work stays bounded even
 /// when a repository has many medium-sized files.
 const MAX_TOTAL_BYTES: u64 = 24 * 1024 * 1024;
+/// Directory names whose contents are vendored or generated rather than the
+/// project's own code.
+///
+/// They are skipped before any budget applies, because a tracked `node_modules`
+/// (this repository commits one) is invisible to `.gitignore` and its bundled
+/// JavaScript would otherwise fill the whole map. Both the list and the hidden
+/// directory rule are mirrored by `agents/mcp/wu-repo-map/server.js`, which uses
+/// them only to explain to an agent why a path is missing from the snapshot.
+const VENDORED_DIRS: &[&str] = &[
+    "node_modules",
+    "vendor",
+    "third_party",
+    "third-party",
+    "dist",
+    "site-packages",
+    "target",
+    ".venv",
+    "venv",
+    "bower_components",
+    ".yarn",
+    ".pnpm-store",
+    "out",
+    "Pods",
+    "__pycache__",
+    ".tox",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".gradle",
+];
 const PAGERANK_ITERATIONS: usize = 24;
 const PAGERANK_DAMPING: f32 = 0.85;
 
@@ -77,7 +107,8 @@ pub struct FileSymbols {
 
 #[derive(Clone, Debug, Default)]
 pub struct BuildStats {
-    /// Files handed to the builder, excluding those it could not parse at all.
+    /// Files handed to the builder: everything the worktree lists except paths
+    /// excluded as vendored or generated.
     pub considered: usize,
     /// Files actually parsed and kept.
     pub parsed: usize,
@@ -85,6 +116,14 @@ pub struct BuildStats {
     pub too_large: usize,
     /// Files skipped because no language (or no grammar) matched.
     pub unsupported: usize,
+    /// Files that were selected but could not be read from disk.
+    pub unreadable: usize,
+    /// Files skipped because the remaining byte budget could not hold them.
+    pub over_budget: usize,
+    /// Files skipped because [`MAX_FILES`] was already reached.
+    pub file_limit: usize,
+    /// Files excluded as vendored or generated before any budget applied.
+    pub vendored_skipped: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -223,9 +262,12 @@ impl SymbolMap {
         if skipped > 0 {
             out.push_str(&omitted_files_header(skipped));
             // Show whole paths while they fit, never more than
-            // `MAX_OMITTED_PATHS`, and name the rest in one line.
+            // `omitted_path_limit`, and name the rest in one line.
             let mut shown = 0;
-            for file in files[written..].iter().take(MAX_OMITTED_PATHS) {
+            for file in files[written..]
+                .iter()
+                .take(omitted_path_limit(options.limit))
+            {
                 let line = format!("{}\n", file.rel.display(path::PathStyle::Unix));
                 let cost = line.chars().count();
                 if cost > room {
@@ -267,7 +309,7 @@ impl SymbolMap {
             "## Repository map\n\n{header}.\n{}\n",
             Self::order_description()
         );
-        if let Some(note) = self.truncation_note() {
+        for note in self.coverage_notes() {
             head.push_str(&note);
             head.push('\n');
         }
@@ -299,15 +341,61 @@ impl SymbolMap {
         tail
     }
 
-    fn truncation_note(&self) -> Option<String> {
-        let skipped = self.stats.considered.saturating_sub(self.stats.parsed);
-        if skipped == 0 {
-            return None;
+    /// Honest coverage for the whole build: how many candidates became map
+    /// entries, why the rest did not, and what never became a candidate at all.
+    ///
+    /// A page that lists 40 files out of 900 would otherwise look complete.
+    fn coverage_notes(&self) -> Vec<String> {
+        let stats = &self.stats;
+        let mut notes = Vec::new();
+        if stats.considered > 0 {
+            let mut reasons = Vec::new();
+            if stats.unsupported > 0 {
+                reasons.push(format!("{} unsupported language", stats.unsupported));
+            }
+            if stats.too_large > 0 {
+                reasons.push(format!(
+                    "{} over {} KiB",
+                    stats.too_large,
+                    MAX_FILE_BYTES / 1024
+                ));
+            }
+            if stats.over_budget > 0 {
+                reasons.push(format!("{} over the byte budget", stats.over_budget));
+            }
+            if stats.file_limit > 0 {
+                reasons.push(format!(
+                    "{} beyond the {MAX_FILES}-file limit",
+                    stats.file_limit
+                ));
+            }
+            if stats.unreadable > 0 {
+                reasons.push(format!("{} unreadable", stats.unreadable));
+            }
+            let reasons = if reasons.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", reasons.join(", "))
+            };
+            notes.push(format!(
+                "Indexed {} / {} candidate files{reasons}.",
+                stats.parsed, stats.considered
+            ));
         }
-        Some(format!(
-            "{skipped} candidate files were not indexed ({} too large, {} unsupported language).",
-            self.stats.too_large, self.stats.unsupported
-        ))
+        let mut excluded = Vec::new();
+        if stats.vendored_skipped > 0 {
+            excluded.push(format!(
+                "{} vendored or generated paths",
+                stats.vendored_skipped
+            ));
+        }
+        if !excluded.is_empty() {
+            notes.push(format!(
+                "Excluded before scanning: {}.",
+                excluded.join(", ")
+            ));
+        }
+        notes
     }
 
     fn file_block(&self, file: &FileSymbols, options: &RepoMapOptions) -> String {
@@ -610,39 +698,41 @@ pub struct SourceFile {
     pub size: u64,
 }
 
-/// Applies the size and count budgets to a candidate list.
+/// Applies the vendored, size, count and byte budgets to a candidate list.
 ///
-/// Taking the first N files in path order would only ever describe the
-/// alphabetically-first corner of a repository, so candidates are bucketed by
-/// their first path component and picked round-robin, largest first inside
-/// each bucket. Every top-level module gets represented before any bucket gets
-/// a second helping.
-fn select(sources: Vec<SourceFile>) -> (Vec<SourceFile>, BuildStats) {
-    let mut stats = BuildStats {
-        considered: sources.len(),
-        ..BuildStats::default()
-    };
-
+/// Candidates are bucketed by their first two path components (`crates/gpui`
+/// and `crates/editor` are different buckets), so a monorepo whose code all
+/// lives under `crates/` still gets every crate represented first. Buckets are
+/// filled round-robin in path order: taking the largest files instead rewarded
+/// whatever was bundled, and taking the first N paths would only ever describe
+/// the alphabetically-first corner of a repository.
+///
+/// A file that does not fit the remaining byte budget is skipped, not fatal:
+/// scanning continues so a later, smaller file can still make it. Every
+/// candidate ends up in exactly one category, which is what makes the coverage
+/// line honest.
+fn select(
+    sources: Vec<SourceFile>,
+    is_source: impl Fn(&SourceFile) -> bool,
+) -> (Vec<SourceFile>, BuildStats) {
+    let mut stats = BuildStats::default();
     let mut buckets: Vec<(String, Vec<SourceFile>)> = Vec::new();
     let mut bucket_index: HashMap<String, usize> = HashMap::new();
-    let mut total_bytes = 0u64;
-    let mut kept = 0usize;
     for source in sources {
+        if is_vendored_path(&source.rel) {
+            stats.vendored_skipped += 1;
+            continue;
+        }
+        stats.considered += 1;
+        if !is_source(&source) {
+            stats.unsupported += 1;
+            continue;
+        }
         if source.size > MAX_FILE_BYTES {
             stats.too_large += 1;
             continue;
         }
-        if total_bytes.saturating_add(source.size) > MAX_TOTAL_BYTES {
-            break;
-        }
-        total_bytes += source.size;
-        kept += 1;
-        let key = source
-            .rel
-            .components()
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        let key = bucket_key(&source.rel);
         let bucket = match bucket_index.get(&key) {
             Some(index) => *index,
             None => {
@@ -656,24 +746,36 @@ fn select(sources: Vec<SourceFile>) -> (Vec<SourceFile>, BuildStats) {
     }
 
     for (_, bucket) in &mut buckets {
-        bucket.sort_by_key(|source| std::cmp::Reverse(source.size));
+        bucket.sort_by(|left, right| {
+            left.rel
+                .as_std_path()
+                .cmp(right.rel.as_std_path())
+                .then_with(|| left.abs_path.cmp(&right.abs_path))
+        });
     }
 
-    let mut chosen = Vec::with_capacity(kept.min(MAX_FILES));
+    let mut chosen = Vec::new();
+    let mut total_bytes = 0u64;
     let mut round = 0usize;
-    'outer: loop {
-        let mut added_any = false;
+    loop {
+        let mut visited = false;
         for (_, bucket) in &buckets {
             let Some(source) = bucket.get(round) else {
                 continue;
             };
-            added_any = true;
-            chosen.push(source.clone());
+            visited = true;
             if chosen.len() >= MAX_FILES {
-                break 'outer;
+                stats.file_limit += 1;
+                continue;
             }
+            if total_bytes.saturating_add(source.size) > MAX_TOTAL_BYTES {
+                stats.over_budget += 1;
+                continue;
+            }
+            total_bytes += source.size;
+            chosen.push(source.clone());
         }
-        if !added_any {
+        if !visited {
             break;
         }
         round += 1;
@@ -682,13 +784,44 @@ fn select(sources: Vec<SourceFile>) -> (Vec<SourceFile>, BuildStats) {
     (chosen, stats)
 }
 
+/// The bucket a file belongs to: its first two path components, or the first
+/// one when the file sits directly in a top-level directory. Files at the
+/// repository root share one bucket.
+fn bucket_key(rel: &RelPath) -> String {
+    let mut components = rel.components();
+    let Some(first) = components.next() else {
+        return String::new();
+    };
+    let Some(second) = components.next() else {
+        return String::new();
+    };
+    if components.next().is_some() {
+        format!("{first}/{second}")
+    } else {
+        first.to_string()
+    }
+}
+
+/// Whether any directory on the path is vendored, generated, or hidden.
+///
+/// The file's own name is left out, so a hidden file such as `.gitignore` is
+/// still judged by its language rather than by its name.
+fn is_vendored_path(rel: &RelPath) -> bool {
+    let count = rel.components().count();
+    rel.components()
+        .take(count.saturating_sub(1))
+        .any(|component| component.starts_with('.') || VENDORED_DIRS.contains(&component))
+}
+
 /// Parses `sources` and ranks them. Must run off the foreground thread.
 pub async fn build(
     sources: Vec<SourceFile>,
     fs: Arc<dyn Fs>,
     languages: Arc<LanguageRegistry>,
 ) -> SymbolMap {
-    let (kept, mut stats) = select(sources);
+    let (kept, mut stats) = select(sources, |source| {
+        languages.language_for_file_path(&source.abs_path).is_some()
+    });
 
     let mut parsed: Vec<ParsedFile> = Vec::with_capacity(kept.len());
     for source in kept {
@@ -705,6 +838,7 @@ pub async fn build(
                     "repo map: skipping {}: {error:#}",
                     source.rel.display(path::PathStyle::Unix)
                 );
+                stats.unreadable += 1;
                 continue;
             }
         };
@@ -718,18 +852,17 @@ pub async fn build(
                     "repo map: skipping {}: {error:#}",
                     source.rel.display(path::PathStyle::Unix)
                 );
-                unsupported(&mut stats);
+                stats.unsupported += 1;
                 continue;
             }
         };
-        // Without a grammar and an outline query there is nothing to collect;
-        // such files do not count as considered so the stats stay meaningful.
+        // Without a grammar and an outline query there is nothing to collect.
         if !has_outline_query(&language) {
-            unsupported(&mut stats);
+            stats.unsupported += 1;
             continue;
         }
         let Some(file) = parse_file(&source, &text, &language) else {
-            unsupported(&mut stats);
+            stats.unsupported += 1;
             continue;
         };
         parsed.push(file);
@@ -775,13 +908,6 @@ struct ParsedFile {
     mentions: HashSet<Arc<str>>,
     /// Include paths, module paths and import specifiers naming other files.
     includes: Vec<String>,
-}
-
-/// Records a file the builder cannot turn into symbols. Such files do not
-/// occupy a `considered` slot, which counts only files that were inspected.
-fn unsupported(stats: &mut BuildStats) {
-    stats.unsupported += 1;
-    stats.considered = stats.considered.saturating_sub(1);
 }
 
 /// Whether the language has both a grammar and the outline query the symbol
@@ -1658,11 +1784,25 @@ pub const MAX_SYMBOLS_PER_FILE_IN_MARKDOWN: usize = 40;
 
 /// Paths one page lists after its body before summarizing the rest.
 ///
-/// The list exists so an agent knows what it did not see, but eight hundred
-/// paths cost more than the map they describe. Hundred names plus a count keep
+/// The list exists so an agent knows what it did not see, but hundreds of
+/// paths cost more than the map they describe, and a caller who asked for one
+/// file does not want a full directory listing. Twenty names plus a count keep
 /// the page honest and inside [`MAX_REPO_MAP_CHARS`]; `files_only` and `offset`
-/// show the rest.
-pub const MAX_OMITTED_PATHS: usize = 100;
+/// show the rest. Both numbers are mirrored by
+/// `agents/mcp/wu-repo-map/server.js`.
+pub const MAX_OMITTED_PATHS: usize = 20;
+
+/// The same cap for a page that asked for very few files.
+pub const MAX_OMITTED_PATHS_SMALL: usize = 10;
+
+/// How many omitted paths one page may list.
+pub fn omitted_path_limit(limit: usize) -> usize {
+    if limit <= 5 {
+        MAX_OMITTED_PATHS_SMALL
+    } else {
+        MAX_OMITTED_PATHS
+    }
+}
 
 /// PageRank over the cross-file reference graph.
 ///
@@ -1854,7 +1994,7 @@ mod tests {
         assert!((sum - 1.).abs() < 0.01, "sum was {sum}");
     }
 
-    fn source(rel: &'static str, size: u64) -> SourceFile {
+    fn source(rel: &str, size: u64) -> SourceFile {
         SourceFile {
             rel: RelPath::new(std::path::Path::new(rel), path::PathStyle::local())
                 .expect("valid test path")
@@ -1979,11 +2119,14 @@ mod tests {
 
     #[test]
     fn select_skips_oversized_files_and_keeps_order() {
-        let (kept, stats) = select(vec![
-            source("a.rs", 10),
-            source("huge.rs", MAX_FILE_BYTES + 1),
-            source("b.rs", 10),
-        ]);
+        let (kept, stats) = select(
+            vec![
+                source("a.rs", 10),
+                source("huge.rs", MAX_FILE_BYTES + 1),
+                source("b.rs", 10),
+            ],
+            |_| true,
+        );
         let names: Vec<String> = kept
             .iter()
             .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
@@ -1994,16 +2137,18 @@ mod tests {
     }
 
     #[test]
-    fn select_covers_every_top_level_directory_before_going_deeper() {
+    fn select_covers_every_bucket_before_going_deeper() {
         // `b` has one file and `a` has three: round-robin must still take
-        // `b/x.rs` before `a`'s second helping, and `a` takes its largest
-        // file first.
-        let (kept, _) = select(vec![
-            source("a/small.rs", 10),
-            source("a/big.rs", 90),
-            source("a/mid.rs", 50),
-            source("b/x.rs", 20),
-        ]);
+        // `b/x.rs` before `a`'s second helping, and `a` keeps path order.
+        let (kept, _) = select(
+            vec![
+                source("a/small.rs", 10),
+                source("a/big.rs", 90),
+                source("a/mid.rs", 50),
+                source("b/x.rs", 20),
+            ],
+            |_| true,
+        );
         let names: Vec<String> = kept
             .iter()
             .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
@@ -2012,15 +2157,105 @@ mod tests {
     }
 
     #[test]
+    fn select_buckets_by_the_first_two_path_components() {
+        // A monorepo keeps every crate under `crates/`: bucketing by the first
+        // component alone would make one giant bucket, so `crates/gpui` must
+        // get a file in before `crates/repo_wiki` gets its second.
+        let (kept, _) = select(
+            vec![
+                source("crates/gpui/a.rs", 10),
+                source("crates/gpui/b.rs", 10),
+                source("crates/repo_wiki/c.rs", 10),
+                source("src/root_file.rs", 10),
+                source("ROOT.rs", 10),
+            ],
+            |_| true,
+        );
+        let names: Vec<String> = kept
+            .iter()
+            .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "crates/gpui/a.rs",
+                "crates/repo_wiki/c.rs",
+                "src/root_file.rs",
+                "ROOT.rs",
+                "crates/gpui/b.rs"
+            ]
+        );
+    }
+
+    #[test]
+    fn select_excludes_vendored_and_hidden_directories() {
+        let (kept, stats) = select(
+            vec![
+                source("crates/repo_wiki/src/lib.rs", 10),
+                source("crates/wu/resources/agents/node_modules/pi/index.js", 10),
+                source("vendor/leftpad.c", 10),
+                source("third_party/tree/sitter.c", 10),
+                source("web/dist/app.js", 10),
+                source("target/debug/build.rs", 10),
+                source("python/.venv/lib/site-packages/x.py", 10),
+                source("node_modules/pkg/top.js", 10),
+                source(".hidden/file.rs", 10),
+            ],
+            |_| true,
+        );
+        let names: Vec<String> = kept
+            .iter()
+            .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
+            .collect();
+        assert_eq!(names, ["crates/repo_wiki/src/lib.rs"]);
+        assert_eq!(stats.vendored_skipped, 8);
+        // Vendored paths are not candidates: they never reach the budget.
+        assert_eq!(stats.considered, 1);
+    }
+
+    #[test]
+    fn select_counts_files_without_a_language_as_unsupported() {
+        let (kept, stats) = select(
+            vec![
+                source("src/lib.rs", 10),
+                source("assets/logo.svg", 10),
+                source("README.md", 10),
+            ],
+            |source| source.rel.extension() == Some("rs"),
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(stats.considered, 3);
+        assert_eq!(stats.unsupported, 2);
+    }
+
+    #[test]
+    fn select_skips_a_file_that_does_not_fit_and_keeps_scanning() {
+        // One bucket, in path order: 110 files of 250 kB fill the 24 MiB budget
+        // after 100 of them, so the next ten are skipped. The small file after
+        // them still fits, which a `break` on the budget would have lost.
+        let mut sources: Vec<SourceFile> = (0..110)
+            .map(|index| source(&format!("bulk/f{index:03}.rs"), 250_000))
+            .collect();
+        sources.push(source("bulk/z_small.rs", 1_000));
+        let (kept, stats) = select(sources, |_| true);
+
+        assert_eq!(kept.len(), 101);
+        assert_eq!(
+            kept.last().unwrap().rel.display(path::PathStyle::Unix),
+            "bulk/z_small.rs"
+        );
+        assert_eq!(stats.over_budget, 10);
+        assert_eq!(stats.considered, 111);
+    }
+
+    #[test]
     fn select_stops_at_the_total_byte_budget() {
         // Many files at the per-file cap reach the total budget before the
         // file count cap does.
-        let names: Vec<&'static str> = vec!["f.rs"; 200];
-        let sources = names
-            .iter()
-            .map(|name| source(name, MAX_FILE_BYTES))
+        let sources = (0..200u32)
+            .map(|index| source(&format!("f{index}.rs"), MAX_FILE_BYTES))
             .collect::<Vec<_>>();
-        let (kept, stats) = select(sources);
+        let (kept, stats) = select(sources, |_| true);
 
         let total: u64 = kept.iter().map(|file| file.size).sum();
         assert!(total <= MAX_TOTAL_BYTES, "total was {total}");
@@ -2029,6 +2264,8 @@ mod tests {
             "the byte budget should have stopped the scan"
         );
         assert_eq!(stats.too_large, 0);
+        assert_eq!(stats.over_budget, 200 - kept.len());
+        assert_eq!(stats.considered, 200);
     }
 
     #[test]
@@ -2228,7 +2465,46 @@ mod tests {
     }
 
     #[test]
-    fn the_omitted_list_stops_at_a_hundred_paths_and_counts_the_rest() {
+    fn the_omitted_list_stops_at_twenty_paths_and_counts_the_rest() {
+        let map = SymbolMap {
+            files: (0..250)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/file{index}.rs"),
+                        (250 - index) as f32,
+                        vec![entry("item", "function", 0)],
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        let text = map.repo_map_markdown(
+            &RepoMapOptions {
+                limit: 40,
+                ..RepoMapOptions::default()
+            },
+            1_000_000,
+        );
+        assert!(text.contains("Omitted files (210, paths only)"), "{text}");
+        let listed = text
+            .lines()
+            .filter(|line| line.starts_with("src/file"))
+            .count();
+        // The page's own file is written in backticks, so only list paths match.
+        assert_eq!(listed, MAX_OMITTED_PATHS, "{text}");
+        assert!(text.contains("`src/file0.rs`"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "… +{} more omitted (call files_only or raise offset to list them)",
+                210 - MAX_OMITTED_PATHS
+            )),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_one_file_page_lists_half_as_many_omitted_paths() {
         let map = SymbolMap {
             files: (0..250)
                 .map(|index| {
@@ -2249,21 +2525,70 @@ mod tests {
             },
             1_000_000,
         );
-        assert!(text.contains("Omitted files (249, paths only)"), "{text}");
         let listed = text
             .lines()
             .filter(|line| line.starts_with("src/file"))
             .count();
-        // The page's own file is written in backticks, so only list paths match.
-        assert_eq!(listed, MAX_OMITTED_PATHS, "{text}");
-        assert!(text.contains("`src/file0.rs`"), "{text}");
+        assert_eq!(listed, MAX_OMITTED_PATHS_SMALL, "{text}");
         assert!(
             text.contains(&format!(
                 "… +{} more omitted (call files_only or raise offset to list them)",
-                249 - MAX_OMITTED_PATHS
+                249 - MAX_OMITTED_PATHS_SMALL
             )),
             "{text}"
         );
+        // `limit` picks the cap; a larger page gets the larger cap.
+        assert_eq!(omitted_path_limit(5), MAX_OMITTED_PATHS_SMALL);
+        assert_eq!(omitted_path_limit(6), MAX_OMITTED_PATHS);
+    }
+
+    #[test]
+    fn the_header_states_coverage_and_excluded_paths() {
+        let map = SymbolMap {
+            files: vec![file_symbols(
+                "src/lib.rs",
+                1.,
+                vec![entry("main", "function", 0)],
+            )],
+            stats: BuildStats {
+                considered: 3_368,
+                parsed: 812,
+                too_large: 60,
+                unsupported: 1_310,
+                unreadable: 2,
+                over_budget: 98,
+                file_limit: 1_086,
+                vendored_skipped: 16_189,
+            },
+        };
+
+        let text = map.to_markdown(100_000);
+        assert!(
+            text.contains(
+                "Indexed 812 / 3368 candidate files (1310 unsupported language, 60 over 256 KiB, \
+                 98 over the byte budget, 1086 beyond the 900-file limit, 2 unreadable)."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Excluded before scanning: 16189 vendored or generated paths."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_empty_page_prints_no_coverage_lines() {
+        let map = SymbolMap {
+            files: vec![file_symbols(
+                "src/lib.rs",
+                1.,
+                vec![entry("main", "function", 0)],
+            )],
+            stats: BuildStats::default(),
+        };
+        let text = map.to_markdown(100_000);
+        assert!(!text.contains("candidate files"), "{text}");
+        assert!(!text.contains("Excluded before scanning"), "{text}");
     }
 
     #[test]
