@@ -5,10 +5,13 @@
 //! inlay at the cursor. Pressing Tab inserts it; moving the cursor or editing
 //! the buffer dismisses it.
 
+use std::pin::pin;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use futures::AsyncReadExt as _;
+use futures::future::{self, Either};
 use gpui::{App, AppContext as _, Context, Task};
 use http_client::{AsyncBody, HttpClient, Method, Request};
 use multi_buffer::{MultiBufferRow, MultiBufferSnapshot};
@@ -21,6 +24,62 @@ use crate::{Editor, EditorSettings, MultiBufferOffset, inlays::Inlay};
 /// Maximum number of characters of buffer context sent on each side of the
 /// cursor. Kept small so requests stay fast and cheap.
 const MAX_CONTEXT_CHARS: usize = 4_000;
+
+/// Total time a prediction request may take, connection and body included.
+///
+/// The HTTP client's own connect timeout only covers the handshake: a hosted
+/// endpoint can accept the request and then stream for much longer than that.
+/// 20 s is long enough for a cold model or a large context and short enough
+/// that a stuck request cannot hold a background task for minutes. A prediction
+/// that arrives later is stale anyway, so timing out costs nothing.
+const PREDICTION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Delay before the first retry after a failed request; every further failure
+/// doubles it, up to [`MAX_RETRY_DELAY`].
+const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Ceiling for the retry delay.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// How long to wait after `consecutive_failures` failed requests in a row:
+/// 1 s, 2 s, 4 s, and so on, capped at [`MAX_RETRY_DELAY`].
+fn retry_delay(consecutive_failures: u32) -> Duration {
+    // Doubling past 32 s is pointless because it is capped at 30 s, and the
+    // shift is bounded so a long outage cannot overflow it.
+    let doublings = consecutive_failures.saturating_sub(1).min(5);
+    INITIAL_RETRY_DELAY
+        .saturating_mul(1 << doublings)
+        .min(MAX_RETRY_DELAY)
+}
+
+/// Consecutive prediction failures and the earliest time the next request may
+/// start.
+///
+/// A failing endpoint must not be asked again on every keystroke, so prompting
+/// stays silent during the backoff window. Any answered request, including one
+/// whose completion is empty, clears it.
+#[derive(Default)]
+struct PredictionRetry {
+    consecutive_failures: u32,
+    next_attempt: Option<Instant>,
+}
+
+impl PredictionRetry {
+    fn ready(&self, now: Instant) -> bool {
+        self.next_attempt
+            .is_none_or(|next_attempt| now >= next_attempt)
+    }
+
+    fn record_failure(&mut self, now: Instant) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.next_attempt = Some(now + retry_delay(self.consecutive_failures));
+    }
+
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.next_attempt = None;
+    }
+}
 
 /// Cursor context kept while a request is in flight; a response is only
 /// rendered when the editor still sits at exactly this position.
@@ -37,6 +96,7 @@ struct ActivePrediction {
 pub struct EditPredictionData {
     active: Option<ActivePrediction>,
     refresh_task: Task<()>,
+    retry: PredictionRetry,
     next_id: usize,
 }
 
@@ -45,6 +105,7 @@ impl EditPredictionData {
         Self {
             active: None,
             refresh_task: Task::ready(()),
+            retry: PredictionRetry::default(),
             next_id: 0,
         }
     }
@@ -69,6 +130,12 @@ impl Editor {
 
         let settings = EditorSettings::get_global(cx).edit_predictions.clone();
         if !settings.enabled || settings.endpoint.is_empty() || self.read_only(cx) {
+            return;
+        }
+
+        // A failing endpoint is left alone until its backoff expires, so typing
+        // through an outage does not fire a request on every keystroke.
+        if !self.edit_predictions.retry.ready(Instant::now()) {
             return;
         }
 
@@ -130,9 +197,14 @@ impl Editor {
             editor
                 .update(cx, |editor, cx| {
                     if cursor_matches(editor, &request, cx) {
+                        // The timeout covers the whole exchange: a server that
+                        // accepts the connection and then stalls must not keep
+                        // this task alive.
+                        let timeout = cx.background_executor().timer(PREDICTION_TIMEOUT);
                         response_task = Some(cx.background_spawn(async move {
                             request_prediction(
                                 http_client,
+                                timeout,
                                 endpoint.to_string(),
                                 api_key.to_string(),
                                 model.to_string(),
@@ -151,13 +223,17 @@ impl Editor {
             let Some(response_task) = response_task else {
                 return;
             };
-            let prediction = response_task.await.ok().flatten();
+            let outcome = response_task.await;
             editor
                 .update(cx, |editor, cx| {
+                    match &outcome {
+                        Ok(_) => editor.edit_predictions.retry.record_success(),
+                        Err(_) => editor.edit_predictions.retry.record_failure(Instant::now()),
+                    }
                     if !cursor_matches(editor, &request, cx) {
                         return;
                     }
-                    if let Some(text) = prediction
+                    if let Ok(Some(text)) = outcome
                         && !text.trim().is_empty()
                     {
                         editor.show_edit_prediction(request, text, cx);
@@ -320,10 +396,52 @@ fn build_prediction_request(
     Ok(request.body(AsyncBody::from(body))?)
 }
 
-/// Requests a prediction on the background thread. Returns `None` on any
-/// transport, status, or parsing failure.
+/// Why a prediction request produced no text. Logged as a coarse category,
+/// because the transport error can quote the endpoint, which may carry an API
+/// key in its query.
+#[derive(Debug)]
+enum PredictionFailure {
+    /// The endpoint setting is not a usable URL.
+    InvalidEndpoint,
+    /// The request could not be sent or the connection failed.
+    Transport,
+    /// The endpoint answered, but not with a success status.
+    Status(u16),
+    /// The response body could not be read or was not an answer.
+    Body,
+    /// No answer arrived within [`PREDICTION_TIMEOUT`].
+    Timeout,
+}
+
+impl std::fmt::Display for PredictionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidEndpoint => f.write_str("invalid endpoint"),
+            Self::Transport => f.write_str("transport error"),
+            Self::Status(status) => write!(f, "HTTP status {status}"),
+            Self::Body => f.write_str("unreadable response body"),
+            Self::Timeout => f.write_str("timed out"),
+        }
+    }
+}
+
+/// The endpoint's host, the only part that is safe to log: the URL may carry
+/// an API key in its query, and its path is none of the log's business.
+fn endpoint_host(endpoint: &str) -> String {
+    url::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "<unparsed endpoint>".to_owned())
+}
+
+/// Requests a prediction on the background thread, giving up after `timeout`.
+/// Returns `None` when the endpoint answered without any text to insert.
+///
+/// Failures are only logged, never surfaced in the editor: a missing prediction
+/// is invisible by design, and this task runs while the user keeps typing.
 async fn request_prediction(
     http_client: Arc<dyn HttpClient>,
+    timeout: Task<()>,
     endpoint: String,
     api_key: String,
     model: String,
@@ -333,15 +451,41 @@ async fn request_prediction(
     prefix: &str,
     suffix: &str,
 ) -> Result<Option<String>> {
-    let prompt = prediction_prompt(language, file_name, prefix, suffix);
-    let request = build_prediction_request(&endpoint, &api_key, &model, max_tokens, &prompt)?;
-    let mut response = http_client.send(request).await?;
-    if !response.status().is_success() {
-        anyhow::bail!("prediction request failed: {}", response.status());
+    let host = endpoint_host(&endpoint);
+    let attempt = async {
+        let prompt = prediction_prompt(language, file_name, prefix, suffix);
+        let request = build_prediction_request(&endpoint, &api_key, &model, max_tokens, &prompt)
+            .map_err(|_| PredictionFailure::InvalidEndpoint)?;
+        let mut response = http_client
+            .send(request)
+            .await
+            .map_err(|_| PredictionFailure::Transport)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(PredictionFailure::Status(status.as_u16()));
+        }
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut body)
+            .await
+            .map_err(|_| PredictionFailure::Body)?;
+        Ok(parse_prediction_response(&body))
+    };
+
+    let attempt = pin!(attempt);
+    let timeout = pin!(timeout);
+    let outcome = match future::select(attempt, timeout).await {
+        Either::Left((outcome, _)) => outcome,
+        Either::Right(((), _)) => Err(PredictionFailure::Timeout),
+    };
+    match outcome {
+        Ok(prediction) => Ok(prediction),
+        Err(failure) => {
+            log::warn!("edit prediction request to {host} failed: {failure}");
+            Err(anyhow::anyhow!("{failure}"))
+        }
     }
-    let mut body = Vec::new();
-    response.body_mut().read_to_end(&mut body).await?;
-    Ok(parse_prediction_response(&body))
 }
 
 /// Extracts the completion text from an OpenAI-compatible chat response.
@@ -469,5 +613,116 @@ mod tests {
         assert!(prompt.contains("<prefix>\nfn main() {"));
         assert!(prompt.contains("<cursor/>"));
         assert!(prompt.ends_with("</suffix>"));
+    }
+
+    #[test]
+    fn retry_delays_double_until_the_thirty_second_cap() {
+        let delays: Vec<u64> = (1..=8)
+            .map(|failures| retry_delay(failures).as_secs())
+            .collect();
+        assert_eq!(delays, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+    }
+
+    #[test]
+    fn backoff_holds_requests_until_it_expires_and_success_resets_it() {
+        let start = Instant::now();
+        let mut retry = PredictionRetry::default();
+        assert!(retry.ready(start), "the first request is never delayed");
+
+        retry.record_failure(start);
+        assert!(!retry.ready(start + Duration::from_millis(999)));
+        let second_attempt = start + INITIAL_RETRY_DELAY;
+        assert!(retry.ready(second_attempt));
+
+        retry.record_failure(second_attempt);
+        assert!(
+            !retry.ready(second_attempt + Duration::from_millis(1_999)),
+            "the second failure waits twice as long"
+        );
+        assert!(retry.ready(second_attempt + Duration::from_secs(2)));
+
+        retry.record_success();
+        assert!(retry.ready(second_attempt), "success clears the backoff");
+        retry.record_failure(second_attempt);
+        assert_eq!(
+            retry.next_attempt,
+            Some(second_attempt + INITIAL_RETRY_DELAY),
+            "success restarts the doubling from 1 s"
+        );
+    }
+
+    #[test]
+    fn logged_endpoint_is_only_the_host() {
+        assert_eq!(
+            endpoint_host("https://api.deepseek.com/v1/chat/completions?api_key=sk-secret"),
+            "api.deepseek.com"
+        );
+        assert_eq!(
+            endpoint_host("http://localhost:11434/v1/chat/completions"),
+            "localhost"
+        );
+        assert_eq!(endpoint_host("not a url"), "<unparsed endpoint>");
+    }
+
+    /// Answers nothing, standing in for an endpoint that accepted the request
+    /// and then never replied.
+    struct HangingHttpClient;
+
+    impl HttpClient for HangingHttpClient {
+        fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
+            None
+        }
+
+        fn proxy(&self) -> Option<&http_client::Url> {
+            None
+        }
+
+        fn send(
+            &self,
+            _request: Request<AsyncBody>,
+        ) -> futures::future::BoxFuture<'static, anyhow::Result<http_client::Response<AsyncBody>>>
+        {
+            Box::pin(future::pending())
+        }
+    }
+
+    #[gpui::test]
+    async fn a_hanging_prediction_request_times_out(cx: &mut gpui::TestAppContext) {
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let did_finish = finished.clone();
+        let timeout = cx.background_executor.timer(PREDICTION_TIMEOUT);
+        let task = cx.background_executor.spawn(async move {
+            let outcome = request_prediction(
+                Arc::new(HangingHttpClient),
+                timeout,
+                "http://localhost:11434/v1/chat/completions".to_string(),
+                String::new(),
+                "local-model".to_string(),
+                176,
+                None,
+                None,
+                "fn main() {",
+                "}",
+            )
+            .await;
+            did_finish.store(true, std::sync::atomic::Ordering::SeqCst);
+            outcome
+        });
+
+        cx.background_executor.run_until_parked();
+        cx.background_executor
+            .advance_clock(PREDICTION_TIMEOUT - Duration::from_secs(1));
+        cx.background_executor.run_until_parked();
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "a request must not be abandoned before the configured timeout"
+        );
+
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.background_executor.run_until_parked();
+        assert!(
+            task.await.is_err(),
+            "a stalled endpoint must end as an ordinary failure"
+        );
     }
 }

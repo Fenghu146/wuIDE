@@ -161,7 +161,7 @@ impl AcpHarness {
             args.push(agent_dir.join(entry).to_string_lossy().into_owned());
         }
         args.extend(self.preset.args.iter().map(|a| (*a).to_owned()));
-        self.push_data_dir(&mut args, &program);
+        self.push_data_dir(&mut args);
         let bin = agent_dir.join("node_modules").join(".bin");
         // npm's POSIX shims exec `node` from PATH, so the bundled node next to
         // them has to come first for the runtime to be used even on machines
@@ -196,7 +196,7 @@ impl AcpHarness {
     /// Point the agent at an isolated data directory inside Wu's own folder so
     /// its plugins, credentials and session state never touch the machine's
     /// globally installed agent.
-    fn push_data_dir(&self, args: &mut Vec<String>, program: &Path) {
+    fn push_data_dir(&self, args: &mut Vec<String>) {
         let Some(flag) = self.preset.data_dir_flag else {
             return;
         };
@@ -205,8 +205,7 @@ impl AcpHarness {
             HarnessId::Pi => "pi",
             _ => "agent",
         };
-        let base = agent_data_root(program);
-        let dir = base.join(slug);
+        let dir = paths::agents_data_dir().join(slug);
         if let Err(error) = std::fs::create_dir_all(&dir) {
             log::warn!("failed to create ACP agent data dir {dir:?}: {error}");
         }
@@ -492,47 +491,6 @@ async fn drive(
     }
 }
 
-/// Writable per-user directory where the editor keeps each agent's isolated
-/// plugins, credentials and session state. Overridable for tests via
-/// `WU_AGENT_DATA_DIR`.
-fn agent_data_root(program: &Path) -> PathBuf {
-    if let Some(dir) = std::env::var_os("WU_AGENT_DATA_DIR") {
-        return PathBuf::from(dir);
-    }
-    #[cfg(windows)]
-    {
-        if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(dir).join(paths::APP_NAME).join("agents");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join(paths::APP_NAME)
-                .join("agents");
-        }
-    }
-    if let Some(dir) = std::env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(dir)
-            .join(paths::APP_NAME_LOWERCASE)
-            .join("agents");
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join(paths::APP_NAME_LOWERCASE)
-            .join("agents");
-    }
-    program
-        .parent()
-        .map(|parent| parent.join("data"))
-        .unwrap_or_else(|| PathBuf::from("data"))
-}
-
 /// Build an isolated `$HOME` for the bundled Pi agent and seed it with the
 /// user's existing model/credential files (but not their globally installed
 /// extensions, which would need `npm` at runtime).
@@ -541,7 +499,10 @@ fn agent_data_root(program: &Path) -> PathBuf {
 /// Pi config on every launch, so a profile switch in cc-switch (which writes
 /// that config) reaches the bundled Pi without wiping the isolated home.
 fn prepare_pi_home(program: &Path, agent_root: &Path) -> Option<(PathBuf, PathBuf)> {
-    let base = agent_data_root(program);
+    // The per-user directory that holds each agent's isolated plugins,
+    // credentials and session state. `paths` owns the location, including the
+    // `--user-data-dir` override, so the agents look where the editor writes.
+    let base = paths::agents_data_dir();
     let home = base.join("pi-home");
     let agent_dir = home.join(".pi").join("agent");
     let acp_dir = home.join(".pi").join("pi-acp");

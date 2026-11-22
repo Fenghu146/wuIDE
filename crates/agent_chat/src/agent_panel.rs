@@ -5,6 +5,7 @@ use crate::{
     chat_view::ChatView,
     session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, RunSettings, SessionSummary},
 };
+use agent_harness::PermissionMode;
 use anyhow::Result;
 use collections::HashSet;
 use editor::{Editor, EditorEvent};
@@ -229,20 +230,44 @@ pub(crate) fn preferred_chat_settings(
     workspace: &Workspace,
     cx: &mut App,
 ) -> (AgentKind, Option<RunSettings>) {
-    if let Some(view) = visible_chat(workspace, cx) {
+    let (kind, settings) = if let Some(view) = visible_chat(workspace, cx) {
         let session = view.read(cx).session().read(cx);
-        return choose_chat_settings(
+        choose_chat_settings(
             Some((session.kind(), session.settings().clone())),
             None,
             AgentChatSettings::get_global(cx).agents(),
-        );
+        )
+    } else {
+        let recent = store_for(workspace, cx)
+            .read(cx)
+            .sessions_metadata()
+            .find(|metadata| !metadata.side_chat && metadata.parent_id.is_none())
+            .map(|metadata| (metadata.kind, metadata.settings.clone()));
+        choose_chat_settings(None, recent, AgentChatSettings::get_global(cx).agents())
+    };
+
+    // Approving tool calls is a per-chat decision, so the new chat starts at
+    // the configured default instead of carrying over the other chat's mode.
+    let permission = AgentChatSettings::get_global(cx).default_permission(kind);
+    (
+        kind,
+        settings.map(|settings| inherit_model_settings(&settings, permission)),
+    )
+}
+
+/// The model choices of `source`, with `permission` standing in for its
+/// approval mode.
+///
+/// Built field by field instead of cloning `source` and overwriting the
+/// permission, so a field added to [`RunSettings`] later is not inherited by
+/// accident.
+fn inherit_model_settings(source: &RunSettings, permission: PermissionMode) -> RunSettings {
+    RunSettings {
+        model: source.model.clone(),
+        reasoning: source.reasoning,
+        options: source.options.clone(),
+        permission,
     }
-    let recent = store_for(workspace, cx)
-        .read(cx)
-        .sessions_metadata()
-        .find(|metadata| !metadata.side_chat && metadata.parent_id.is_none())
-        .map(|metadata| (metadata.kind, metadata.settings.clone()));
-    choose_chat_settings(None, recent, AgentChatSettings::get_global(cx).agents())
 }
 
 fn choose_chat_settings(
@@ -2017,6 +2042,7 @@ impl Panel for AgentPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_harness::ReasoningLevel;
 
     #[test]
     fn a_chat_opened_for_a_selection_follows_the_chat_the_user_is_looking_at() {
@@ -2052,6 +2078,31 @@ mod tests {
         assert_eq!(
             settings.and_then(|settings| settings.model).as_deref(),
             Some("deepseek-v4")
+        );
+    }
+
+    #[test]
+    fn a_chat_opened_for_a_selection_inherits_the_model_but_not_the_approval_mode() {
+        let source = RunSettings {
+            model: Some("opus-5".into()),
+            reasoning: Some(ReasoningLevel::High),
+            options: [("fast".to_string(), serde_json::json!(true))]
+                .into_iter()
+                .collect(),
+            permission: PermissionMode::FullAccess,
+        };
+        let (kind, settings) = choose_chat_settings(Some((AgentKind::Claude, source)), None, &[]);
+        let inherited = inherit_model_settings(&settings.unwrap(), PermissionMode::Auto);
+
+        assert_eq!(kind, AgentKind::Claude);
+        assert_eq!(inherited.model.as_deref(), Some("opus-5"));
+        assert_eq!(inherited.reasoning, Some(ReasoningLevel::High));
+        assert_eq!(inherited.options["fast"], serde_json::json!(true));
+        assert_eq!(inherited.permission, PermissionMode::Auto);
+        assert_ne!(
+            inherited.permission,
+            PermissionMode::FullAccess,
+            "the source chat's approval mode must not follow the user into a new chat"
         );
     }
 
