@@ -1,6 +1,11 @@
 #!/bin/sh
 # Fake Claude Code CLI for agent_harness tests.
 #
+# Reference only: the tests now drive the cross-platform `fake-claude` binary in
+# `crates/agent_fixtures`, which plays these same scenarios. This script stays as
+# the readable statement of what each scenario emits, so keep the two in step when
+# a scenario changes.
+#
 # Reads the first stream-json user line from stdin, picks a scenario from the
 # prompt text, and plays a scripted stream-json transcript on stdout,
 # including control-channel round-trips read back from stdin. Frame shapes

@@ -1,0 +1,16 @@
+[package]
+name = "agent_fixtures"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/agent_fixtures.rs"
+
+[[bin]]
+name = "fake-claude"
+path = "src/bin/fake_claude.rs"
