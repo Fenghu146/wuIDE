@@ -3940,7 +3940,7 @@ mod tests {
     use super::*;
     use crate::{
         AcceptCommand, AgentKind, DismissCommands, SelectNextCommand, SelectPreviousCommand,
-        session::tests::new_store,
+        session::tests::{new_store, run_until},
     };
     use gpui::{KeyBinding, TestAppContext, VisualTestContext};
     use project::FakeFs;
@@ -5214,145 +5214,136 @@ mod tests {
         );
     }
 
-    // These completion menus are fed by `refresh_commands`, which probes the agent
-    // through `crates/agent_harness/tests/fixtures/fake-claude.sh`; that POSIX
-    // shell fake cannot run on Windows. Batch 2 of tests/windows-baseline replaces
-    // it with a cross-platform fake.
-    #[cfg(unix)]
-    mod posix_fake {
-        use super::*;
-        use crate::session::tests::run_until;
+    #[gpui::test]
+    async fn dollar_menu_lists_claude_skills(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        bind_composer_keys(cx);
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let skill = directory.path().join(".claude/skills/review");
+        std::fs::create_dir_all(&skill).expect("skill directory");
+        std::fs::write(skill.join("SKILL.md"), "body").expect("skill file");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        view.update_in(cx, |view, window, cx| {
+            window.focus(&view.composer.focus_handle(cx), cx)
+        });
 
-        #[gpui::test]
-        async fn dollar_menu_lists_claude_skills(cx: &mut TestAppContext) {
-            cx.update(|cx| {
-                workspace::AppState::test(cx);
-                editor::init(cx);
-            });
-            bind_composer_keys(cx);
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let skill = directory.path().join(".claude/skills/review");
-            std::fs::create_dir_all(&skill).expect("skill directory");
-            std::fs::write(skill.join("SKILL.md"), "body").expect("skill file");
-            let store = new_store(directory.path(), cx);
-            store.update(cx, |store, _| store.skip_plan_usage());
-            let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            let (view, cx) = cx.add_window_view(|window, cx| {
-                ChatView::new(
-                    session.clone(),
-                    store.clone(),
-                    project,
-                    WeakEntity::new_invalid(),
-                    window,
-                    cx,
-                )
-            });
-            view.update_in(cx, |view, window, cx| {
-                window.focus(&view.composer.focus_handle(cx), cx)
-            });
+        cx.simulate_input("use $");
+        run_until(cx, |cx| {
+            store.read_with(cx, |store, _| {
+                store
+                    .commands(AgentKind::Claude, directory.path())
+                    .is_some_and(|catalog| catalog.loaded)
+            })
+        });
+        assert_eq!(matches(&view, cx), ["review"]);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(composer_text(&view, cx), "use $review ");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.composer_skills,
+                [agent_harness::SkillRef {
+                    name: "review".into(),
+                    path: "claude-skill:review".into(),
+                }]
+            )
+        });
+    }
 
-            cx.simulate_input("use $");
-            run_until(cx, |cx| {
-                store.read_with(cx, |store, _| {
-                    store
-                        .commands(AgentKind::Claude, directory.path())
-                        .is_some_and(|catalog| catalog.loaded)
-                })
-            });
-            assert_eq!(matches(&view, cx), ["review"]);
-            cx.simulate_keystrokes("enter");
-            assert_eq!(composer_text(&view, cx), "use $review ");
-            view.read_with(cx, |view, _| {
-                assert_eq!(
-                    view.composer_skills,
-                    [agent_harness::SkillRef {
-                        name: "review".into(),
-                        path: "claude-skill:review".into(),
-                    }]
-                )
-            });
-        }
+    #[gpui::test]
+    async fn slash_menu_inserts_agent_commands_and_runs_wu_commands(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        bind_composer_keys(cx);
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            ChatView::new(
+                session.clone(),
+                store.clone(),
+                project,
+                WeakEntity::new_invalid(),
+                window,
+                cx,
+            )
+        });
+        view.update_in(cx, |view, window, cx| {
+            window.focus(&view.composer.focus_handle(cx), cx)
+        });
 
-        #[gpui::test]
-        async fn slash_menu_inserts_agent_commands_and_runs_wu_commands(cx: &mut TestAppContext) {
-            cx.update(|cx| {
-                workspace::AppState::test(cx);
-                editor::init(cx);
-            });
-            bind_composer_keys(cx);
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            store.update(cx, |store, _| store.skip_plan_usage());
-            let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            let (view, cx) = cx.add_window_view(|window, cx| {
-                ChatView::new(
-                    session.clone(),
-                    store.clone(),
-                    project,
-                    WeakEntity::new_invalid(),
-                    window,
-                    cx,
-                )
-            });
-            view.update_in(cx, |view, window, cx| {
-                window.focus(&view.composer.focus_handle(cx), cx)
-            });
+        cx.simulate_input("/re");
+        run_until(cx, |cx| {
+            store.read_with(cx, |store, _| {
+                store
+                    .commands(AgentKind::Claude, directory.path())
+                    .is_some_and(|catalog| catalog.loaded)
+            })
+        });
+        // The wu app commands sit after the agent's, so `repo-map` joins this list.
+        assert_eq!(matches(&view, cx), ["review", "resume", "repo-map"]);
+        cx.simulate_keystrokes("down down down enter");
+        assert_eq!(composer_text(&view, cx), "/review ");
+        let shown = view.update(cx, |view, cx| {
+            view.composer.update(cx, |editor, cx| editor.display_text(cx))
+        });
+        assert_eq!(shown, "⋯ ");
+        view.read_with(cx, |view, _| assert!(view.command_menu.is_none()));
 
-            cx.simulate_input("/re");
-            run_until(cx, |cx| {
-                store.read_with(cx, |store, _| {
-                    store
-                        .commands(AgentKind::Claude, directory.path())
-                        .is_some_and(|catalog| catalog.loaded)
-                })
-            });
-            assert_eq!(matches(&view, cx), ["review", "resume"]);
-            cx.simulate_keystrokes("down down enter");
-            assert_eq!(composer_text(&view, cx), "/review ");
-            let shown = view.update(cx, |view, cx| {
-                view.composer.update(cx, |editor, cx| editor.display_text(cx))
-            });
-            assert_eq!(shown, "⋯ ");
-            view.read_with(cx, |view, _| assert!(view.command_menu.is_none()));
+        view.update_in(cx, |view, window, cx| {
+            view.composer.update(cx, |editor, cx| editor.clear(window, cx))
+        });
+        cx.simulate_input("/");
+        assert!(matches(&view, cx).contains(&"compact".to_string()));
+        cx.simulate_keystrokes("escape");
+        view.read_with(cx, |view, _| assert!(view.command_menu.is_none()));
+        cx.simulate_input("sto");
+        assert_eq!(matches(&view, cx), ["stop"]);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(composer_text(&view, cx), "");
 
-            view.update_in(cx, |view, window, cx| {
-                view.composer.update(cx, |editor, cx| editor.clear(window, cx))
-            });
-            cx.simulate_input("/");
-            assert!(matches(&view, cx).contains(&"compact".to_string()));
-            cx.simulate_keystrokes("escape");
-            view.read_with(cx, |view, _| assert!(view.command_menu.is_none()));
-            cx.simulate_input("sto");
-            assert_eq!(matches(&view, cx), ["stop"]);
-            cx.simulate_keystrokes("enter");
-            assert_eq!(composer_text(&view, cx), "");
+        cx.simulate_input("/");
+        let names = matches(&view, cx);
+        assert!(!names.contains(&"usage".to_string()));
+        assert_eq!(names.iter().filter(|name| *name == "model").count(), 1);
+        cx.simulate_keystrokes("escape");
+        cx.simulate_input("usage now");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(composer_text(&view, cx), "");
+        session.read_with(cx, |session, _| assert!(session.entries().is_empty()));
 
-            cx.simulate_input("/");
-            let names = matches(&view, cx);
-            assert!(!names.contains(&"usage".to_string()));
-            assert_eq!(names.iter().filter(|name| *name == "model").count(), 1);
-            cx.simulate_keystrokes("escape");
-            cx.simulate_input("usage now");
-            cx.simulate_keystrokes("enter");
-            assert_eq!(composer_text(&view, cx), "");
-            session.read_with(cx, |session, _| assert!(session.entries().is_empty()));
-
-            cx.simulate_input("/nothing-like-this");
-            assert!(matches(&view, cx).is_empty());
-            cx.simulate_keystrokes("enter");
-            assert_eq!(composer_text(&view, cx), "");
-            session.read_with(cx, |session, _| {
-                assert!(matches!(
-                    session.entries().first(),
-                    Some(Entry::User { text, .. }) if text.as_ref() == "/nothing-like-this"
-                ))
-            });
-        }
+        cx.simulate_input("/nothing-like-this");
+        assert!(matches(&view, cx).is_empty());
+        cx.simulate_keystrokes("enter");
+        assert_eq!(composer_text(&view, cx), "");
+        session.read_with(cx, |session, _| {
+            assert!(matches!(
+                session.entries().first(),
+                Some(Entry::User { text, .. }) if text.as_ref() == "/nothing-like-this"
+            ))
+        });
     }
 }

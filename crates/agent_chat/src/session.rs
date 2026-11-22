@@ -3919,11 +3919,16 @@ pub(crate) mod tests {
     use super::*;
     use gpui::TestAppContext;
 
-    /// The POSIX shell fake shared with `agent_harness`. Tests that spawn it
-    /// live in `posix_fake` below; see the note there about Windows.
+    /// The fake Claude CLI shared with `agent_harness`, built on first use.
     fn fake_claude() -> PathBuf {
+        agent_fixtures::fake_claude().to_path_buf()
+    }
+
+    /// A config directory beside the fixtures, so the fake never reads a real
+    /// `~/.claude`.
+    fn claude_config() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../agent_harness/tests/fixtures/fake-claude.sh")
+            .join("../agent_harness/tests/fixtures/claude-config")
     }
 
     pub(crate) fn new_store(directory: &Path, cx: &mut TestAppContext) -> Entity<AgentStore> {
@@ -3931,10 +3936,7 @@ pub(crate) mod tests {
         // SAFETY: tests in this crate only ever set these variables to the same fixtures.
         unsafe {
             std::env::set_var("CLAUDE_CODE_EXECUTABLE", fake_claude());
-            std::env::set_var(
-                "CLAUDE_CONFIG_DIR",
-                fake_claude().with_file_name("claude-config"),
-            );
+            std::env::set_var("CLAUDE_CONFIG_DIR", claude_config());
         }
         cx.update(|cx| {
             gpui_tokio::init(cx);
@@ -5492,733 +5494,666 @@ pub(crate) mod tests {
         assert_eq!(ids("gpt-6.1-sol", cx), ["gpt-6.1-sol"]);
     }
 
-    // These tests drive the real agent process through the POSIX shell fake in
-    // `crates/agent_harness/tests/fixtures/fake-claude.sh`, so they only run on
-    // Unix. Windows cannot execute it (`Command::new` reports os error 193, the
-    // same reason `crates/agent_harness/tests/claude.rs` is `#![cfg(unix)]`).
-    // Batch 2 of tests/windows-baseline replaces the fake with a cross-platform one
-    // and moves these tests back out of this module.
-    #[cfg(unix)]
-    mod posix_fake {
-        use super::*;
+    #[gpui::test]
+    async fn claude_reply_streams_into_the_transcript_and_is_saved(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:happy", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.is_working())
+        });
 
-        #[gpui::test]
-        async fn claude_reply_streams_into_the_transcript_and_is_saved(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:happy", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.is_working())
-            });
+        session.read_with(cx, |session, cx| {
+            assert_eq!(session.metadata().title, "scenario:happy");
+            assert_eq!(
+                session.metadata().native_session_id.as_deref(),
+                Some("sess-1")
+            );
+            let summary: Vec<String> = session
+                .entries()
+                .iter()
+                .map(|entry| match entry {
+                    Entry::User { text, .. } => format!("user: {text}"),
+                    Entry::Assistant { markdown, .. } => {
+                        format!("assistant: {}", markdown.read(cx).source())
+                    }
+                    Entry::Thinking(markdown) => {
+                        format!("thinking: {}", markdown.read(cx).source())
+                    }
+                    Entry::Tool(tool) => format!("tool {}: {:?}", tool.id, tool.status),
+                    Entry::Notice { text, .. } => format!("notice: {text}"),
+                    Entry::Image { path } => format!("image: {}", path.display()),
+                })
+                .collect();
+            assert_eq!(
+                summary,
+                [
+                    "user: scenario:happy",
+                    "thinking: pondering",
+                    "assistant: Hello",
+                    "tool tool-1: Completed",
+                    "tool tool-2: Failed",
+                ]
+            );
+        });
 
-            session.read_with(cx, |session, cx| {
-                assert_eq!(session.metadata().title, "scenario:happy");
-                assert_eq!(
-                    session.metadata().native_session_id.as_deref(),
-                    Some("sess-1")
-                );
-                let summary: Vec<String> = session
+        cx.executor().advance_clock(SAVE_DEBOUNCE * 2);
+        let saved_entries = entries_path(directory.path(), &session_id(&session, cx));
+        run_until(cx, |_| saved_entries.exists());
+        let summaries = store.read_with(cx, |store, cx| {
+            store.sessions_in(&[directory.path().to_path_buf()], cx)
+        });
+        assert_eq!(summaries.len(), 1);
+        assert!(!summaries[0].working);
+    }
+
+    #[gpui::test]
+    async fn permissions_and_questions_wait_for_the_user(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:askuser", cx)
+        });
+
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.pending_questions().is_empty())
+        });
+        let permission_id = session.read_with(cx, |session, _| {
+            let pending = &session.pending_questions()[0];
+            assert!(pending.is_permission());
+            assert_eq!(pending.questions[0].question, "Run `ls`?");
+            pending.id().to_string()
+        });
+        session.update(cx, |session, cx| {
+            session.answer_permission(&permission_id, true, cx)
+        });
+
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| {
+                session
+                    .pending_questions()
+                    .first()
+                    .is_some_and(|pending| !pending.is_permission())
+            })
+        });
+        let (question_id, answers) = session.read_with(cx, |session, _| {
+            let pending = &session.pending_questions()[0];
+            let answers = pending
+                .questions
+                .iter()
+                .map(|question| UserInputAnswer {
+                    question_id: question.id.clone(),
+                    labels: vec!["B".into()],
+                })
+                .collect::<Vec<_>>();
+            (pending.id().to_string(), answers)
+        });
+        session.update(cx, |session, cx| session.answer(&question_id, answers, cx));
+
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.is_working())
+        });
+        session.read_with(cx, |session, _| {
+            assert!(session.pending_questions().is_empty());
+            assert!(
+                !session
                     .entries()
                     .iter()
-                    .map(|entry| match entry {
-                        Entry::User { text, .. } => format!("user: {text}"),
-                        Entry::Assistant { markdown, .. } => {
-                            format!("assistant: {}", markdown.read(cx).source())
-                        }
-                        Entry::Thinking(markdown) => {
-                            format!("thinking: {}", markdown.read(cx).source())
-                        }
-                        Entry::Tool(tool) => format!("tool {}: {:?}", tool.id, tool.status),
-                        Entry::Notice { text, .. } => format!("notice: {text}"),
-                        Entry::Image { path } => format!("image: {}", path.display()),
-                    })
-                    .collect();
-                assert_eq!(
-                    summary,
-                    [
-                        "user: scenario:happy",
-                        "thinking: pondering",
-                        "assistant: Hello",
-                        "tool tool-1: Completed",
-                        "tool tool-2: Failed",
-                    ]
-                );
-            });
+                    .any(|entry| matches!(entry, Entry::Notice { is_error: true, .. })),
+                "the fixture reports an error unless both answers arrive"
+            );
+        });
+    }
 
-            cx.executor().advance_clock(SAVE_DEBOUNCE * 2);
-            let saved_entries = entries_path(directory.path(), &session_id(&session, cx));
-            run_until(cx, |_| saved_entries.exists());
-            let summaries = store.read_with(cx, |store, cx| {
-                store.sessions_in(&[directory.path().to_path_buf()], cx)
-            });
-            assert_eq!(summaries.len(), 1);
-            assert!(!summaries[0].working);
-        }
+    #[gpui::test]
+    async fn switching_to_full_access_approves_a_waiting_permission(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:askuser", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.pending_questions().is_empty())
+        });
 
-        #[gpui::test]
-        async fn permissions_and_questions_wait_for_the_user(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:askuser", cx)
-            });
+        session.update(cx, |session, cx| {
+            session.update_settings(
+                |settings| settings.permission = PermissionMode::FullAccess,
+                cx,
+            )
+        });
 
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.pending_questions().is_empty())
-            });
-            let permission_id = session.read_with(cx, |session, _| {
-                let pending = &session.pending_questions()[0];
-                assert!(pending.is_permission());
-                assert_eq!(pending.questions[0].question, "Run `ls`?");
-                pending.id().to_string()
-            });
-            session.update(cx, |session, cx| {
-                session.answer_permission(&permission_id, true, cx)
-            });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| {
+                session
+                    .pending_questions()
+                    .first()
+                    .is_some_and(|pending| !pending.is_permission())
+            })
+        });
+    }
 
+    #[gpui::test]
+    async fn changed_settings_restart_the_agent_with_new_flags(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(directory.path().join(".args-fixture"), "").expect("write fixture");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.update_settings(
+                |settings| {
+                    settings.model = Some("claude-opus-5-5".into());
+                    settings.reasoning = Some(ReasoningLevel::High);
+                },
+                cx,
+            );
+            session.send_message("first", cx);
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.is_working())
+        });
+        let first = last_reply(&session, cx);
+        assert!(first.contains("--model claude-opus-5-5"), "{first}");
+        assert!(first.contains("--effort high"), "{first}");
+        assert!(!first.contains("--resume"), "{first}");
+
+        session.update(cx, |session, cx| {
+            session.update_settings(
+                |settings| settings.reasoning = Some(ReasoningLevel::Low),
+                cx,
+            );
+            session.send_message("second", cx);
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.is_working())
+                && last_reply(&session, cx) != first
+        });
+        let second = last_reply(&session, cx);
+        assert!(second.contains("--effort low"), "{second}");
+        assert!(second.contains("--resume=sess-args"), "{second}");
+    }
+
+    #[gpui::test]
+    async fn manual_compaction_reloads_claude_on_the_next_message(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(directory.path().join(".compact-fixture"), "").expect("write fixture");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+
+        for (message, expected) in [
+            ("hello", "new first"),
+            ("follow up", "new steer"),
+            ("/compact", "new steer"),
+            ("after compacting", "resumed first"),
+            ("long task", "resumed steer"),
+            ("after auto compaction", "resumed steer"),
+            ("doomed", "resumed steer"),
+        ] {
+            let entries_before = session.read_with(cx, |session, _| session.entries().len());
+            session.update(cx, |session, cx| session.send_message(message, cx));
             run_until(cx, |cx| {
                 session.read_with(cx, |session, _| {
-                    session
-                        .pending_questions()
-                        .first()
-                        .is_some_and(|pending| !pending.is_permission())
+                    !session.is_working() && session.entries().len() > entries_before + 1
                 })
             });
-            let (question_id, answers) = session.read_with(cx, |session, _| {
-                let pending = &session.pending_questions()[0];
-                let answers = pending
-                    .questions
-                    .iter()
-                    .map(|question| UserInputAnswer {
-                        question_id: question.id.clone(),
-                        labels: vec!["B".into()],
-                    })
-                    .collect::<Vec<_>>();
-                (pending.id().to_string(), answers)
-            });
-            session.update(cx, |session, cx| session.answer(&question_id, answers, cx));
-
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.is_working())
-            });
-            session.read_with(cx, |session, _| {
-                assert!(session.pending_questions().is_empty());
-                assert!(
-                    !session
-                        .entries()
-                        .iter()
-                        .any(|entry| matches!(entry, Entry::Notice { is_error: true, .. })),
-                    "the fixture reports an error unless both answers arrive"
-                );
-            });
+            assert_eq!(last_reply(&session, cx), expected, "reply to {message:?}");
         }
-
-        #[gpui::test]
-        async fn switching_to_full_access_approves_a_waiting_permission(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:askuser", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.pending_questions().is_empty())
-            });
-
-            session.update(cx, |session, cx| {
-                session.update_settings(
-                    |settings| settings.permission = PermissionMode::FullAccess,
-                    cx,
-                )
-            });
-
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| {
-                    session
-                        .pending_questions()
-                        .first()
-                        .is_some_and(|pending| !pending.is_permission())
+        session.read_with(cx, |session, _| {
+            assert!(!session.is_compacting());
+            assert_eq!(
+                session.metadata.context.and_then(|context| context.tokens),
+                Some(150)
+            );
+            let notices: Vec<(&str, bool)> = session
+                .entries()
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Notice { text, is_error } => Some((text.as_ref(), *is_error)),
+                    _ => None,
                 })
-            });
-        }
+                .collect();
+            assert_eq!(
+                notices,
+                [
+                    ("Context compacted.", false),
+                    ("Context compacted.", false),
+                    ("Couldn't compact the conversation: prompt_too_long", true),
+                ]
+            );
+        });
+    }
 
-        #[gpui::test]
-        async fn changed_settings_restart_the_agent_with_new_flags(cx: &mut TestAppContext) {
-            use std::os::unix::fs::PermissionsExt as _;
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let script = directory.path().join("echo-args-claude");
-            std::fs::write(
-                &script,
-                r#"#!/bin/sh
-    args="$*"
-    printf '{"type":"system","subtype":"init","model":"m","tools":[],"cwd":"/tmp","session_id":"sess-args"}\n'
-    while read -r line; do
-      printf '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s"}}}\n' "$args"
-      printf '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[]}}\n'
-      printf '{"type":"result","subtype":"success","result":"ok","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-args"}\n'
-    done
-    "#,
-            )
-            .expect("write fixture");
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("make fixture executable");
-            let store = new_store(directory.path(), cx);
-            store.update(cx, |store, _| {
-                store.harnesses.insert(
-                    AgentKind::Claude,
-                    Arc::new(ClaudeHarness::new().with_executable(script)),
-                );
-            });
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.update_settings(
-                    |settings| {
-                        settings.model = Some("claude-opus-5-5".into());
-                        settings.reasoning = Some(ReasoningLevel::High);
-                    },
-                    cx,
-                );
-                session.send_message("first", cx);
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.is_working())
-            });
-            let first = last_reply(&session, cx);
-            assert!(first.contains("--model claude-opus-5-5"), "{first}");
-            assert!(first.contains("--effort high"), "{first}");
-            assert!(!first.contains("--resume"), "{first}");
-
-            session.update(cx, |session, cx| {
-                session.update_settings(
-                    |settings| settings.reasoning = Some(ReasoningLevel::Low),
-                    cx,
-                );
-                session.send_message("second", cx);
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.is_working())
-                    && last_reply(&session, cx) != first
-            });
-            let second = last_reply(&session, cx);
-            assert!(second.contains("--effort low"), "{second}");
-            assert!(second.contains("--resume=sess-args"), "{second}");
-        }
-
-        #[gpui::test]
-        async fn manual_compaction_reloads_claude_on_the_next_message(cx: &mut TestAppContext) {
-            use std::os::unix::fs::PermissionsExt as _;
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let script = directory.path().join("steer-aware-claude");
-            std::fs::write(
-                &script,
-                r#"#!/bin/sh
-    case "$*" in *--resume*) run=resumed;; *) run=new;; esac
-    printf '{"type":"system","subtype":"init","model":"m","tools":[],"cwd":"/tmp","session_id":"sess-commands"}\n'
-    while read -r line; do
-      case "$line" in *priority*) kind=steer;; *) kind=first;; esac
-      case "$line" in
-        *'"/compact'*)
-          printf '{"type":"system","subtype":"status","status":"compacting","session_id":"sess-commands"}\n'
-          printf '{"type":"system","subtype":"compact_boundary","session_id":"sess-commands","compact_metadata":{"trigger":"manual","pre_tokens":900,"post_tokens":120}}\n'
-          printf '{"type":"system","subtype":"status","status":null,"compact_result":"success","session_id":"sess-commands"}\n';;
-        *'"long task'*)
-          printf '{"type":"system","subtype":"compact_boundary","session_id":"sess-commands","compact_metadata":{"trigger":"auto","pre_tokens":900,"post_tokens":150}}\n';;
-        *'"doomed'*)
-          printf '{"type":"system","subtype":"status","status":"compacting","session_id":"sess-commands"}\n'
-          printf '{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"prompt_too_long","session_id":"sess-commands"}\n';;
-      esac
-      printf '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s %s"}}}\n' "$run" "$kind"
-      printf '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[]}}\n'
-      printf '{"type":"result","subtype":"success","result":"ok","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-commands"}\n'
-    done
-    "#,
-            )
-            .expect("write fixture");
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("make fixture executable");
-            let store = new_store(directory.path(), cx);
-            store.update(cx, |store, _| {
-                store.harnesses.insert(
-                    AgentKind::Claude,
-                    Arc::new(ClaudeHarness::new().with_executable(script)),
-                );
-            });
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-
-            for (message, expected) in [
-                ("hello", "new first"),
-                ("follow up", "new steer"),
-                ("/compact", "new steer"),
-                ("after compacting", "resumed first"),
-                ("long task", "resumed steer"),
-                ("after auto compaction", "resumed steer"),
-                ("doomed", "resumed steer"),
-            ] {
-                let entries_before = session.read_with(cx, |session, _| session.entries().len());
-                session.update(cx, |session, cx| session.send_message(message, cx));
-                run_until(cx, |cx| {
-                    session.read_with(cx, |session, _| {
-                        !session.is_working() && session.entries().len() > entries_before + 1
-                    })
-                });
-                assert_eq!(last_reply(&session, cx), expected, "reply to {message:?}");
-            }
+    #[gpui::test]
+    async fn commands_are_never_glued_to_messages_sent_while_stopping(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:interrupt", cx)
+        });
+        run_until(cx, |cx| {
             session.read_with(cx, |session, _| {
-                assert!(!session.is_compacting());
-                assert_eq!(
-                    session.metadata.context.and_then(|context| context.tokens),
-                    Some(150)
-                );
-                let notices: Vec<(&str, bool)> = session
+                session.metadata().native_session_id.is_some()
+            })
+        });
+        session.update(cx, |session, cx| {
+            session.stop(cx);
+            session.send_message("/compact", cx);
+            session.send_message("scenario:happy", cx);
+            assert_eq!(
+                session.prompt_after_stop.as_ref().map(|prompt| prompt.text.as_str()),
+                Some("/compact")
+            );
+            let queued: Vec<&str> = session
+                .queue()
+                .iter()
+                .map(|queued| queued.prompt.text.as_str())
+                .collect();
+            assert_eq!(queued, ["scenario:happy"]);
+            assert!(!session.can_steer(&Prompt::from("/compact".to_string())));
+        });
+    }
+
+    fn use_quick_stopping_claude(store: &Entity<AgentStore>, cx: &mut TestAppContext) {
+        store.update(cx, |store, _| {
+            store.harnesses.insert(
+                AgentKind::Claude,
+                Arc::new(
+                    ClaudeHarness::new()
+                        .with_executable(fake_claude())
+                        .with_graces(Duration::from_millis(50), Duration::from_millis(50)),
+                ),
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn message_sent_while_stopping_runs_after_the_stop(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:interrupt", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| {
+                session.metadata().native_session_id.is_some()
+            })
+        });
+        session.update(cx, |session, cx| {
+            session.stop(cx);
+            session.send_message("scenario:happy", cx);
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.is_working())
+                && last_reply(&session, cx) == "Hello"
+        });
+    }
+
+    #[gpui::test]
+    async fn deleting_a_running_chat_removes_its_files_for_good(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:interrupt", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| {
+                session.metadata().native_session_id.is_some()
+            })
+        });
+        let id = session_id(&session, cx);
+        let metadata_file = metadata_path(directory.path(), &id);
+        run_until(cx, |_| metadata_file.exists());
+
+        store.update(cx, |store, cx| store.delete_session(&id, cx));
+        session.update(cx, |session, cx| {
+            session.apply_event(
+                AgentEvent::ContextUsage {
+                    tokens: Some(1),
+                    window: Some(2),
+                },
+                cx,
+            );
+            session.send_message("scenario:happy", cx);
+        });
+        cx.executor().advance_clock(SAVE_DEBOUNCE * 2);
+        run_until(cx, |_| !metadata_file.exists());
+        cx.executor().advance_clock(SAVE_DEBOUNCE * 2);
+        cx.run_until_parked();
+        assert!(!metadata_file.exists());
+        assert!(!entries_path(directory.path(), &id).exists());
+        session.read_with(cx, |session, _| assert!(!session.is_working()));
+    }
+
+    #[gpui::test]
+    async fn claude_background_subagent_traffic_lands_in_its_transcript(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:wake", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| session.run.is_none() && !session.is_working())
+        });
+        session.read_with(cx, |session, cx| {
+            let subagent = session.subagent("toolu_agent").expect("subagent recorded");
+            assert_eq!(
+                summarize(subagent.entries(), cx),
+                ["assistant: sub working", "tool sub-t1: Completed"]
+            );
+            assert!(!summarize(session.entries(), cx).contains(&"assistant: sub working".into()));
+        });
+    }
+
+    #[gpui::test]
+    async fn messages_sent_while_working_steer_when_set_to(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        update_chat_settings(cx, |content| {
+            content.while_working = Some(settings::AgentChatWhileWorking::Steer);
+        });
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:interrupt", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| session.run.is_some())
+        });
+        session.update(cx, |session, cx| session.send_message("change of plan", cx));
+        assert!(session.read_with(cx, |session, _| session.queue().is_empty()));
+        assert_eq!(
+            user_texts(&session, cx),
+            ["scenario:interrupt", "change of plan"]
+        );
+    }
+
+    #[gpui::test]
+    async fn messages_sent_while_working_queue_and_go_out_after_the_turn(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| session.send_message("scenario:interrupt", cx));
+        run_until(cx, |cx| session.read_with(cx, |session, _| session.run.is_some()));
+        session.update(cx, |session, cx| {
+            session.send_message("first queued", cx);
+            session.send_message("second queued", cx);
+            session.send_message("third queued", cx);
+        });
+        let ids: Vec<u64> = session.read_with(cx, |session, _| {
+            session.queue().iter().map(|queued| queued.id).collect()
+        });
+        assert_eq!(ids.len(), 3);
+        assert_eq!(user_texts(&session, cx), ["scenario:interrupt"]);
+        session.update(cx, |session, cx| {
+            session.move_queued(ids[2], 0, cx);
+            session.remove_queued(ids[1], cx);
+        });
+        let prompt = session
+            .update(cx, |session, cx| session.begin_queued_edit(ids[0], cx))
+            .expect("queued message");
+        session.update(cx, |session, cx| {
+            session.finish_queued_edit(
+                ids[0],
+                Some(Prompt::text(format!("{} edited", prompt.text))),
+                cx,
+            )
+        });
+        let queued: Vec<String> = session.read_with(cx, |session, _| {
+            session.queue().iter().map(|queued| queued.prompt.text.clone()).collect()
+        });
+        assert_eq!(queued, ["third queued", "first queued edited"]);
+
+        session.update(cx, |session, cx| {
+            session.apply_event(
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                },
+                cx,
+            );
+        });
+        assert_eq!(
+            user_texts(&session, cx),
+            ["scenario:interrupt", "third queued"]
+        );
+        session.read_with(cx, |session, _| {
+            assert_eq!(session.queue().len(), 1);
+            assert!(session.is_working());
+        });
+    }
+
+    #[gpui::test]
+    async fn send_now_shows_the_message_and_queue_order_survives_idle(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| session.send_message("scenario:interrupt", cx));
+        run_until(cx, |cx| session.read_with(cx, |session, _| session.run.is_some()));
+        session.update(cx, |session, cx| session.send_message("scenario:happy", cx));
+        let id = session.read_with(cx, |session, _| session.queue()[0].id);
+        session.update(cx, |session, cx| session.send_queued_now(id, cx));
+        assert_eq!(
+            user_texts(&session, cx),
+            ["scenario:interrupt", "scenario:happy"]
+        );
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| !session.is_working())
+                && last_reply(&session, cx) == "Hello"
+        });
+
+        session.update(cx, |session, cx| {
+            session.enqueue(Prompt::text("older"), cx);
+            session.send_message("newer", cx);
+        });
+        assert_eq!(user_texts(&session, cx).last().map(String::as_str), Some("older"));
+        let queued: Vec<String> = session.read_with(cx, |session, _| {
+            session.queue().iter().map(|queued| queued.prompt.text.clone()).collect()
+        });
+        assert_eq!(queued, ["newer"]);
+    }
+
+    #[gpui::test]
+    async fn forks_copy_history_and_send_it_with_their_first_message(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let parent = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
+        run_until(cx, |cx| parent.read_with(cx, |session, _| !session.is_working()));
+        parent.update(cx, |session, cx| {
+            session.update_settings(
+                |settings| settings.permission = PermissionMode::FullAccess,
+                cx,
+            )
+        });
+        let parent_id = session_id(&parent, cx);
+
+        let fork = store
+            .update(cx, |store, cx| store.fork_session(&parent_id, false, cx))
+            .await
+            .expect("fork");
+        fork.read_with(cx, |fork, cx| {
+            let summary = summarize(fork.entries(), cx);
+            assert_eq!(summary.first().map(String::as_str), Some("user: scenario:happy"));
+            assert!(summary.last().is_some_and(|last| last.starts_with("notice: Forked from")));
+            let context = fork.metadata().fork_context.clone().expect("history");
+            assert!(context.contains("scenario:happy") && context.contains("Hello"));
+            assert_eq!(fork.metadata().parent_id.as_deref(), Some(parent_id.as_str()));
+            assert!(!fork.metadata().side_chat);
+            assert_eq!(fork.settings().permission, PermissionMode::FullAccess);
+        });
+
+        let side = store
+            .update(cx, |store, cx| store.fork_session(&parent_id, true, cx))
+            .await
+            .expect("side chat");
+        side.read_with(cx, |side, cx| {
+            assert_eq!(summarize(side.entries(), cx).len(), 1);
+            assert!(side.metadata().side_chat);
+            assert!(side.metadata().fork_context.is_some());
+        });
+        side.update(cx, |side, cx| side.send_message("scenario:happy", cx));
+        run_until(cx, |cx| side.read_with(cx, |session, _| !session.is_working()));
+        side.read_with(cx, |side, _| assert!(side.metadata().fork_context.is_none()));
+    }
+
+    async fn forked_from_finished_parent(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<AgentSession>) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let parent = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
+        run_until(cx, |cx| {
+            parent.read_with(cx, |session, _| !session.is_working())
+        });
+        let parent_id = session_id(&parent, cx);
+        let fork = store
+            .update(cx, |store, cx| store.fork_session(&parent_id, false, cx))
+            .await
+            .expect("fork");
+        fork.read_with(cx, |fork, _| {
+            assert_eq!(fork.metadata().fork_source.as_deref(), Some("sess-1"));
+            assert!(fork.metadata().fork_context.is_some());
+        });
+        (directory, fork)
+    }
+
+    #[gpui::test]
+    async fn forks_continue_a_copy_of_the_agents_own_session(cx: &mut TestAppContext) {
+        let (_directory, fork) = forked_from_finished_parent(cx).await;
+        fork.update(cx, |fork, cx| fork.send_message("scenario:fork", cx));
+        run_until(cx, |cx| {
+            fork.read_with(cx, |session, _| !session.is_working())
+        });
+        fork.read_with(cx, |fork, cx| {
+            assert!(!fork.run_failed(), "{:?}", summarize(fork.entries(), cx));
+            assert_eq!(
+                fork.metadata().native_session_id.as_deref(),
+                Some("sess-forked")
+            );
+            assert!(fork.metadata().fork_source.is_none());
+            assert!(fork.metadata().fork_context.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn a_fork_drops_the_native_copy_once_its_parent_moves_on(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let parent = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
+        run_until(cx, |cx| {
+            parent.read_with(cx, |session, _| !session.is_working())
+        });
+        let parent_id = session_id(&parent, cx);
+        let fork = store
+            .update(cx, |store, cx| store.fork_session(&parent_id, false, cx))
+            .await
+            .expect("fork");
+        fork.read_with(cx, |fork, _| assert!(fork.metadata().fork_source.is_some()));
+
+        parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
+        run_until(cx, |cx| {
+            parent.read_with(cx, |session, _| !session.is_working())
+        });
+        fork.read_with(cx, |fork, _| {
+            assert!(fork.metadata().fork_source.is_none());
+            assert!(
+                fork.metadata().fork_context.is_some(),
+                "the fork keeps its own history"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn a_failed_native_fork_falls_back_to_sending_the_history(cx: &mut TestAppContext) {
+        let (_directory, fork) = forked_from_finished_parent(cx).await;
+        fork.update(cx, |fork, cx| {
+            fork.send_message("scenario:fork-fallback", cx)
+        });
+        run_until(cx, |cx| {
+            fork.read_with(cx, |session, _| !session.is_working())
+        });
+        fork.read_with(cx, |fork, cx| {
+            let summary = summarize(fork.entries(), cx);
+            assert!(!fork.run_failed(), "{summary:?}");
+            assert!(
+                !fork
                     .entries()
                     .iter()
-                    .filter_map(|entry| match entry {
-                        Entry::Notice { text, is_error } => Some((text.as_ref(), *is_error)),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(
-                    notices,
-                    [
-                        ("Context compacted.", false),
-                        ("Context compacted.", false),
-                        ("Couldn't compact the conversation: prompt_too_long", true),
-                    ]
-                );
-            });
-        }
-
-        #[gpui::test]
-        async fn commands_are_never_glued_to_messages_sent_while_stopping(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            use_quick_stopping_claude(&store, cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:interrupt", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| {
-                    session.metadata().native_session_id.is_some()
-                })
-            });
-            session.update(cx, |session, cx| {
-                session.stop(cx);
-                session.send_message("/compact", cx);
-                session.send_message("scenario:happy", cx);
-                assert_eq!(
-                    session.prompt_after_stop.as_ref().map(|prompt| prompt.text.as_str()),
-                    Some("/compact")
-                );
-                let queued: Vec<&str> = session
-                    .queue()
-                    .iter()
-                    .map(|queued| queued.prompt.text.as_str())
-                    .collect();
-                assert_eq!(queued, ["scenario:happy"]);
-                assert!(!session.can_steer(&Prompt::from("/compact".to_string())));
-            });
-        }
-
-        fn use_quick_stopping_claude(store: &Entity<AgentStore>, cx: &mut TestAppContext) {
-            store.update(cx, |store, _| {
-                store.harnesses.insert(
-                    AgentKind::Claude,
-                    Arc::new(
-                        ClaudeHarness::new()
-                            .with_executable(fake_claude())
-                            .with_graces(Duration::from_millis(50), Duration::from_millis(50)),
-                    ),
-                );
-            });
-        }
-
-        #[gpui::test]
-        async fn message_sent_while_stopping_runs_after_the_stop(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            use_quick_stopping_claude(&store, cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:interrupt", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| {
-                    session.metadata().native_session_id.is_some()
-                })
-            });
-            session.update(cx, |session, cx| {
-                session.stop(cx);
-                session.send_message("scenario:happy", cx);
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.is_working())
-                    && last_reply(&session, cx) == "Hello"
-            });
-        }
-
-        #[gpui::test]
-        async fn deleting_a_running_chat_removes_its_files_for_good(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            use_quick_stopping_claude(&store, cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:interrupt", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| {
-                    session.metadata().native_session_id.is_some()
-                })
-            });
-            let id = session_id(&session, cx);
-            let metadata_file = metadata_path(directory.path(), &id);
-            run_until(cx, |_| metadata_file.exists());
-
-            store.update(cx, |store, cx| store.delete_session(&id, cx));
-            session.update(cx, |session, cx| {
-                session.apply_event(
-                    AgentEvent::ContextUsage {
-                        tokens: Some(1),
-                        window: Some(2),
-                    },
-                    cx,
-                );
-                session.send_message("scenario:happy", cx);
-            });
-            cx.executor().advance_clock(SAVE_DEBOUNCE * 2);
-            run_until(cx, |_| !metadata_file.exists());
-            cx.executor().advance_clock(SAVE_DEBOUNCE * 2);
-            cx.run_until_parked();
-            assert!(!metadata_file.exists());
-            assert!(!entries_path(directory.path(), &id).exists());
-            session.read_with(cx, |session, _| assert!(!session.is_working()));
-        }
-
-        #[gpui::test]
-        async fn claude_background_subagent_traffic_lands_in_its_transcript(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:wake", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| session.run.is_none() && !session.is_working())
-            });
-            session.read_with(cx, |session, cx| {
-                let subagent = session.subagent("toolu_agent").expect("subagent recorded");
-                assert_eq!(
-                    summarize(subagent.entries(), cx),
-                    ["assistant: sub working", "tool sub-t1: Completed"]
-                );
-                assert!(!summarize(session.entries(), cx).contains(&"assistant: sub working".into()));
-            });
-        }
-
-        #[gpui::test]
-        async fn messages_sent_while_working_steer_when_set_to(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            use_quick_stopping_claude(&store, cx);
-            update_chat_settings(cx, |content| {
-                content.while_working = Some(settings::AgentChatWhileWorking::Steer);
-            });
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| {
-                session.send_message("scenario:interrupt", cx)
-            });
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| session.run.is_some())
-            });
-            session.update(cx, |session, cx| session.send_message("change of plan", cx));
-            assert!(session.read_with(cx, |session, _| session.queue().is_empty()));
-            assert_eq!(
-                user_texts(&session, cx),
-                ["scenario:interrupt", "change of plan"]
+                    .any(|entry| matches!(entry, Entry::Notice { is_error: true, .. })),
+                "the failed attempt stays out of the chat: {summary:?}"
             );
-        }
-
-        #[gpui::test]
-        async fn messages_sent_while_working_queue_and_go_out_after_the_turn(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            use_quick_stopping_claude(&store, cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| session.send_message("scenario:interrupt", cx));
-            run_until(cx, |cx| session.read_with(cx, |session, _| session.run.is_some()));
-            session.update(cx, |session, cx| {
-                session.send_message("first queued", cx);
-                session.send_message("second queued", cx);
-                session.send_message("third queued", cx);
-            });
-            let ids: Vec<u64> = session.read_with(cx, |session, _| {
-                session.queue().iter().map(|queued| queued.id).collect()
-            });
-            assert_eq!(ids.len(), 3);
-            assert_eq!(user_texts(&session, cx), ["scenario:interrupt"]);
-            session.update(cx, |session, cx| {
-                session.move_queued(ids[2], 0, cx);
-                session.remove_queued(ids[1], cx);
-            });
-            let prompt = session
-                .update(cx, |session, cx| session.begin_queued_edit(ids[0], cx))
-                .expect("queued message");
-            session.update(cx, |session, cx| {
-                session.finish_queued_edit(
-                    ids[0],
-                    Some(Prompt::text(format!("{} edited", prompt.text))),
-                    cx,
-                )
-            });
-            let queued: Vec<String> = session.read_with(cx, |session, _| {
-                session.queue().iter().map(|queued| queued.prompt.text.clone()).collect()
-            });
-            assert_eq!(queued, ["third queued", "first queued edited"]);
-
-            session.update(cx, |session, cx| {
-                session.apply_event(
-                    AgentEvent::Done {
-                        status: DoneStatus::Completed,
-                        result: None,
-                        error: None,
-                        session_id: None,
-                    },
-                    cx,
-                );
-            });
             assert_eq!(
-                user_texts(&session, cx),
-                ["scenario:interrupt", "third queued"]
+                fork.metadata().native_session_id.as_deref(),
+                Some("sess-fallback")
             );
-            session.read_with(cx, |session, _| {
-                assert_eq!(session.queue().len(), 1);
-                assert!(session.is_working());
-            });
-        }
+            assert!(fork.metadata().fork_source.is_none());
+            assert!(fork.metadata().fork_context.is_none());
+        });
+    }
 
-        #[gpui::test]
-        async fn send_now_shows_the_message_and_queue_order_survives_idle(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            use_quick_stopping_claude(&store, cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| session.send_message("scenario:interrupt", cx));
-            run_until(cx, |cx| session.read_with(cx, |session, _| session.run.is_some()));
-            session.update(cx, |session, cx| session.send_message("scenario:happy", cx));
-            let id = session.read_with(cx, |session, _| session.queue()[0].id);
-            session.update(cx, |session, cx| session.send_queued_now(id, cx));
-            assert_eq!(
-                user_texts(&session, cx),
-                ["scenario:interrupt", "scenario:happy"]
-            );
-            run_until(cx, |cx| {
-                session.read_with(cx, |session, _| !session.is_working())
-                    && last_reply(&session, cx) == "Hello"
-            });
-
-            session.update(cx, |session, cx| {
-                session.enqueue(Prompt::text("older"), cx);
-                session.send_message("newer", cx);
-            });
-            assert_eq!(user_texts(&session, cx).last().map(String::as_str), Some("older"));
-            let queued: Vec<String> = session.read_with(cx, |session, _| {
-                session.queue().iter().map(|queued| queued.prompt.text.clone()).collect()
-            });
-            assert_eq!(queued, ["newer"]);
-        }
-
-        #[gpui::test]
-        async fn forks_copy_history_and_send_it_with_their_first_message(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let parent = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
-            run_until(cx, |cx| parent.read_with(cx, |session, _| !session.is_working()));
-            parent.update(cx, |session, cx| {
-                session.update_settings(
-                    |settings| settings.permission = PermissionMode::FullAccess,
-                    cx,
-                )
-            });
-            let parent_id = session_id(&parent, cx);
-
-            let fork = store
-                .update(cx, |store, cx| store.fork_session(&parent_id, false, cx))
-                .await
-                .expect("fork");
-            fork.read_with(cx, |fork, cx| {
-                let summary = summarize(fork.entries(), cx);
-                assert_eq!(summary.first().map(String::as_str), Some("user: scenario:happy"));
-                assert!(summary.last().is_some_and(|last| last.starts_with("notice: Forked from")));
-                let context = fork.metadata().fork_context.clone().expect("history");
-                assert!(context.contains("scenario:happy") && context.contains("Hello"));
-                assert_eq!(fork.metadata().parent_id.as_deref(), Some(parent_id.as_str()));
-                assert!(!fork.metadata().side_chat);
-                assert_eq!(fork.settings().permission, PermissionMode::FullAccess);
-            });
-
-            let side = store
-                .update(cx, |store, cx| store.fork_session(&parent_id, true, cx))
-                .await
-                .expect("side chat");
-            side.read_with(cx, |side, cx| {
-                assert_eq!(summarize(side.entries(), cx).len(), 1);
-                assert!(side.metadata().side_chat);
-                assert!(side.metadata().fork_context.is_some());
-            });
-            side.update(cx, |side, cx| side.send_message("scenario:happy", cx));
-            run_until(cx, |cx| side.read_with(cx, |session, _| !session.is_working()));
-            side.read_with(cx, |side, _| assert!(side.metadata().fork_context.is_none()));
-        }
-
-        async fn forked_from_finished_parent(
-            cx: &mut TestAppContext,
-        ) -> (tempfile::TempDir, Entity<AgentSession>) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let parent = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
-            run_until(cx, |cx| {
-                parent.read_with(cx, |session, _| !session.is_working())
-            });
-            let parent_id = session_id(&parent, cx);
-            let fork = store
-                .update(cx, |store, cx| store.fork_session(&parent_id, false, cx))
-                .await
-                .expect("fork");
-            fork.read_with(cx, |fork, _| {
-                assert_eq!(fork.metadata().fork_source.as_deref(), Some("sess-1"));
-                assert!(fork.metadata().fork_context.is_some());
-            });
-            (directory, fork)
-        }
-
-        #[gpui::test]
-        async fn forks_continue_a_copy_of_the_agents_own_session(cx: &mut TestAppContext) {
-            let (_directory, fork) = forked_from_finished_parent(cx).await;
-            fork.update(cx, |fork, cx| fork.send_message("scenario:fork", cx));
-            run_until(cx, |cx| {
-                fork.read_with(cx, |session, _| !session.is_working())
-            });
-            fork.read_with(cx, |fork, cx| {
-                assert!(!fork.run_failed(), "{:?}", summarize(fork.entries(), cx));
-                assert_eq!(
-                    fork.metadata().native_session_id.as_deref(),
-                    Some("sess-forked")
-                );
-                assert!(fork.metadata().fork_source.is_none());
-                assert!(fork.metadata().fork_context.is_none());
-            });
-        }
-
-        #[gpui::test]
-        async fn a_fork_drops_the_native_copy_once_its_parent_moves_on(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let parent = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
-            run_until(cx, |cx| {
-                parent.read_with(cx, |session, _| !session.is_working())
-            });
-            let parent_id = session_id(&parent, cx);
-            let fork = store
-                .update(cx, |store, cx| store.fork_session(&parent_id, false, cx))
-                .await
-                .expect("fork");
-            fork.read_with(cx, |fork, _| assert!(fork.metadata().fork_source.is_some()));
-
-            parent.update(cx, |session, cx| session.send_message("scenario:happy", cx));
-            run_until(cx, |cx| {
-                parent.read_with(cx, |session, _| !session.is_working())
-            });
-            fork.read_with(cx, |fork, _| {
-                assert!(fork.metadata().fork_source.is_none());
-                assert!(
-                    fork.metadata().fork_context.is_some(),
-                    "the fork keeps its own history"
-                );
-            });
-        }
-
-        #[gpui::test]
-        async fn a_failed_native_fork_falls_back_to_sending_the_history(cx: &mut TestAppContext) {
-            let (_directory, fork) = forked_from_finished_parent(cx).await;
-            fork.update(cx, |fork, cx| {
-                fork.send_message("scenario:fork-fallback", cx)
-            });
-            run_until(cx, |cx| {
-                fork.read_with(cx, |session, _| !session.is_working())
-            });
-            fork.read_with(cx, |fork, cx| {
-                let summary = summarize(fork.entries(), cx);
-                assert!(!fork.run_failed(), "{summary:?}");
-                assert!(
-                    !fork
-                        .entries()
-                        .iter()
-                        .any(|entry| matches!(entry, Entry::Notice { is_error: true, .. })),
-                    "the failed attempt stays out of the chat: {summary:?}"
-                );
-                assert_eq!(
-                    fork.metadata().native_session_id.as_deref(),
-                    Some("sess-fallback")
-                );
-                assert!(fork.metadata().fork_source.is_none());
-                assert!(fork.metadata().fork_context.is_none());
-            });
-        }
-
-        #[gpui::test]
-        async fn finished_runs_stay_unseen_until_viewed(cx: &mut TestAppContext) {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let store = new_store(directory.path(), cx);
-            let session = store.update(cx, |store, cx| {
-                store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
-            });
-            session.update(cx, |session, cx| session.send_message("scenario:happy", cx));
-            run_until(cx, |cx| session.read_with(cx, |session, _| !session.is_working()));
-            session.read_with(cx, |session, _| {
-                assert_eq!(session.metadata().outcome, Some(ChatOutcome::Completed));
-                assert!(session.metadata().unseen);
-            });
-            session.update(cx, |session, cx| session.mark_seen(cx));
-            session.read_with(cx, |session, _| assert!(!session.metadata().unseen));
-        }
+    #[gpui::test]
+    async fn finished_runs_stay_unseen_until_viewed(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| session.send_message("scenario:happy", cx));
+        run_until(cx, |cx| session.read_with(cx, |session, _| !session.is_working()));
+        session.read_with(cx, |session, _| {
+            assert_eq!(session.metadata().outcome, Some(ChatOutcome::Completed));
+            assert!(session.metadata().unseen);
+        });
+        session.update(cx, |session, cx| session.mark_seen(cx));
+        session.read_with(cx, |session, _| assert!(!session.metadata().unseen));
     }
 
     fn session_id(session: &Entity<AgentSession>, cx: &mut TestAppContext) -> String {

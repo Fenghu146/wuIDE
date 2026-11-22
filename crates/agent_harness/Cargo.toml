@@ -40,5 +40,6 @@ libc.workspace = true
 security-framework = "3.5"
 
 [dev-dependencies]
+agent_fixtures.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "test-util"] }

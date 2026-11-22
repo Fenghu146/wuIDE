@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/activity_indicator",
     "crates/agent_chat",
+    "crates/agent_fixtures",
     "crates/agent_harness",
     "crates/askpass",
     "crates/assets",
@@ -204,6 +205,7 @@ edition = "2024"
 
 activity_indicator = { path = "crates/activity_indicator" }
 agent_chat = { path = "crates/agent_chat" }
+agent_fixtures = { path = "crates/agent_fixtures" }
 agent_harness = { path = "crates/agent_harness" }
 askpass = { path = "crates/askpass" }
 assets = { path = "crates/assets" }

@@ -1,6 +1,3 @@
-
-#![cfg(unix)]
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,26 +13,23 @@ use agent_harness::{
     CancellationToken, ClaudeHarness, Harness, HarnessError, RunControls, SteerMessage,
 };
 
-fn fixture_path() -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn fake_claude() -> PathBuf {
+    agent_fixtures::fake_claude().to_path_buf()
+}
+
+/// A config directory beside the other fixtures, so the fake never reads a real
+/// `~/.claude` and every test starts with no history.
+fn claude_config() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("fake-claude.sh");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(error) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-        {
-            eprintln!("could not mark fake-claude.sh executable: {error}");
-        }
-    }
-    path
+        .join("claude-config")
 }
 
 fn harness() -> ClaudeHarness {
     ClaudeHarness::new()
-        .with_executable(fixture_path())
-        .with_config_dir(fixture_path().with_file_name("claude-config"))
+        .with_executable(fake_claude())
+        .with_config_dir(claude_config())
 }
 
 fn request(prompt: &str) -> RunRequest {
@@ -110,7 +104,7 @@ async fn a_dropped_prompt_resumes_the_chat_just_before_it() {
     ];
     std::fs::write(project.join("sess-drop.jsonl"), records.join("\n")).expect("chat file");
     let harness = ClaudeHarness::new()
-        .with_executable(fixture_path())
+        .with_executable(fake_claude())
         .with_config_dir(config.path());
     let reply = |events: &[AgentEvent]| -> String {
         events
@@ -504,7 +498,7 @@ async fn image_attachments_ride_the_prompt_and_steers_as_image_blocks() {
 #[tokio::test]
 async fn interrupt_escalates_to_sigterm_and_ends_with_interrupted_done() {
     let harness = ClaudeHarness::new()
-        .with_executable(fixture_path())
+        .with_executable(fake_claude())
         .with_graces(Duration::from_millis(100), Duration::from_millis(500));
     let (controls, _steer, token) = controls("A");
     let mut stream = harness
@@ -591,28 +585,10 @@ async fn captured_live_text_deltas_stream_one_by_one() {
         .join("claude")
         .join("live-2.1.291-text-streaming.jsonl");
     let script = std::fs::read_to_string(&fixture).expect("fixture readable");
-    let dir = std::env::temp_dir().join(format!("claude-stream-replay-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
-    let frames = dir.join("frames.jsonl");
-    std::fs::write(&frames, &script).expect("frames written");
-    let cli = dir.join("replay.sh");
-    std::fs::write(
-        &cli,
-        format!(
-            "#!/bin/sh\nread -r _first || exit 1\ncat '{}'\n",
-            frames.display()
-        ),
-    )
-    .expect("replayer written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
 
-    let harness = ClaudeHarness::new().with_executable(&cli);
+    let harness = ClaudeHarness::new().with_executable(fake_claude());
     let (controls, _steer, _token) = controls("A");
-    let events = run_to_end(&harness, request("replay"), controls).await;
+    let events = run_to_end(&harness, request("scenario:replay-streaming"), controls).await;
     let text_deltas = events
         .iter()
         .filter(|event| matches!(event, AgentEvent::TextDelta { .. }))
@@ -624,34 +600,9 @@ async fn captured_live_text_deltas_stream_one_by_one() {
 
 #[tokio::test]
 async fn captured_live_background_subagent_frames_replay_correctly() {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("claude")
-        .join("live-2.1.228-background-subagent.jsonl");
-    let script = std::fs::read_to_string(&fixture).expect("fixture readable");
-    let dir = std::env::temp_dir().join(format!("claude-replay-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
-    let frames = dir.join("frames.jsonl");
-    std::fs::write(&frames, &script).expect("frames written");
-    let cli = dir.join("replay.sh");
-    std::fs::write(
-        &cli,
-        format!(
-            "#!/bin/sh\nread -r _first || exit 1\ncat '{}'\n",
-            frames.display()
-        ),
-    )
-    .expect("replayer written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    let harness = ClaudeHarness::new().with_executable(&cli);
+    let harness = ClaudeHarness::new().with_executable(fake_claude());
     let (controls, _steer, _token) = controls("A");
-    let events = run_to_end(&harness, request("replay"), controls).await;
+    let events = run_to_end(&harness, request("scenario:replay-background"), controls).await;
 
     assert_eq!(
         events
@@ -719,10 +670,6 @@ async fn captured_live_background_subagent_frames_replay_correctly() {
         )),
         "subagent Bash call arrives tagged: {events:?}"
     );
-
-    if let Err(error) = std::fs::remove_dir_all(&dir) {
-        eprintln!("could not remove {}: {error}", dir.display());
-    }
 }
 
 #[tokio::test]
