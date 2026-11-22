@@ -28,7 +28,7 @@ const MAX_SYMBOLS_PER_FILE = 40;
 const MAX_OMITTED_PATHS = 20;
 const MAX_OMITTED_PATHS_SMALL = 10;
 // Mirrors `repo_wiki::symbol_map::MAX_FILES`: the file count one build indexes.
-const MAX_FILES = 900;
+const MAX_FILES = 3000;
 // Mirrors `repo_wiki::symbol_map::VENDORED_DIRS`: used only to explain why a
 // path is absent from the snapshot, since the IDE excludes it while scanning.
 const VENDORED_DIRS = new Set([

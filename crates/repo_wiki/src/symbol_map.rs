@@ -23,10 +23,17 @@ use path::rel_path::RelPath;
 use project::Project;
 use streaming_iterator::StreamingIterator as _;
 
-/// Upper bound on how many files one build parses. Parsing and walking a file
-/// costs single-digit milliseconds, so this keeps a build in the low seconds
-/// on the background thread.
-pub const MAX_FILES: usize = 900;
+/// Upper bound on how many files one build parses. A file costs roughly ten
+/// milliseconds to read, parse and walk for identifiers, so this cap is worth
+/// about thirty seconds of background work; the map is built once and cached.
+///
+/// This is one of two gates on a build: it stops a monorepo with hundreds of
+/// thousands of files from making the map enormous, while [`MAX_TOTAL_BYTES`]
+/// bounds the work in bytes. Whichever runs out first wins, and the coverage
+/// line says which one did. 3000 is above the number of indexable files in this
+/// repository (~2,500), so the map of wuIDE itself is complete; only a larger
+/// repository sees this cap.
+pub const MAX_FILES: usize = 3000;
 /// Files larger than this are skipped: they are almost always generated or
 /// vendored data, and parsing them dominates the runtime.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024;
@@ -35,8 +42,15 @@ const MAX_IDENTIFIERS_PER_FILE: usize = 4_000;
 /// Cap on symbols kept per file.
 const MAX_SYMBOLS_PER_FILE: usize = 200;
 /// Cap on the total bytes parsed in one build, so the work stays bounded even
-/// when a repository has many medium-sized files.
-const MAX_TOTAL_BYTES: u64 = 24 * 1024 * 1024;
+/// when a repository has many medium-sized files. It is the byte-side gate
+/// paired with [`MAX_FILES`]: a repository can pass one and hit the other, and
+/// the coverage line names the one that ran out.
+///
+/// 24 MiB was too tight once the file limit rose: this repository's indexable
+/// set is about 32 MiB, so the byte gate alone dropped 357 files, 213 of them
+/// Rust. 64 MiB holds the whole set, leaving the file count as the only gate
+/// for repositories up to a few thousand files.
+const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 /// Directory names whose contents are vendored or generated rather than the
 /// project's own code.
 ///
@@ -344,7 +358,8 @@ impl SymbolMap {
     /// Honest coverage for the whole build: how many candidates became map
     /// entries, why the rest did not, and what never became a candidate at all.
     ///
-    /// A page that lists 40 files out of 900 would otherwise look complete.
+    /// A page that lists 40 files out of thousands would otherwise look
+    /// complete.
     fn coverage_notes(&self) -> Vec<String> {
         let stats = &self.stats;
         let mut notes = Vec::new();
@@ -702,19 +717,31 @@ pub struct SourceFile {
 ///
 /// Candidates are bucketed by their first two path components (`crates/gpui`
 /// and `crates/editor` are different buckets), so a monorepo whose code all
-/// lives under `crates/` still gets every crate represented first. Buckets are
-/// filled round-robin in path order: taking the largest files instead rewarded
-/// whatever was bundled, and taking the first N paths would only ever describe
-/// the alphabetically-first corner of a repository.
+/// lives under `crates/` still gets every crate represented.
 ///
-/// A file that does not fit the remaining byte budget is skipped, not fatal:
-/// scanning continues so a later, smaller file can still make it. Every
-/// candidate ends up in exactly one category, which is what makes the coverage
-/// line honest.
+/// The byte budget is split evenly between the buckets instead of being spent
+/// in the order the caller happened to hand files over: the panel walks the
+/// heaviest directory first, another caller may walk in path order, and the map
+/// must not depend on that. Each round offers every bucket with work left an
+/// equal share of what remains, so a bucket that finishes early or cannot fill
+/// its share returns it to the others. Whatever the shares cannot place is then
+/// offered to every remaining file in path order, skipping the ones that no
+/// longer fit, so a small file behind a too-large one still gets in.
+///
+/// Every candidate ends up in exactly one category, which is what makes the
+/// coverage line honest.
 fn select(
-    sources: Vec<SourceFile>,
+    mut sources: Vec<SourceFile>,
     is_source: impl Fn(&SourceFile) -> bool,
 ) -> (Vec<SourceFile>, BuildStats) {
+    // The caller's order is an implementation detail of its tree walk. Sorting
+    // here makes the same worktree produce the same map for every caller.
+    sources.sort_by(|left, right| {
+        left.rel
+            .cmp(&right.rel)
+            .then_with(|| left.abs_path.cmp(&right.abs_path))
+    });
+
     let mut stats = BuildStats::default();
     let mut buckets: Vec<(String, Vec<SourceFile>)> = Vec::new();
     let mut bucket_index: HashMap<String, usize> = HashMap::new();
@@ -745,40 +772,78 @@ fn select(
         buckets[bucket].1.push(source);
     }
 
-    for (_, bucket) in &mut buckets {
-        bucket.sort_by(|left, right| {
-            left.rel
-                .as_std_path()
-                .cmp(right.rel.as_std_path())
-                .then_with(|| left.abs_path.cmp(&right.abs_path))
-        });
-    }
-
-    let mut chosen = Vec::new();
+    let mut chosen = Vec::with_capacity(buckets.iter().map(|(_, files)| files.len()).sum());
+    let mut taken = vec![0usize; buckets.len()];
+    let mut picked = vec![0usize; buckets.len()];
     let mut total_bytes = 0u64;
-    let mut round = 0usize;
     loop {
-        let mut visited = false;
-        for (_, bucket) in &buckets {
-            let Some(source) = bucket.get(round) else {
-                continue;
-            };
-            visited = true;
-            if chosen.len() >= MAX_FILES {
-                stats.file_limit += 1;
-                continue;
-            }
-            if total_bytes.saturating_add(source.size) > MAX_TOTAL_BYTES {
-                stats.over_budget += 1;
-                continue;
-            }
-            total_bytes += source.size;
-            chosen.push(source.clone());
-        }
-        if !visited {
+        let pending: Vec<usize> = (0..buckets.len())
+            .filter(|index| taken[*index] < buckets[*index].1.len())
+            .collect();
+        if pending.is_empty() || chosen.len() >= MAX_FILES {
             break;
         }
-        round += 1;
+        let remaining = MAX_TOTAL_BYTES.saturating_sub(total_bytes);
+        if remaining == 0 {
+            break;
+        }
+        let share = remaining / pending.len() as u64;
+        let mut progressed = false;
+        for index in pending {
+            let mut budget = share;
+            let (_, bucket) = &buckets[index];
+            while taken[index] < bucket.len() && chosen.len() < MAX_FILES {
+                let source = &bucket[taken[index]];
+                if source.size > budget {
+                    break;
+                }
+                budget -= source.size;
+                total_bytes += source.size;
+                chosen.push(source.clone());
+                taken[index] += 1;
+                picked[index] += 1;
+                progressed = true;
+            }
+        }
+        if progressed {
+            continue;
+        }
+        break;
+    }
+
+    // Spend what the shares could not. The budget only shrinks from here, so a
+    // file that does not fit now can never be taken and is skipped for good;
+    // this is what lets a small file behind a too-large one still get in.
+    loop {
+        let mut added = false;
+        for index in 0..buckets.len() {
+            let bucket = &buckets[index].1;
+            while taken[index] < bucket.len() && chosen.len() < MAX_FILES {
+                let source = &bucket[taken[index]];
+                if source.size > MAX_TOTAL_BYTES.saturating_sub(total_bytes) {
+                    taken[index] += 1;
+                    continue;
+                }
+                total_bytes += source.size;
+                chosen.push(source.clone());
+                taken[index] += 1;
+                picked[index] += 1;
+                added = true;
+            }
+        }
+        if !added || chosen.len() >= MAX_FILES {
+            break;
+        }
+    }
+
+    let file_limit_reached = chosen.len() >= MAX_FILES;
+    for (index, (_, bucket)) in buckets.iter().enumerate() {
+        let skipped = bucket.len() - picked[index];
+        if file_limit_reached {
+            stats.file_limit += skipped;
+        } else {
+            stats.over_budget += skipped;
+        }
     }
 
     (chosen, stats)
@@ -2137,30 +2202,11 @@ mod tests {
     }
 
     #[test]
-    fn select_covers_every_bucket_before_going_deeper() {
-        // `b` has one file and `a` has three: round-robin must still take
-        // `b/x.rs` before `a`'s second helping, and `a` keeps path order.
-        let (kept, _) = select(
-            vec![
-                source("a/small.rs", 10),
-                source("a/big.rs", 90),
-                source("a/mid.rs", 50),
-                source("b/x.rs", 20),
-            ],
-            |_| true,
-        );
-        let names: Vec<String> = kept
-            .iter()
-            .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
-            .collect();
-        assert_eq!(names, ["a/big.rs", "b/x.rs", "a/mid.rs", "a/small.rs"]);
-    }
-
-    #[test]
     fn select_buckets_by_the_first_two_path_components() {
         // A monorepo keeps every crate under `crates/`: bucketing by the first
-        // component alone would make one giant bucket, so `crates/gpui` must
-        // get a file in before `crates/repo_wiki` gets its second.
+        // component alone would make one giant bucket, so each crate is a
+        // bucket of its own. The bucket order follows the sorted paths, not the
+        // order the caller walked them in.
         let (kept, _) = select(
             vec![
                 source("crates/gpui/a.rs", 10),
@@ -2178,13 +2224,103 @@ mod tests {
         assert_eq!(
             names,
             [
-                "crates/gpui/a.rs",
-                "crates/repo_wiki/c.rs",
-                "src/root_file.rs",
                 "ROOT.rs",
-                "crates/gpui/b.rs"
+                "crates/gpui/a.rs",
+                "crates/gpui/b.rs",
+                "crates/repo_wiki/c.rs",
+                "src/root_file.rs"
             ]
         );
+    }
+
+    #[test]
+    fn select_shares_the_byte_budget_between_buckets() {
+        // Both buckets hold more files at the per-file cap than the budget can
+        // take. A first-come scan would empty the first bucket and then start
+        // the second; the quota gives each bucket the same number.
+        let per_bucket = 200u32;
+        let mut sources = Vec::new();
+        for bucket in ["crates/first", "crates/second"] {
+            for index in 0..per_bucket {
+                sources.push(source(&format!("{bucket}/f{index:03}.rs"), MAX_FILE_BYTES));
+            }
+        }
+        let (kept, stats) = select(sources, |_| true);
+
+        let count = |prefix: &str| {
+            kept.iter()
+                .filter(|file| file.rel.display(path::PathStyle::Unix).starts_with(prefix))
+                .count()
+        };
+        let expected = (MAX_TOTAL_BYTES / MAX_FILE_BYTES) as usize / 2;
+        assert_eq!(count("crates/first/"), count("crates/second/"));
+        assert_eq!(count("crates/first/"), expected);
+        assert_eq!(stats.over_budget, 2 * per_bucket as usize - kept.len());
+    }
+
+    #[test]
+    fn a_demanding_bucket_cannot_crowd_out_a_small_one() {
+        // The heavy bucket wants more files at the per-file cap than the budget
+        // can take while the small bucket only wants ten tiny files. The tiny
+        // bucket is offered its share before the heavy bucket can spend the
+        // budget, so all ten fit.
+        let mut sources = Vec::new();
+        for index in 0..240u32 {
+            sources.push(source(&format!("huge/f{index:03}.rs"), MAX_FILE_BYTES));
+        }
+        for index in 0..10u32 {
+            sources.push(source(&format!("tiny/f{index:02}.rs"), 1_000));
+        }
+        let (kept, stats) = select(sources, |_| true);
+
+        let count = |prefix: &str| {
+            kept.iter()
+                .filter(|file| file.rel.display(path::PathStyle::Unix).starts_with(prefix))
+                .count()
+        };
+        assert_eq!(count("tiny/"), 10);
+        assert_eq!(stats.over_budget, 240 - count("huge/"));
+    }
+
+    #[test]
+    fn select_is_deterministic_for_any_input_order() {
+        // The caller's walk order must not decide which files make the map. The
+        // sizes are mixed and exceed the budget, so quotas and the tail really
+        // matter here rather than every file simply fitting.
+        let mut sources = Vec::new();
+        for (bucket, count) in [("crates/alpha", 250u32), ("crates/beta", 250), ("docs", 60)] {
+            for index in 0..count {
+                let size = 1_000 + (u64::from(index) * 7_919) % MAX_FILE_BYTES;
+                sources.push(source(&format!("{bucket}/file{index:03}.rs"), size));
+            }
+        }
+        let baseline: Vec<String> = select(sources.clone(), |_| true)
+            .0
+            .iter()
+            .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
+            .collect();
+        assert!(
+            baseline.len() < sources.len(),
+            "the fixture must hit the budget, or this proves nothing"
+        );
+
+        for seed in 1..=32u64 {
+            let mut shuffled = sources.clone();
+            let mut state = seed;
+            for index in (1..shuffled.len()).rev() {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let swap = (state % (index as u64 + 1)) as usize;
+                shuffled.swap(index, swap);
+            }
+            let names: Vec<String> = select(shuffled, |_| true)
+                .0
+                .iter()
+                .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
+                .collect();
+            assert_eq!(names, baseline, "seed {seed} changed the selection");
+        }
     }
 
     #[test]
@@ -2230,42 +2366,40 @@ mod tests {
 
     #[test]
     fn select_skips_a_file_that_does_not_fit_and_keeps_scanning() {
-        // One bucket, in path order: 110 files of 250 kB fill the 24 MiB budget
-        // after 100 of them, so the next ten are skipped. The small file after
-        // them still fits, which a `break` on the budget would have lost.
-        let mut sources: Vec<SourceFile> = (0..110)
+        // One bucket, in path order: the budget runs out before the last of the
+        // 250 kB files, so they are skipped. The small file behind them still
+        // fits, which a `break` on the budget would have lost.
+        let fitting = (MAX_TOTAL_BYTES / 250_000) as usize;
+        let mut sources: Vec<SourceFile> = (0..fitting + 32)
             .map(|index| source(&format!("bulk/f{index:03}.rs"), 250_000))
             .collect();
         sources.push(source("bulk/z_small.rs", 1_000));
         let (kept, stats) = select(sources, |_| true);
 
-        assert_eq!(kept.len(), 101);
+        assert_eq!(kept.len(), fitting + 1);
         assert_eq!(
             kept.last().unwrap().rel.display(path::PathStyle::Unix),
             "bulk/z_small.rs"
         );
-        assert_eq!(stats.over_budget, 10);
-        assert_eq!(stats.considered, 111);
+        assert_eq!(stats.over_budget, 32);
+        assert_eq!(stats.considered, fitting + 33);
     }
 
     #[test]
     fn select_stops_at_the_total_byte_budget() {
         // Many files at the per-file cap reach the total budget before the
         // file count cap does.
-        let sources = (0..200u32)
-            .map(|index| source(&format!("f{index}.rs"), MAX_FILE_BYTES))
+        let sources = (0..400u32)
+            .map(|index| source(&format!("f{index:03}.rs"), MAX_FILE_BYTES))
             .collect::<Vec<_>>();
         let (kept, stats) = select(sources, |_| true);
 
         let total: u64 = kept.iter().map(|file| file.size).sum();
         assert!(total <= MAX_TOTAL_BYTES, "total was {total}");
-        assert!(
-            kept.len() < 200,
-            "the byte budget should have stopped the scan"
-        );
+        assert_eq!(kept.len(), (MAX_TOTAL_BYTES / MAX_FILE_BYTES) as usize);
         assert_eq!(stats.too_large, 0);
-        assert_eq!(stats.over_budget, 200 - kept.len());
-        assert_eq!(stats.considered, 200);
+        assert_eq!(stats.over_budget, 400 - kept.len());
+        assert_eq!(stats.considered, 400);
     }
 
     #[test]
@@ -2566,7 +2700,7 @@ mod tests {
         assert!(
             text.contains(
                 "Indexed 812 / 3368 candidate files (1310 unsupported language, 60 over 256 KiB, \
-                 98 over the byte budget, 1086 beyond the 900-file limit, 2 unreadable)."
+                 98 over the byte budget, 1086 beyond the 3000-file limit, 2 unreadable)."
             ),
             "{text}"
         );
