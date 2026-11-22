@@ -11,8 +11,13 @@ pub use proto::*;
 pub enum HarnessError {
     #[error("{}", i18n::t!("harness binary not found: {detail}", detail = .0))]
     NotInstalled(String),
-    #[error("{}", missing_agent_message(*.0))]
-    AgentMissing(HarnessId),
+    #[error("{}", missing_agent_message(*agent, searched))]
+    AgentMissing {
+        agent: HarnessId,
+        /// Where the lookup looked, written out for the user. A bundled agent
+        /// that was copied out of its release has no obvious home otherwise.
+        searched: String,
+    },
     #[error("{}", i18n::t!("The agent runtime is incomplete: {detail}. Reinstall the editor, or in a source checkout run `npm install` in `crates/wu/resources/agents`.", detail = .0))]
     AgentIncomplete(String),
     #[error("{}", i18n::t!("harness protocol error: {detail}", detail = translated_detail(.0)))]
@@ -23,8 +28,8 @@ pub enum HarnessError {
     Io(#[from] std::io::Error),
 }
 
-fn missing_agent_message(agent: HarnessId) -> i18n::SharedString {
-    match agent {
+fn missing_agent_message(agent: HarnessId, searched: &str) -> i18n::SharedString {
+    let message = match agent {
         HarnessId::ClaudeCode => i18n::t!(
             "Claude Code isn't installed. Install it, or use OpenCode to connect your own API or a local model."
         ),
@@ -35,16 +40,26 @@ fn missing_agent_message(agent: HarnessId) -> i18n::SharedString {
         HarnessId::Dsh => i18n::t!(
             "The DeepSeek agent (dsh-acp) isn't available. Bundle it or install it and try again."
         ),
-        HarnessId::Pi => {
-            i18n::t!("The Pi agent (pi-acp) isn't available. Install it and try again.")
-        }
+        HarnessId::Pi => i18n::t!(
+            "The Pi agent (pi-acp) isn't available. Put the bundled `agents` folder beside the IDE executable, or set WU_AGENT_BIN_DIR."
+        ),
+    };
+    if searched.trim().is_empty() {
+        return message;
     }
+    let searched = i18n::t!("Searched: {paths}", paths = searched);
+    format!("{message}\n{searched}").into()
 }
 
 impl HarnessError {
     pub(crate) fn agent_missing(agent: HarnessId, searched: &str) -> Self {
-        log::info!("{agent:?} executable not found: {searched}");
-        Self::AgentMissing(agent)
+        let summary = searched.lines().next().unwrap_or_default();
+        log::info!("{agent:?} executable not found: {summary}");
+        log::debug!("{agent:?} searched: {searched}");
+        Self::AgentMissing {
+            agent,
+            searched: searched.to_owned(),
+        }
     }
 }
 
@@ -100,6 +115,12 @@ pub trait Harness: Send + Sync {
         &[]
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
+    /// Models for a session that works in `cwd`. An agent whose runtime can come
+    /// from the project itself (a checkout carries Pi's bundled Node and
+    /// `pi-acp`) needs the folder to find it; the rest ignore it.
+    async fn models_in(&self, _cwd: &std::path::Path) -> Result<Vec<Model>, HarnessError> {
+        self.models().await
+    }
     /// Whether `models()` reads a config file that the user (or another app)
     /// edits while the app runs. Cheap refreshes are then worth doing when the
     /// picker opens, instead of waiting for a restart.

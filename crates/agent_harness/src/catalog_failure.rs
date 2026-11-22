@@ -36,7 +36,7 @@ impl CatalogFailure {
         match error {
             HarnessError::Discovery(error) => return error.code,
             HarnessError::NotInstalled(_)
-            | HarnessError::AgentMissing(_)
+            | HarnessError::AgentMissing { .. }
             | HarnessError::AgentIncomplete(_) => {
                 return CatalogFailureCode::MissingExecutable;
             }
