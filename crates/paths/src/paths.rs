@@ -179,30 +179,54 @@ pub fn data_dir() -> &'static PathBuf {
     CURRENT_DATA_DIR.get_or_init(|| {
         if let Some(custom_dir) = CUSTOM_DATA_DIR.get() {
             custom_dir.clone()
-        } else if cfg!(target_os = "macos") {
-            home_dir()
-                .join("Library/Application Support")
-                .join(APP_NAME)
-        } else if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-            if let Ok(flatpak_xdg_data) = std::env::var("FLATPAK_XDG_DATA_HOME") {
-                flatpak_xdg_data.into()
-            } else {
-                dirs::data_local_dir().expect("failed to determine XDG_DATA_HOME directory")
-            }
-            .join(APP_NAME_LOWERCASE)
-        } else if cfg!(target_os = "windows") {
-            dirs::data_local_dir()
-                .expect("failed to determine LocalAppData directory")
-                .join(APP_NAME)
         } else {
-            config_dir().clone() // Fallback
+            default_data_dir()
         }
     })
 }
 
+/// The platform data directory used when `--user-data-dir` was not given.
+///
+/// Kept separate from [`data_dir`] so the default can be inspected without
+/// fixing the process-wide choice made by the first call.
+fn default_data_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home_dir()
+            .join("Library/Application Support")
+            .join(APP_NAME)
+    } else if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        if let Ok(flatpak_xdg_data) = std::env::var("FLATPAK_XDG_DATA_HOME") {
+            flatpak_xdg_data.into()
+        } else {
+            dirs::data_local_dir().expect("failed to determine XDG_DATA_HOME directory")
+        }
+        .join(APP_NAME_LOWERCASE)
+    } else if cfg!(target_os = "windows") {
+        dirs::data_local_dir()
+            .expect("failed to determine LocalAppData directory")
+            .join(APP_NAME)
+    } else {
+        config_dir().clone() // Fallback
+    }
+}
+
 /// Directory holding each agent runtime's isolated home.
+///
+/// This is the one place that decides where agents keep their state, and every
+/// agent-facing path below hangs off it. `agent_harness` passes this directory
+/// to the agents themselves, so it must describe the same location the editor
+/// writes to, including under `--user-data-dir`.
+///
+/// `WU_AGENT_DATA_DIR` overrides it for users who keep agent state elsewhere.
 pub fn agents_data_dir() -> PathBuf {
-    data_dir().join("agents")
+    agents_data_dir_for(data_dir())
+}
+
+fn agents_data_dir_for(data_dir: &Path) -> PathBuf {
+    if let Some(dir) = std::env::var_os("WU_AGENT_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
+    data_dir.join("agents")
 }
 
 /// The isolated Pi agent directory, which Wu passes to Pi as
@@ -912,5 +936,47 @@ mod tests {
         std::fs::write(dir.path().join("file"), "").unwrap();
         assert!(directory_has_entries(dir.path()));
         assert!(!directory_has_entries(&dir.path().join("missing")));
+    }
+
+    #[test]
+    fn a_user_data_dir_override_moves_every_agent_path_with_it() {
+        // The override has to be installed before anything asks for `data_dir`,
+        // which caches its answer for the whole process, so no other test in
+        // this binary may call it.
+        let profile = tempfile::tempdir().unwrap();
+        let custom_dir = profile.path().join("profile");
+        let custom = set_custom_data_dir(custom_dir.to_str().unwrap()).expect("custom data dir");
+        let agent_root = agents_data_dir();
+
+        assert_eq!(agent_root, custom.join("agents"));
+        assert_eq!(
+            pi_agent_dir(),
+            agent_root.join("pi-home").join(".pi").join("agent")
+        );
+        assert!(
+            repo_map_snapshots_dir().starts_with(&agent_root),
+            "repo map snapshots must land under the agent root Pi is pointed at"
+        );
+        assert!(
+            diagnostics_snapshots_dir().starts_with(&agent_root),
+            "diagnostics snapshots must land under the agent root Pi is pointed at"
+        );
+    }
+
+    #[test]
+    fn without_an_override_the_agent_root_sits_under_local_app_data() {
+        // `data_dir` caches the override process-wide, so check the default it
+        // falls back to instead of calling `data_dir` in a second test.
+        let expected = default_data_dir().join("agents");
+        assert_eq!(agents_data_dir_for(&default_data_dir()), expected);
+        #[cfg(windows)]
+        assert_eq!(
+            expected,
+            PathBuf::from(
+                std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA is set on Windows")
+            )
+            .join(APP_NAME)
+            .join("agents")
+        );
     }
 }
