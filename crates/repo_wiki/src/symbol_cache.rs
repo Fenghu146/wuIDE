@@ -5,9 +5,9 @@
 //! twenty seconds, yet two builds in a row almost always see the same bytes.
 //! This module keeps what a build learned in two places:
 //!
-//! * On disk, one document per project holding every parsed file's symbols,
-//!   mentions and includes, keyed by the file's path, size and modification
-//!   time. A later build re-parses only the files whose stat no longer matches.
+//! * On disk, one document per project holding every parsed file's symbols and
+//!   mentions, keyed by the file's path, size and modification time. A later
+//!   build re-parses only the files whose stat no longer matches.
 //! * In memory, the last map built for a project, so the panel and `/repo-map`
 //!   share one build instead of racing two.
 //!

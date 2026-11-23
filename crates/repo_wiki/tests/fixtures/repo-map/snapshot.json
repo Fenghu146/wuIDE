@@ -1,0 +1,1582 @@
+{
+  "version": 2,
+  "project": "/work/project",
+  "generated_at": "2026-02-03T04:05:06Z",
+  "order": "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule.",
+  "max_chars": 48000,
+  "stats": {
+    "considered": 60,
+    "parsed": 52,
+    "too_large": 2,
+    "unsupported": 5,
+    "unreadable": 1,
+    "over_budget": 0,
+    "file_limit": 0,
+    "vendored_skipped": 3
+  },
+  "files": [
+    {
+      "path": "crates/gpui/src/gpui.rs",
+      "rank": 0.5,
+      "size": 1000,
+      "lines": 1820,
+      "in": 128,
+      "out": 31,
+      "symbols": [
+        {
+          "name": "App",
+          "line": 40,
+          "kind": "struct",
+          "owner": "App",
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "run",
+          "line": 88,
+          "kind": "function",
+          "owner": "App",
+          "depth": 1,
+          "access": "public",
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "cx",
+          "line": 96,
+          "kind": "field",
+          "owner": "App",
+          "depth": 1,
+          "access": "public",
+          "signature": ": &mut Context<App>",
+          "local": false
+        },
+        {
+          "name": "background",
+          "line": 97,
+          "kind": "field",
+          "owner": "App",
+          "depth": 1,
+          "access": "public",
+          "signature": ": Arc<Background>",
+          "local": false
+        },
+        {
+          "name": "foreground",
+          "line": 98,
+          "kind": "field",
+          "owner": "App",
+          "depth": 1,
+          "access": "public",
+          "signature": ": Arc<Foreground>",
+          "local": false
+        },
+        {
+          "name": "quit",
+          "line": 120,
+          "kind": "function",
+          "owner": "App",
+          "depth": 1,
+          "access": "private",
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "init",
+          "line": 1500,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": true
+        }
+      ]
+    },
+    {
+      "path": "crates/project/src/project.rs",
+      "rank": 0.33333,
+      "size": 1001,
+      "lines": 1420,
+      "in": 97,
+      "out": 24,
+      "symbols": [
+        {
+          "name": "Project",
+          "line": 70,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "worktree_for_entry",
+          "line": 320,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self, entry_id: u64) -> Option<Entity<Worktree>>",
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/language/src/language.rs",
+      "rank": 0.25,
+      "size": 1002,
+      "lines": 980,
+      "in": 88,
+      "out": 19,
+      "symbols": [
+        {
+          "name": "Language",
+          "line": 120,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/editor/src/editor.rs",
+      "rank": 0.2,
+      "size": 1003,
+      "lines": 2100,
+      "in": 74,
+      "out": 40,
+      "symbols": [
+        {
+          "name": "Editor",
+          "line": 60,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "buffer",
+          "line": 700,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self) -> &Entity<Buffer>",
+          "local": false
+        },
+        {
+          "name": "scroll",
+          "line": 900,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "selection",
+          "line": 940,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": true
+        }
+      ]
+    },
+    {
+      "path": "crates/workspace/src/workspace.rs",
+      "rank": 0.16667,
+      "size": 1004,
+      "lines": 800,
+      "in": 61,
+      "out": 18,
+      "symbols": [
+        {
+          "name": "Workspace",
+          "line": 30,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/text/src/text.rs",
+      "rank": 0.14286,
+      "size": 1005,
+      "lines": 640,
+      "in": 55,
+      "out": 12,
+      "symbols": [
+        {
+          "name": "op_0",
+          "line": 1,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_1",
+          "line": 4,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_2",
+          "line": 7,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_3",
+          "line": 10,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_4",
+          "line": 13,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_5",
+          "line": 16,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_6",
+          "line": 19,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_7",
+          "line": 22,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_8",
+          "line": 25,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_9",
+          "line": 28,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_10",
+          "line": 31,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_11",
+          "line": 34,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_12",
+          "line": 37,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_13",
+          "line": 40,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_14",
+          "line": 43,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_15",
+          "line": 46,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_16",
+          "line": 49,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_17",
+          "line": 52,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_18",
+          "line": 55,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_19",
+          "line": 58,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_20",
+          "line": 61,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_21",
+          "line": 64,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_22",
+          "line": 67,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_23",
+          "line": 70,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_24",
+          "line": 73,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_25",
+          "line": 76,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_26",
+          "line": 79,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_27",
+          "line": 82,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_28",
+          "line": 85,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_29",
+          "line": 88,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_30",
+          "line": 91,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_31",
+          "line": 94,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_32",
+          "line": 97,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_33",
+          "line": 100,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_34",
+          "line": 103,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_35",
+          "line": 106,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_36",
+          "line": 109,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_37",
+          "line": 112,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_38",
+          "line": 115,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_39",
+          "line": 118,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_40",
+          "line": 121,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        },
+        {
+          "name": "op_41",
+          "line": 124,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": "(self)",
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/ui/src/ui.rs",
+      "rank": 0.125,
+      "size": 1006,
+      "lines": 410,
+      "in": 48,
+      "out": 6,
+      "symbols": [
+        {
+          "name": "Label",
+          "line": 22,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/settings/src/settings.rs",
+      "rank": 0.11111,
+      "size": 1007,
+      "lines": 330,
+      "in": 41,
+      "out": 9,
+      "symbols": [
+        {
+          "name": "Settings",
+          "line": 12,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/lsp/src/lsp.rs",
+      "rank": 0.1,
+      "size": 1008,
+      "lines": 520,
+      "in": 37,
+      "out": 11,
+      "symbols": [
+        {
+          "name": "LanguageServer",
+          "line": 40,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/path/src/path.rs",
+      "rank": 0.09091,
+      "size": 1009,
+      "lines": 260,
+      "in": 33,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "RelPath",
+          "line": 18,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/util/src/util.rs",
+      "rank": 0.08333,
+      "size": 1010,
+      "lines": 180,
+      "in": 30,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "defer",
+          "line": 20,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "counter",
+          "line": 30,
+          "kind": "variable",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "label",
+          "line": 31,
+          "kind": "variable",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        },
+        {
+          "name": "mode",
+          "line": 32,
+          "kind": "variable",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/theme/src/theme.rs",
+      "rank": 0.07692,
+      "size": 1011,
+      "lines": 120,
+      "in": 28,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Theme",
+          "line": 10,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/input/src/input.rs",
+      "rank": 0.07143,
+      "size": 1012,
+      "lines": 127,
+      "in": 27,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Input",
+          "line": 11,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/menu/src/menu.rs",
+      "rank": 0.06667,
+      "size": 1013,
+      "lines": 134,
+      "in": 26,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Menu",
+          "line": 12,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/modal/src/modal.rs",
+      "rank": 0.0625,
+      "size": 1014,
+      "lines": 141,
+      "in": 25,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Modal",
+          "line": 13,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/picker/src/picker.rs",
+      "rank": 0.05882,
+      "size": 1015,
+      "lines": 148,
+      "in": 24,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Picker",
+          "line": 14,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/terminal/src/terminal.rs",
+      "rank": 0.05556,
+      "size": 1016,
+      "lines": 155,
+      "in": 23,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Terminal",
+          "line": 15,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/tasks/src/tasks.rs",
+      "rank": 0.05263,
+      "size": 1017,
+      "lines": 162,
+      "in": 22,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Tasks",
+          "line": 16,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/search/src/search.rs",
+      "rank": 0.05,
+      "size": 1018,
+      "lines": 169,
+      "in": 21,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Search",
+          "line": 17,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/outline/src/outline.rs",
+      "rank": 0.04762,
+      "size": 1019,
+      "lines": 176,
+      "in": 20,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Outline",
+          "line": 18,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/diagnostics/src/diagnostics.rs",
+      "rank": 0.04545,
+      "size": 1020,
+      "lines": 183,
+      "in": 19,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Diagnostics",
+          "line": 19,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/git/src/git.rs",
+      "rank": 0.04348,
+      "size": 1021,
+      "lines": 190,
+      "in": 18,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Git",
+          "line": 20,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/fs/src/fs.rs",
+      "rank": 0.04167,
+      "size": 1022,
+      "lines": 197,
+      "in": 17,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Fs",
+          "line": 21,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/http/src/http.rs",
+      "rank": 0.04,
+      "size": 1023,
+      "lines": 204,
+      "in": 16,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Http",
+          "line": 22,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/rpc/src/rpc.rs",
+      "rank": 0.03846,
+      "size": 1024,
+      "lines": 211,
+      "in": 15,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Rpc",
+          "line": 23,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/proto/src/proto.rs",
+      "rank": 0.03704,
+      "size": 1025,
+      "lines": 218,
+      "in": 14,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Proto",
+          "line": 24,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/json/src/json.rs",
+      "rank": 0.03571,
+      "size": 1026,
+      "lines": 225,
+      "in": 13,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Json",
+          "line": 25,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/toml/src/toml.rs",
+      "rank": 0.03448,
+      "size": 1027,
+      "lines": 232,
+      "in": 12,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Toml",
+          "line": 26,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/yaml/src/yaml.rs",
+      "rank": 0.03333,
+      "size": 1028,
+      "lines": 239,
+      "in": 11,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Yaml",
+          "line": 27,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/markdown/src/markdown.rs",
+      "rank": 0.03226,
+      "size": 1029,
+      "lines": 246,
+      "in": 10,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Markdown",
+          "line": 28,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/syntax/src/syntax.rs",
+      "rank": 0.03125,
+      "size": 1030,
+      "lines": 253,
+      "in": 9,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Syntax",
+          "line": 29,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/highlight/src/highlight.rs",
+      "rank": 0.0303,
+      "size": 1031,
+      "lines": 260,
+      "in": 8,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Highlight",
+          "line": 30,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/rope/src/rope.rs",
+      "rank": 0.02941,
+      "size": 1032,
+      "lines": 267,
+      "in": 7,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Rope",
+          "line": 31,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/clock/src/clock.rs",
+      "rank": 0.02857,
+      "size": 1033,
+      "lines": 274,
+      "in": 6,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Clock",
+          "line": 32,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/time/src/time.rs",
+      "rank": 0.02778,
+      "size": 1034,
+      "lines": 281,
+      "in": 5,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Time",
+          "line": 33,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/log/src/log.rs",
+      "rank": 0.02703,
+      "size": 1035,
+      "lines": 288,
+      "in": 4,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Log",
+          "line": 34,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/metrics/src/metrics.rs",
+      "rank": 0.02632,
+      "size": 1036,
+      "lines": 295,
+      "in": 3,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Metrics",
+          "line": 35,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/cache/src/cache.rs",
+      "rank": 0.02564,
+      "size": 1037,
+      "lines": 302,
+      "in": 2,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Cache",
+          "line": 36,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/store/src/store.rs",
+      "rank": 0.025,
+      "size": 1038,
+      "lines": 309,
+      "in": 1,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Store",
+          "line": 37,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/config/src/config.rs",
+      "rank": 0.02439,
+      "size": 1039,
+      "lines": 316,
+      "in": 0,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Config",
+          "line": 38,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/keymap/src/keymap.rs",
+      "rank": 0.02381,
+      "size": 1040,
+      "lines": 323,
+      "in": 0,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Keymap",
+          "line": 39,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/command/src/command.rs",
+      "rank": 0.02326,
+      "size": 1041,
+      "lines": 330,
+      "in": 0,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Command",
+          "line": 40,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/panel/src/panel.rs",
+      "rank": 0.02273,
+      "size": 1042,
+      "lines": 337,
+      "in": 0,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Panel",
+          "line": 41,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/dock/src/dock.rs",
+      "rank": 0.02222,
+      "size": 1043,
+      "lines": 344,
+      "in": 0,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Dock",
+          "line": 42,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/toolbar/src/toolbar.rs",
+      "rank": 0.02174,
+      "size": 1044,
+      "lines": 351,
+      "in": 0,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Toolbar",
+          "line": 43,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/status/src/status.rs",
+      "rank": 0.02128,
+      "size": 1045,
+      "lines": 358,
+      "in": 0,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Status",
+          "line": 44,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/notify/src/notify.rs",
+      "rank": 0.02083,
+      "size": 1046,
+      "lines": 365,
+      "in": 0,
+      "out": 0,
+      "symbols": [
+        {
+          "name": "Notify",
+          "line": 45,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/dialog/src/dialog.rs",
+      "rank": 0.02041,
+      "size": 1047,
+      "lines": 372,
+      "in": 0,
+      "out": 1,
+      "symbols": [
+        {
+          "name": "Dialog",
+          "line": 46,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/welcome/src/welcome.rs",
+      "rank": 0.02,
+      "size": 1048,
+      "lines": 379,
+      "in": 0,
+      "out": 2,
+      "symbols": [
+        {
+          "name": "Welcome",
+          "line": 47,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/recent/src/recent.rs",
+      "rank": 0.01961,
+      "size": 1049,
+      "lines": 386,
+      "in": 0,
+      "out": 3,
+      "symbols": [
+        {
+          "name": "Recent",
+          "line": 48,
+          "kind": "function",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    },
+    {
+      "path": "crates/chat/src/chat.rs",
+      "rank": 0.01923,
+      "size": 1050,
+      "lines": 393,
+      "in": 0,
+      "out": 4,
+      "symbols": [
+        {
+          "name": "Chat",
+          "line": 49,
+          "kind": "struct",
+          "owner": null,
+          "depth": 0,
+          "access": null,
+          "signature": null,
+          "local": false
+        }
+      ]
+    }
+  ],
+  "empty_files": [
+    "crates/repo_wiki/src/empty.rs"
+  ]
+}

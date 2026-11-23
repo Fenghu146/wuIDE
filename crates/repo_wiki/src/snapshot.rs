@@ -151,7 +151,12 @@ mod tests {
         assert_eq!(json["version"], 2);
         assert_eq!(json["project"], "/work/project");
         assert_eq!(json["generated_at"], "2026-01-02T03:04:05Z");
-        assert!(json["order"].as_str().unwrap().contains("include fan-in"));
+        assert!(
+            json["order"]
+                .as_str()
+                .unwrap()
+                .contains("referencing fan-in")
+        );
 
         // src/lib.rs defines nothing, so the server cannot say anything about
         // it beyond "this file exists and is empty".

@@ -6,6 +6,14 @@
 //! edges in a cross-file reference graph, which is ranked with PageRank so the
 //! files that the rest of the repository talks about float to the top.
 //!
+//! Not every mention is evidence of a dependency. `init`, `new`, `run` and
+//! `tests` are written by hundreds of files and implemented by dozens, so an
+//! edge through one of them records shared vocabulary rather than one file
+//! using another's definition. Edges are therefore weighted by how distinctive
+//! the name is (see [`MAX_SHARED_NAME_FILES`] and [`mention_weight`]), and the
+//! `in`/`out` counts shown to agents report the same filtered edges the rank is
+//! built from.
+//!
 //! The whole thing is a bounded, cancellable background job: it never runs
 //! unless the repo map panel is opened or `/repo-map` is used, and it drops
 //! its task as soon as the caller goes away.
@@ -87,6 +95,35 @@ const VENDORED_DIRS: &[&str] = &[
 ];
 const PAGERANK_ITERATIONS: usize = 24;
 const PAGERANK_DAMPING: f32 = 0.85;
+/// A name that more files than this mention creates no reference edge at all.
+///
+/// The reference graph answers "which file owns the definitions the rest of the
+/// repository uses". A name written by many files cannot answer that: the
+/// mention says the two files share vocabulary, not that the mentee uses the
+/// mentor's definition.
+///
+/// The statistic is the number of files that *mention* the name, not the number
+/// that define it. Definers alone do not separate the two kinds of noise:
+/// `init` is defined in 106 files and mentioned by hundreds, while `Option`,
+/// `Box` and `File` are defined by exactly one file — the `IconName` enum
+/// carries variants with those names — and mentioned by well over a thousand
+/// files, most of which mean the standard library type. Counting definers
+/// therefore kept `crates/icons/src/icons.rs` first in the map, and every file
+/// that wrote `Option<T>` fed it. Mentioning files catch both.
+///
+/// Measured on this repository: 27,469 of the 32,881 distinct names are defined
+/// in exactly one file, and the names past this line are the ones with no
+/// ownership signal — `new` 583 definitions, `tests` 410, `render` 297, `name`
+/// 264, `from` 137, `fmt` 113, `init` 106, `default` 105 — plus the shadowed
+/// standard names above.
+///
+/// Twenty is a little over one percent of this repository's 1,565 indexed files,
+/// and it is where a name stops pointing at an owner: at or below it a mention is
+/// one of a handful that tie two files together, and above it the name is part of
+/// how the whole codebase talks. Raise it for a repository of many small crates,
+/// where real interfaces are legitimately written that often; lower it for a
+/// monorepo of a few very large files.
+pub const MAX_SHARED_NAME_FILES: usize = 20;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolEntry {
@@ -116,9 +153,14 @@ pub struct FileSymbols {
     pub rank: f32,
     /// Number of text lines in the file.
     pub lines: u32,
-    /// Files including or importing this one.
+    /// Distinct files that reference a definition this file owns.
+    ///
+    /// Only edges that survived [`MAX_SHARED_NAME_FILES`] count, so this is the same
+    /// graph the rank is computed from: a file whose only inbound evidence was a
+    /// name like `new` reports `0` here and does not rank as if it were called.
     pub in_degree: u32,
-    /// Files this one includes or imports.
+    /// Distinct files holding a definition this one references, under the same
+    /// filter as [`FileSymbols::in_degree`].
     pub out_degree: u32,
     pub symbols: Vec<SymbolEntry>,
 }
@@ -174,8 +216,10 @@ impl SymbolMap {
     /// How the files are ordered, as stated in every rendering so an agent can
     /// tell why the first file is the first file.
     pub fn order_description() -> &'static str {
-        "Order: include fan-in (desc), then reference PageRank (desc), then path. \
-         `in N / out M` counts `#include`, `use` and `import` edges to other files."
+        "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), \
+         then path. `in N` counts distinct files that reference a definition this file owns, \
+         ignoring names shared by more than 20 files; `out M` counts the files this one \
+         references under the same rule."
     }
 
     /// Renders the map as markdown for a chat prompt.
@@ -256,7 +300,7 @@ impl SymbolMap {
             let (body, written) = render_ranked(&files, start, end, body_budget, |file| {
                 self.file_block(file, options)
             });
-            let head = self.page_head(written, start, end, total);
+            let head = self.page_head(written, start, end, total, options.offset);
             let reserve_len = self
                 .page_tail_reserve(written, start, end, total, options)
                 .chars()
@@ -310,11 +354,30 @@ impl SymbolMap {
 
     /// Everything before the body: the header, the ordering note and the count
     /// of files the scan could not index.
-    fn page_head(&self, written: usize, start: usize, end: usize, total: usize) -> String {
-        let mut header = format!(
-            "showing {}–{written} of {total} files with definitions",
-            start + 1
-        );
+    ///
+    /// `offset` is the caller's, unsatuated: an offset at or past `total` would
+    /// otherwise print `showing 1515–1514 of 1514 files`, a range that runs
+    /// backwards. That page is empty, so it says so and names the largest offset
+    /// that is not.
+    fn page_head(
+        &self,
+        written: usize,
+        start: usize,
+        end: usize,
+        total: usize,
+        offset: usize,
+    ) -> String {
+        let mut header = if start >= total {
+            format!(
+                "showing 0 of {total} files (offset {offset} is past the end; \
+                 use an offset below {total})"
+            )
+        } else {
+            format!(
+                "showing {}–{written} of {total} files with definitions",
+                start + 1
+            )
+        };
         // Only the budget needs an explanation: a page cut by `limit` is the
         // page the caller asked for, and the paging hint below covers it.
         if written < end {
@@ -1161,7 +1224,6 @@ async fn parse_sources(
 /// Ranks the parsed files and turns them into the map's public shape.
 fn finish(mut parsed: Vec<ParsedFile>, mut stats: BuildStats) -> SymbolMap {
     stats.parsed = parsed.len();
-    resolve_includes(&mut parsed);
     rank(&mut parsed);
     parsed.sort_by(|a, b| {
         b.in_degree
@@ -1201,8 +1263,6 @@ struct ParsedFile {
     /// Identifiers mentioned anywhere in the file, used to build the
     /// reference graph.
     mentions: HashSet<Arc<str>>,
-    /// Include paths, module paths and import specifiers naming other files.
-    includes: Vec<String>,
 }
 
 /// One file's parse as the cache document holds it.
@@ -1218,8 +1278,6 @@ struct CachedParse {
     symbols: Vec<SymbolEntry>,
     #[serde(default)]
     mentions: Vec<Arc<str>>,
-    #[serde(default)]
-    includes: Vec<String>,
 }
 
 impl CachedParse {
@@ -1239,7 +1297,6 @@ impl CachedParse {
             out_degree: 0,
             symbols: self.symbols.clone(),
             mentions: self.mentions.iter().cloned().collect(),
-            includes: self.includes.clone(),
         }
     }
 }
@@ -1255,7 +1312,6 @@ struct CachedParseRef<'a> {
     lines: u32,
     symbols: &'a [SymbolEntry],
     mentions: Vec<&'a str>,
-    includes: &'a [String],
 }
 
 impl<'a> From<&'a ParsedFile> for CachedParseRef<'a> {
@@ -1267,7 +1323,6 @@ impl<'a> From<&'a ParsedFile> for CachedParseRef<'a> {
             lines: file.lines,
             symbols: &file.symbols,
             mentions,
-            includes: &file.includes,
         }
     }
 }
@@ -1288,7 +1343,6 @@ fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Opti
 
     let symbols = collect_symbols(grammar.outline_config.as_ref(), tree.root_node(), text);
     let mentions = collect_mentions(tree.root_node(), text);
-    let includes = collect_includes(tree.root_node(), text);
     Some(ParsedFile {
         rel: source.rel.clone(),
         path: absolute_key(&source.abs_path),
@@ -1299,7 +1353,6 @@ fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Opti
         out_degree: 0,
         symbols,
         mentions,
-        includes,
     })
 }
 
@@ -1960,173 +2013,6 @@ fn collect_mentions(root: tree_sitter::Node<'_>, text: &str) -> HashSet<Arc<str>
     mentions
 }
 
-/// Collects the file-level edges a source file declares: `#include` paths,
-/// Rust `use`/`mod` paths and JavaScript/TypeScript import specifiers.
-///
-/// These are the edges that make "which file does the rest of the project pull
-/// in" answerable without name resolution, unlike the identifier-reference
-/// graph behind [`rank`].
-fn collect_includes(root: tree_sitter::Node<'_>, text: &str) -> Vec<String> {
-    let bytes = text.as_bytes();
-    let mut specs = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        match node.kind() {
-            "preproc_include" => {
-                if let Some(path) = node.child_by_field_name("path")
-                    && let Ok(raw) = path.utf8_text(bytes)
-                {
-                    let spec = raw
-                        .trim()
-                        .trim_matches(|c| c == '"' || c == '<' || c == '>');
-                    if !spec.is_empty() {
-                        specs.push(spec.to_owned());
-                    }
-                }
-            }
-            "use_declaration" | "mod_item" => {
-                if let Ok(raw) = node.utf8_text(bytes) {
-                    if let Some(spec) = module_path(raw) {
-                        specs.push(spec);
-                    }
-                }
-            }
-            "import_statement" | "import_declaration" | "export_statement" => {
-                let source = node
-                    .child_by_field_name("source")
-                    .or_else(|| node.child_by_field_name("path"));
-                if let Some(source) = source
-                    && let Ok(raw) = source.utf8_text(bytes)
-                {
-                    let spec = raw.trim().trim_matches(|c| c == '"' || c == '\'');
-                    if !spec.is_empty() {
-                        specs.push(spec.to_owned());
-                    }
-                }
-            }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-    specs
-}
-
-/// Turns `use crate::graph::{BFS, DFS};` or `mod graph;` into a path fragment.
-fn module_path(source: &str) -> Option<String> {
-    let source = source.trim().trim_end_matches(';').trim();
-    let source = source.strip_prefix("pub ").unwrap_or(source);
-    let path = source
-        .strip_prefix("use ")
-        .or_else(|| source.strip_prefix("mod "))?;
-    let path = path
-        .split(['{', '*', ' '])
-        .next()?
-        .trim_end_matches(':')
-        .trim();
-    if path.is_empty() || path == "self" || path == "super" || path == "crate" {
-        return None;
-    }
-    Some(path.replace("::", "/"))
-}
-
-/// Resolves each file's include specs against the files the map actually has,
-/// and records the in/out counts used by the ordering and the file headers.
-fn resolve_includes(files: &mut [ParsedFile]) {
-    let paths: Vec<String> = files
-        .iter()
-        .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
-        .collect();
-    let mut by_path: HashMap<String, usize> = HashMap::new();
-    let mut by_name: HashMap<String, usize> = HashMap::new();
-    for (index, path) in paths.iter().enumerate() {
-        by_path.insert(path.clone(), index);
-        if let Some(name) = path.rsplit('/').next() {
-            // `#include "BFS.h"` names the file, not where it lives, so an
-            // ambiguous name resolves to the shallowest path.
-            by_name
-                .entry(name.to_owned())
-                .and_modify(|existing| {
-                    if path.len() < paths[*existing].len() {
-                        *existing = index;
-                    }
-                })
-                .or_insert(index);
-        }
-    }
-
-    let mut outgoing: Vec<HashSet<usize>> = vec![HashSet::new(); files.len()];
-    for (index, file) in files.iter().enumerate() {
-        let directory = paths[index]
-            .rsplit_once('/')
-            .map_or("", |(directory, _)| directory);
-        for spec in &file.includes {
-            if let Some(target) = resolve_spec(spec, directory, &by_path, &by_name)
-                && target != index
-            {
-                outgoing[index].insert(target);
-            }
-        }
-    }
-
-    let mut incoming: Vec<u32> = vec![0; files.len()];
-    for targets in &outgoing {
-        for &target in targets {
-            incoming[target] += 1;
-        }
-    }
-    for (index, file) in files.iter_mut().enumerate() {
-        file.out_degree = outgoing[index].len() as u32;
-        file.in_degree = incoming[index];
-    }
-}
-
-/// Extensions tried when an include omits one (`#include "BFS"`, `mod graph;`).
-const RESOLVABLE_EXTENSIONS: &[&str] = &[
-    "", ".h", ".hpp", ".hh", ".hxx", ".c", ".cc", ".cpp", ".cxx", ".rs", ".ts", ".tsx", ".js",
-    ".jsx", ".mjs", ".py", ".go", ".java", ".cs", ".rb", ".kt",
-];
-
-fn resolve_spec(
-    spec: &str,
-    directory: &str,
-    by_path: &HashMap<String, usize>,
-    by_name: &HashMap<String, usize>,
-) -> Option<usize> {
-    let spec = spec.replace('\\', "/");
-    let spec = spec.trim_start_matches("./").trim_end_matches('/');
-    if spec.is_empty() {
-        return None;
-    }
-
-    let mut bases = Vec::with_capacity(2);
-    if !directory.is_empty() {
-        bases.push(format!("{directory}/{spec}"));
-    }
-    bases.push(spec.to_owned());
-    for base in &bases {
-        for extension in RESOLVABLE_EXTENSIONS {
-            if let Some(&index) = by_path.get(&format!("{base}{extension}")) {
-                return Some(index);
-            }
-            if let Some(&index) = by_path.get(&format!("{base}/index{extension}")) {
-                return Some(index);
-            }
-        }
-    }
-
-    // `#include "BFS.h"` names the file, not where it lives.
-    let name = spec.rsplit('/').next().unwrap_or(spec);
-    for extension in RESOLVABLE_EXTENSIONS {
-        if let Some(&index) = by_name.get(&format!("{name}{extension}")) {
-            return Some(index);
-        }
-    }
-    None
-}
-
 /// Character budget for one `repo_map` page.
 ///
 /// This is the single source of truth for the agent-facing map: the snapshot
@@ -2167,12 +2053,47 @@ pub fn omitted_path_limit(limit: usize) -> usize {
     }
 }
 
-/// PageRank over the cross-file reference graph.
+/// The weight one mention of `name` gives to each file that defines it.
 ///
-/// An edge `a -> b` means file `a` mentions an identifier that file `b`
-/// defines; the edge weight is the number of such identifiers, so a file
-/// referenced by many distinct identifiers counts more than one referenced
-/// once.
+/// `1 / df`, where `df` is the number of files defining the name, so a mention
+/// always hands out a total of exactly one unit of weight no matter how many
+/// files share the name: a name only one file owns points at it with the whole
+/// unit and a name twenty files own splits it.
+///
+/// The alternative shape, `1 / (1 + ln df)`, decays far more gently (0.59 at
+/// `df = 2`, still 0.25 at `df = 20`), which keeps the total weight of a mention
+/// growing with `df`: files that write generic vocabulary would then keep more
+/// outgoing mass than files that write distinctive names, and the spread of one
+/// mention over twenty definers would outweigh a single unambiguous reference.
+/// `1 / df` is also exact in binary for the small `df` values that matter, so
+/// two builds of the same file set rank bit for bit identically.
+fn mention_weight(definers: usize) -> f32 {
+    1. / definers as f32
+}
+
+/// Whether a file's definitions are data rather than names code can call.
+///
+/// JSON keys and Markdown headings reach the map through the outline query with
+/// the generic `symbol` kind, and they are spelled like the code that consumes
+/// them: `assets/settings/default.json` "defines" `dev`, `light` and
+/// `dark`, and the Rust settings code mentions all three. Those edges are
+/// coincidences of spelling, not dependencies, and they put the defaults file
+/// and the locale bundles in the map's first page. A file whose every definition
+/// is such a name takes no part in the reference graph, on either side; it stays
+/// in the map with its definitions and zero counts.
+fn is_data_file(file: &ParsedFile) -> bool {
+    !file.symbols.is_empty() && file.symbols.iter().all(|symbol| &*symbol.kind == "symbol")
+}
+
+/// PageRank over the cross-file reference graph, and the `in`/`out` counts that
+/// describe the same graph.
+///
+/// An edge `a -> b` means file `a` mentions a name that file `b` defines. A name
+/// more than [`MAX_SHARED_NAME_FILES`] files mention is vocabulary rather than a
+/// dependency and makes no edge at all; every other mention weighs
+/// [`mention_weight`] of the number of files defining the name. Degrees are the
+/// number of distinct files on each side of those filtered edges, so what a page
+/// prints and what the ranking used cannot disagree.
 fn rank(files: &mut [ParsedFile]) {
     let count = files.len();
     if count == 0 {
@@ -2184,7 +2105,17 @@ fn rank(files: &mut [ParsedFile]) {
     }
 
     let mut defined_in: HashMap<Arc<str>, Vec<usize>> = HashMap::new();
+    // How many files write each name, which is what tells a definition's name
+    // from vocabulary; `defined_in.len()` cannot, because a name can be defined
+    // once and mentioned by every file.
+    let mut mentioned_by: HashMap<Arc<str>, usize> = HashMap::new();
     for (index, file) in files.iter().enumerate() {
+        if is_data_file(file) {
+            continue;
+        }
+        for mention in &file.mentions {
+            *mentioned_by.entry(mention.clone()).or_default() += 1;
+        }
         for symbol in &file.symbols {
             defined_in
                 .entry(symbol.name.clone())
@@ -2192,20 +2123,33 @@ fn rank(files: &mut [ParsedFile]) {
                 .push(index);
         }
     }
+    // `df` counts files, not definitions: a file that defines `new` three times
+    // is still one file that owns the name.
+    for definers in defined_in.values_mut() {
+        definers.sort_unstable();
+        definers.dedup();
+    }
 
     // Outgoing weights per file, plus each file's total weight for
     // normalization.
     let mut edges: Vec<Vec<(usize, f32)>> = vec![Vec::new(); count];
     let mut totals: Vec<f32> = vec![0.; count];
     for (index, file) in files.iter().enumerate() {
+        if is_data_file(file) {
+            continue;
+        }
         let mut weights: HashMap<usize, f32> = HashMap::new();
         for mention in &file.mentions {
+            if mentioned_by.get(mention).copied().unwrap_or(0) > MAX_SHARED_NAME_FILES {
+                continue;
+            }
             let Some(definers) = defined_in.get(mention) else {
                 continue;
             };
+            let weight = mention_weight(definers.len());
             for &target in definers {
                 if target != index {
-                    *weights.entry(target).or_default() += 1.;
+                    *weights.entry(target).or_default() += weight;
                 }
             }
         }
@@ -2238,8 +2182,16 @@ fn rank(files: &mut [ParsedFile]) {
         ranks = next;
     }
 
+    let mut referenced_by: Vec<u32> = vec![0; count];
+    for outgoing in &edges {
+        for &(target, _) in outgoing {
+            referenced_by[target] += 1;
+        }
+    }
     for (index, file) in files.iter_mut().enumerate() {
         file.rank = ranks[index];
+        file.out_degree = edges[index].len() as u32;
+        file.in_degree = referenced_by[index];
     }
 }
 
@@ -2321,7 +2273,7 @@ mod tests {
         }
     }
 
-    fn file(rel: &'static str, defs: &[&'static str], mentions: &[&'static str]) -> ParsedFile {
+    fn file(rel: &str, defs: &[&str], mentions: &[&str]) -> ParsedFile {
         ParsedFile {
             rel: test_rel(rel),
             path: rel.to_owned(),
@@ -2332,7 +2284,6 @@ mod tests {
             out_degree: 0,
             symbols: defs.iter().map(|name| entry(name, "function", 0)).collect(),
             mentions: mentions.iter().map(|name| Arc::from(*name)).collect(),
-            includes: Vec::new(),
         }
     }
 
@@ -3098,7 +3049,7 @@ mod tests {
         assert!(full.contains("src/lib.rs"));
         assert!(full.contains("function main"));
         assert!(full.find("src/lib.rs") < full.find("src/big.rs"));
-        assert!(full.contains("Order: include fan-in"));
+        assert!(full.contains("Order: referencing fan-in"));
 
         // The byte budget is a last resort: the first file is always shown even
         // when it does not fit, and the rest are counted rather than listed.
@@ -3228,6 +3179,48 @@ mod tests {
         );
         assert!(!paged.contains("output budget reached"), "{paged}");
         assert!(paged.contains("Next page: offset=1, limit=1."), "{paged}");
+    }
+
+    #[test]
+    fn an_offset_past_the_end_says_so_instead_of_reversing_the_range() {
+        let map = SymbolMap {
+            files: (0..3)
+                .map(|index| {
+                    file_symbols(
+                        &format!("src/file{index}.rs"),
+                        (3 - index) as f32,
+                        vec![entry(&format!("item{index}"), "function", 0)],
+                    )
+                })
+                .collect(),
+            stats: BuildStats::default(),
+        };
+
+        let at_the_end = map.repo_map_markdown(
+            &RepoMapOptions {
+                offset: 3,
+                ..RepoMapOptions::default()
+            },
+            100_000,
+        );
+        assert!(
+            at_the_end.contains("showing 0 of 3 files (offset 3 is past the end; use an offset below 3)"),
+            "{at_the_end}"
+        );
+        assert!(!at_the_end.contains("showing 4–3"), "{at_the_end}");
+        assert!(!at_the_end.contains("Omitted files"), "{at_the_end}");
+
+        let beyond = map.repo_map_markdown(
+            &RepoMapOptions {
+                offset: 99,
+                ..RepoMapOptions::default()
+            },
+            100_000,
+        );
+        assert!(
+            beyond.contains("offset 99 is past the end; use an offset below 3"),
+            "{beyond}"
+        );
     }
 
     #[test]
@@ -3830,23 +3823,101 @@ vector<int> bfs(int start) {
     }
 
     #[test]
-    fn include_edges_set_in_and_out_degrees() {
+    fn degrees_count_distinct_files_on_the_ranked_edges() {
         let mut files = vec![
-            file("graph/BFS.h", &["bfs"], &[]),
-            file("graph/BFS.cpp", &["bfs"], &[]),
-            file("main.cpp", &["main"], &[]),
+            file("owner.rs", &["rare_api"], &[]),
+            file("user_a.rs", &["a"], &["rare_api"]),
+            file("user_b.rs", &["b"], &["rare_api"]),
         ];
-        files[1].includes.push("BFS.h".to_owned());
-        files[2].includes.push("graph/BFS.h".to_owned());
-        files[0].includes.push("vector".to_owned());
+        rank(&mut files);
 
-        resolve_includes(&mut files);
-
-        assert_eq!(files[0].in_degree, 2, "BFS.h is pulled in twice");
+        assert_eq!(files[0].in_degree, 2, "two files reference the definition");
         assert_eq!(files[0].out_degree, 0);
         assert_eq!(files[1].out_degree, 1);
         assert_eq!(files[1].in_degree, 0);
-        assert_eq!(files[2].in_degree, 0);
+    }
+
+    #[test]
+    fn a_name_that_too_many_files_mention_makes_no_edge() {
+        let callers = |count: usize| -> Vec<ParsedFile> {
+            (0..count)
+                .map(|index| file(&format!("caller{index}.rs"), &[], &["refresh"]))
+                .collect()
+        };
+        let with_owner = |count: usize| -> Vec<ParsedFile> {
+            let mut files = callers(count);
+            files.push(file("owner.rs", &["refresh"], &[]));
+            files
+        };
+
+        // `MAX_SHARED_NAME_FILES` files writing the name is still evidence.
+        let mut at_the_cap = with_owner(MAX_SHARED_NAME_FILES);
+        rank(&mut at_the_cap);
+        assert_eq!(
+            at_the_cap.last().unwrap().in_degree,
+            MAX_SHARED_NAME_FILES as u32
+        );
+
+        // One more caller makes every one of the mentions vocabulary.
+        let mut past_the_cap = with_owner(MAX_SHARED_NAME_FILES + 1);
+        rank(&mut past_the_cap);
+        let owner = past_the_cap.last().unwrap();
+        assert_eq!(owner.in_degree, 0, "the name is no evidence");
+        assert_eq!(past_the_cap[0].out_degree, 0, "the callers gain no edge");
+    }
+
+    #[test]
+    fn a_data_file_takes_no_part_in_the_reference_graph() {
+        // JSON keys and Markdown headings are definitions of the generic
+        // `symbol` kind; their names are spelled like the code that consumes
+        // them, which is a coincidence rather than a dependency.
+        let mut keys = file("assets/settings/default.json", &["dev", "light"], &[]);
+        for symbol in &mut keys.symbols {
+            symbol.kind = "symbol".into();
+        }
+        let mut files = vec![
+            keys,
+            file("src/settings.rs", &["Settings"], &[]),
+            file("src/theme.rs", &["Theme"], &["dev", "light"]),
+        ];
+        rank(&mut files);
+
+        assert_eq!(files[0].in_degree, 0, "no code references the keys");
+        assert_eq!(files[0].out_degree, 0);
+        // The mentioning side is ignored too, so `dev` gives `theme.rs` no edge
+        // even though the data file defines it.
+        assert_eq!(files[2].out_degree, 0);
+    }
+
+    #[test]
+    fn a_distinctive_name_carries_more_rank_than_a_shared_one() {
+        let mut files = vec![
+            file("rare_owner.rs", &["rare_api"], &[]),
+            file("shared_owner_a.rs", &["shared_api"], &[]),
+            file("shared_owner_b.rs", &["shared_api"], &[]),
+            file("caller_rare.rs", &["caller_a"], &["rare_api"]),
+            file("caller_shared.rs", &["caller_b"], &["shared_api"]),
+        ];
+        rank(&mut files);
+
+        let rank_of = |name: &str| {
+            files
+                .iter()
+                .find(|file| file.rel.as_std_path().to_string_lossy() == name)
+                .expect("file present")
+                .rank
+        };
+        // One mention of a name only one file owns is worth a whole unit; one
+        // mention of a name two files own is worth half to each. Counting
+        // mentions instead of weighting them would make these three equal. The
+        // gap is capped below 2 by the damping factor: every page keeps a floor
+        // of teleport mass that the half weight does not shrink.
+        let shared = rank_of("shared_owner_a.rs");
+        assert!(
+            (shared - rank_of("shared_owner_b.rs")).abs() < 1e-6,
+            "the half weights are symmetric"
+        );
+        assert!(rank_of("rare_owner.rs") > 1.25 * shared, "{files:?}");
     }
 
     #[test]
@@ -3988,3 +4059,6 @@ vector<int> bfs(int start) {
         );
     }
 }
+
+
+
