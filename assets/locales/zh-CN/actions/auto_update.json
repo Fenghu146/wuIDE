@@ -7,6 +7,10 @@
     "description": "关闭更新错误消息。",
     "name": "关闭消息"
   },
+  "auto_update::ShowWhatsNew": {
+    "description": "显示本次构建的更新说明。",
+    "name": "更新说明"
+  },
   "auto_update::ViewReleaseNotes": {
     "description": "在浏览器中打开当前版本的发行说明。",
     "name": "查看发行说明"
