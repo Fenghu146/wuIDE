@@ -183,6 +183,8 @@ async fn test_save_debug_scenario_to_file(executor: BackgroundExecutor, cx: &mut
     let project = Project::test(fs.clone(), [path!("/project").as_ref()], cx).await;
     let workspace = init_test_workspace(&project, cx).await;
     let cx = &mut VisualTestContext::from_window(*workspace, cx);
+    let debug_json_path = std::path::Path::new(path!("/project"))
+        .join(paths::local_debug_file_relative_path().as_std_path());
 
     workspace
         .update(cx, |multi, window, cx| {
@@ -215,7 +217,7 @@ async fn test_save_debug_scenario_to_file(executor: BackgroundExecutor, cx: &mut
         .unwrap();
 
     let debug_json_content = fs
-        .load(path!("/project/.zed/debug.json").as_ref())
+        .load(&debug_json_path)
         .await
         .expect("debug.json should exist")
         .lines()
@@ -278,7 +280,7 @@ async fn test_save_debug_scenario_to_file(executor: BackgroundExecutor, cx: &mut
         ]"#};
 
     let debug_json_content = fs
-        .load(path!("/project/.zed/debug.json").as_ref())
+        .load(&debug_json_path)
         .await
         .expect("debug.json should exist")
         .lines()

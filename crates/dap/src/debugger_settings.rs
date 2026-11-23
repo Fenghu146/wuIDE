@@ -29,7 +29,7 @@ pub struct DebuggerSettings {
     pub format_dap_log_messages: bool,
     /// The dock position of the debug panel
     ///
-    /// Default: Bottom
+    /// Default: Left
     pub dock: settings::DockPosition,
 }
 

@@ -8,6 +8,7 @@
   "Clear Run Status": "清除运行状态",
   "Close Git Blame": "关闭 Git 逐行追溯",
   "Color": "颜色",
+  "Command": "命令",
   "Condition when a breakpoint is hit. Expressions within {} are interpolated.": "命中断点时的条件。{} 中的表达式会被求值。",
   "Confirm": "确认",
   "Constant": "常量",
