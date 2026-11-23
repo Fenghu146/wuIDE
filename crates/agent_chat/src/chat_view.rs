@@ -4845,6 +4845,89 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn a_second_click_on_the_same_diagnostic_reuses_its_chip(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+        let chat = workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.entity().downgrade();
+            let chat = cx.new(|cx| {
+                ChatView::new(session.clone(), store.clone(), project.clone(), weak, window, cx)
+            });
+            workspace.add_item_to_active_pane(Box::new(chat.clone()), None, true, window, cx);
+            chat
+        });
+        let path = directory.path().join("src/worker.rs");
+        let citation = |line: u32, message: &str| DiagnosticCitation {
+            path: path.clone(),
+            line,
+            column: 1,
+            severity: "warning".to_string(),
+            code: Some("W1".to_string()),
+            message: message.to_string(),
+        };
+        let add = |cx: &mut VisualTestContext, citations: Vec<DiagnosticCitation>| {
+            workspace.update_in(cx, |workspace, window, cx| {
+                crate::editor_bridge::add_diagnostics_to_chat(
+                    workspace, citations, false, window, cx,
+                )
+            });
+        };
+
+        add(cx, vec![citation(1, "first")]);
+        chat.read_with(cx, |chat, _| assert_eq!(chat.composer_refs.len(), 1));
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.notification_ids().len(),
+                0,
+                "adding a diagnostic the first time needs no notice"
+            )
+        });
+
+        add(cx, vec![citation(1, "first")]);
+        chat.read_with(cx, |chat, _| {
+            assert_eq!(
+                chat.composer_refs.len(),
+                1,
+                "clicking the same row again reuses its chip instead of adding a second one"
+            )
+        });
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.notification_ids().len(),
+                1,
+                "the repeat click says the diagnostic is already in the chat"
+            )
+        });
+
+        add(cx, vec![citation(1, "first"), citation(7, "second")]);
+        chat.read_with(cx, |chat, _| {
+            assert_eq!(
+                chat.composer_refs.len(),
+                2,
+                "a batch after a single only adds the diagnostics no chip points at yet"
+            )
+        });
+        assert_eq!(
+            composer_text(&chat, cx),
+            "@diag src/worker.rs:1:1 W1 @diagnostics 1 #1",
+            "the single chip stays as it was and the batch brings only the new one"
+        );
+    }
+
+    #[gpui::test]
     async fn saved_messages_are_found_even_after_the_chat_changes(cx: &mut TestAppContext) {
         cx.update(|cx| {
             workspace::AppState::test(cx);

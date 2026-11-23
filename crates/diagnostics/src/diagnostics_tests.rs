@@ -2899,6 +2899,129 @@ async fn batch_adding_without_a_chat_keeps_the_ticks(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+async fn an_editor_block_offers_the_chat_button(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.set_state(indoc! {"
+        fn main() {
+            let x = ˇ1;
+        }
+    "});
+    let lsp_store =
+        cx.update_editor(|editor, _, cx| editor.project().unwrap().read(cx).lsp_store());
+    cx.update(|_, cx| {
+        lsp_store
+            .update(cx, |lsp_store, cx| {
+                lsp_store.update_diagnostics(
+                    LanguageServerId(0),
+                    lsp::PublishDiagnosticsParams {
+                        uri: lsp::Uri::from_file_path(path!("/root/file")).unwrap(),
+                        version: None,
+                        diagnostics: vec![lsp::Diagnostic {
+                            range: lsp::Range::new(
+                                lsp::Position::new(1, 12),
+                                lsp::Position::new(1, 13),
+                            ),
+                            severity: Some(lsp::DiagnosticSeverity::WARNING),
+                            message: lsp::DiagnosticMessage::from("unused variable `x`"),
+                            ..Default::default()
+                        }],
+                    },
+                    None,
+                    DiagnosticSourceKind::Pushed,
+                    &[],
+                    cx,
+                )
+            })
+            .unwrap();
+    });
+    cx.run_until_parked();
+    // The block only exists once the diagnostic is activated, which is what
+    // clicking its gutter or going to it does.
+    cx.update_editor(|editor, window, cx| {
+        editor.go_to_diagnostic(
+            &GoToDiagnostic {
+                severity: GoToDiagnosticSeverityFilter::default(),
+            },
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let button = cx.debug_bounds("diagnostic-row-chat").expect(
+        "the block in the editor cites the file, so it offers the chat button without a chat",
+    );
+    assert!(button.size.width > px(0.), "the button is laid out");
+}
+
+#[gpui::test]
+async fn the_panel_row_offers_the_chat_button_without_a_chat(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/test"),
+        json!({ "main.rs": "fn main() {\n    let x = 1;\n}\n" }),
+    )
+    .await;
+
+    let language_server_id = LanguageServerId(0);
+    let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+    let lsp_store = project.read_with(cx, |project, _| project.lsp_store());
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let workspace = window
+        .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+        .unwrap();
+    let uri = lsp::Uri::from_file_path(path!("/test/main.rs")).unwrap();
+
+    lsp_store.update(cx, |lsp_store, cx| {
+        lsp_store
+            .update_diagnostics(
+                language_server_id,
+                lsp::PublishDiagnosticsParams {
+                    uri: uri.clone(),
+                    diagnostics: vec![lsp::Diagnostic {
+                        range: lsp::Range::new(lsp::Position::new(1, 8), lsp::Position::new(1, 9)),
+                        severity: Some(lsp::DiagnosticSeverity::WARNING),
+                        message: lsp::DiagnosticMessage::from("unused variable `x`"),
+                        ..Default::default()
+                    }],
+                    version: None,
+                },
+                None,
+                DiagnosticSourceKind::Pushed,
+                &[],
+                cx,
+            )
+            .unwrap();
+    });
+
+    let diagnostics = window.build_entity(cx, |window, cx| {
+        ProjectDiagnosticsEditor::new(true, project.clone(), workspace.downgrade(), window, cx)
+    });
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.add_item_to_active_pane(Box::new(diagnostics.clone()), None, true, window, cx);
+    });
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let button = cx
+        .debug_bounds("diagnostic-row-chat")
+        .expect("the panel row offers the chat button without any chat open");
+    assert!(button.size.width > px(0.), "the button is laid out");
+}
+
 fn init_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
         zlog::init_test();

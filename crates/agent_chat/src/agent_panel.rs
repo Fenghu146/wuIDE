@@ -206,7 +206,7 @@ fn create_session_at_with_settings(
 }
 
 /// The chat the user is looking at: the focused tab, else the docked chat,
-/// else the most recently opened chat tab.
+/// else the chat in an open chat panel, else the most recently opened chat tab.
 pub(crate) fn visible_chat(workspace: &Workspace, cx: &App) -> Option<Entity<ChatView>> {
     workspace
         .active_item_as::<ChatView>(cx)
@@ -215,11 +215,7 @@ pub(crate) fn visible_chat(workspace: &Workspace, cx: &App) -> Option<Entity<Cha
                 .items_of_type::<ChatView>(cx)
                 .find(|view| view.read(cx).is_docked())
         })
-        .or_else(|| {
-            workspace
-                .panel::<crate::chat_panel::ChatPanel>(cx)
-                .and_then(|panel| panel.read(cx).active_chat(cx))
-        })
+        .or_else(|| crate::chat_panel::visible_chat(workspace, cx))
         .or_else(|| workspace.items_of_type::<ChatView>(cx).last())
 }
 
