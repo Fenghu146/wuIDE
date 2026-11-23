@@ -1,10 +1,11 @@
-use gpui::{Action as _, App};
-use i18n::n;
+use gpui::{Action as _, App, ClipboardItem};
+use i18n::{n, t};
 use settings::{LanguageSettingsContent, SettingsContent};
 use std::sync::Arc;
 use strum::IntoDiscriminant as _;
 use theme::SystemAppearance;
 use ui::IntoElement;
+use workspace::{Toast, notifications::NotificationId};
 
 use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
@@ -105,14 +106,33 @@ fn developer_page() -> SettingsPage {
     }
 }
 
+/// The command that starts this build with accessibility support turned on.
+///
+/// Whether an accessibility tree is built at all is decided before the process
+/// starts, from `ZED_EXPERIMENTAL_A11Y` (`crates/wu/src/main.rs`), so a command
+/// on the clipboard is the only way the settings page can hand it to the user.
+fn accessibility_launch_command() -> String {
+    let executable = std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string());
+    match (cfg!(windows), executable) {
+        (true, Some(executable)) => format!("set ZED_EXPERIMENTAL_A11Y=1 && \"{executable}\""),
+        (false, Some(executable)) => format!("ZED_EXPERIMENTAL_A11Y=1 \"{executable}\""),
+        (true, None) => "set ZED_EXPERIMENTAL_A11Y=1".to_owned(),
+        (false, None) => "ZED_EXPERIMENTAL_A11Y=1".to_owned(),
+    }
+}
+
+struct AccessibilityCommandCopied;
+
 fn general_page(cx: &App) -> SettingsPage {
     fn general_settings_section(_cx: &App) -> Vec<SettingsPageItem> {
         vec![
             SettingsPageItem::SectionHeader(n!("General Settings")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Accessible Mode"),
+                title: n!("Accessible Layout (Screen Readers)"),
                 description: n!(
-                    "Optimize IDE's interface for assistive technology such as screen readers. When enabled, otherwise-collapsed controls stay expanded and keyboard-reachable."
+                    "Only changes how the interface is laid out: menus stay expanded and controls stay reachable from the keyboard. It does not expose the interface to a screen reader. To do that, launch IDE with ZED_EXPERIMENTAL_A11Y=1 and restart."
                 ),
                 field: Box::new(SettingField {
                     json_path: Some("accessible_mode"),
@@ -122,6 +142,35 @@ fn general_page(cx: &App) -> SettingsPage {
                     },
                 }),
                 metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: n!("Screen Reader Support"),
+                description: Some(n!(
+                    "Copies a command that starts this build with accessibility support turned on. Quit IDE first, then run it from a terminal."
+                )),
+                button_text: n!("Copy Launch Command"),
+                on_click: Arc::new(|settings_window, _window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(accessibility_launch_command()));
+                    let Some(original_window) = settings_window.original_window else {
+                        return;
+                    };
+                    original_window
+                        .update(cx, |multi_workspace, _window, cx| {
+                            let workspace = multi_workspace.workspace();
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<AccessibilityCommandCopied>(),
+                                        t!("Launch command copied").to_string(),
+                                    )
+                                    .autohide(),
+                                    cx,
+                                );
+                            });
+                        })
+                        .ok();
+                }),
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
