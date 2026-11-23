@@ -156,6 +156,7 @@ dependencies = [
  "agent_fixtures",
  "agent_harness",
  "anyhow",
+ "assets",
  "chrono",
  "collections",
  "command_palette_hooks",
