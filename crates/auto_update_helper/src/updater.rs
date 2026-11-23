@@ -379,6 +379,17 @@ fn zed_launch_command(app_dir: &Path, launch_arguments: &[OsString]) -> std::pro
     command
 }
 
+/// How long a single job may keep retrying before the whole update is rolled
+/// back. A job is one rename, so the window only has to outlast an antivirus
+/// scanner that is still holding the executable the installer just wrote.
+#[cfg(not(test))]
+const JOB_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The tests simulate jobs that never succeed, so they must not sit through the
+/// production window twice.
+#[cfg(test)]
+const JOB_TIMEOUT: Duration = Duration::from_millis(200);
+
 pub(crate) fn perform_update(
     app_dir: &Path,
     hwnd: Option<isize>,
@@ -396,11 +407,7 @@ pub(crate) fn perform_update(
     'outer: for (i, job) in JOBS.iter().enumerate() {
         let start = Instant::now();
         loop {
-            // Each job is a single rename of a file the installer just wrote. Ten
-            // seconds is generous for that, but a fresh 88 MB executable can still
-            // be held by an antivirus scanner for several seconds, and giving up
-            // early rolls the whole update back.
-            if start.elapsed().as_secs() > 10 {
+            if start.elapsed() > JOB_TIMEOUT {
                 log::error!("Timed out, rolling back");
                 break 'outer;
             }
