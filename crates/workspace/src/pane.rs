@@ -2939,6 +2939,9 @@ impl Pane {
 
         let icon = self.tab_icon_element(item, is_active, window, cx);
 
+        // Collected first: everything below borrows `cx` from here on.
+        let tab_controls = item.tab_controls(window, cx);
+
         let settings = ItemSettings::get_global(cx);
         let close_side = &settings.close_position;
         let show_close_button = &settings.show_close_button;
@@ -3132,6 +3135,7 @@ impl Pane {
                         None
                     })
                     .child(label)
+                    .children(tab_controls)
                     .map(|this| match tab_tooltip_content {
                         Some(TabTooltipContent::Text(text)) => {
                             if capability.editable() {

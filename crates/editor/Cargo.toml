@@ -38,6 +38,7 @@ base64.workspace = true
 breadcrumbs.workspace = true
 client.workspace = true
 clock.workspace = true
+code_runner.workspace = true
 collections.workspace = true
 convert_case.workspace = true
 db.workspace = true

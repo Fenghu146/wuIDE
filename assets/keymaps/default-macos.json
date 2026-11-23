@@ -544,6 +544,9 @@
       "cmd-k shift-up": "workspace::SwapPaneUp",
       "cmd-k shift-down": "workspace::SwapPaneDown",
       "cmd-shift-x": "wu::Extensions",
+      // Runs the file in the editor with the command for its language; the
+      // first run shows the command, later runs rerun it.
+      "ctrl-f5": "wu::RunCurrentFile",
       "f5": "debugger::Rerun",
     },
   },

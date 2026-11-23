@@ -672,6 +672,7 @@ impl EditorElement {
         register_action(editor, window, Editor::context_menu_last);
         register_action(editor, window, Editor::open_active_item_in_terminal);
         register_action(editor, window, Editor::spawn_nearest_task);
+        register_action(editor, window, Editor::run_current_file);
         register_action(editor, window, Editor::open_selections_in_multibuffer);
         register_action(editor, window, Editor::toggle_bookmark);
         register_action(editor, window, Editor::toggle_bookmark_with_label);

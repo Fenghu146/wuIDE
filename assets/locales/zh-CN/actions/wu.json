@@ -206,6 +206,10 @@
     "description": "在系统文件管理器中显示 IDE 的日志文件。",
     "name": "在文件管理器中显示日志"
   },
+  "wu::RunCurrentFile": {
+    "description": "用当前语言配置的命令运行编辑器里的文件：首次运行会先显示命令并允许修改，之后重复运行上一次的命令。",
+    "name": "运行当前文件"
+  },
   "wu::SaveEtwTrace": {
     "description": "把进行中的 ETW 跟踪会话保存到磁盘。",
     "name": "保存 ETW 跟踪"

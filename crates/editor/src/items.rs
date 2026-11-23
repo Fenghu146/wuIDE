@@ -44,7 +44,7 @@ use std::{
     sync::Arc,
 };
 use text::{BufferSnapshot, OffsetRangeExt, ToPoint as _};
-use ui::{IconDecorationKind, prelude::*};
+use ui::{IconButtonShape, IconDecorationKind, Tooltip, prelude::*};
 use util::{
     ResultExt, TryFutureExt, debug_panic,
     paths::{PathExt, UrlExt as _},
@@ -633,6 +633,13 @@ impl Item for Editor {
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         let mut actions = Vec::new();
 
+        if self.can_run_current_file(cx) {
+            actions.push((
+                t!("Run Current File…"),
+                Box::new(wu_actions::RunCurrentFile { edit: true }) as Box<dyn gpui::Action>,
+            ));
+        }
+
         let is_markdown = self
             .buffer()
             .read(cx)
@@ -670,6 +677,33 @@ impl Item for Editor {
 
     fn preserve_preview(&self, cx: &App) -> bool {
         self.buffer.read(cx).preserve_preview(cx)
+    }
+
+    fn tab_controls(&self, _window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !self.can_run_current_file(cx) {
+            return Vec::new();
+        }
+
+        let focus_handle = self.focus_handle.clone();
+        vec![
+            IconButton::new("run-current-file", IconName::PlayFilled)
+                .size(ButtonSize::None)
+                .shape(IconButtonShape::Square)
+                .icon_color(Color::Muted)
+                .icon_size(IconSize::Small)
+                .tooltip(move |_window, cx| {
+                    Tooltip::for_action_in(
+                        t!("Run Current File"),
+                        &wu_actions::RunCurrentFile { edit: false },
+                        &focus_handle,
+                        cx,
+                    )
+                })
+                .on_click(cx.listener(|editor, _: &gpui::ClickEvent, window, cx| {
+                    editor.run_current_file(&wu_actions::RunCurrentFile { edit: false }, window, cx)
+                }))
+                .into_any_element(),
+        ]
     }
 }
 

@@ -38,6 +38,7 @@ mod mouse_context_menu;
 pub mod movement;
 mod persistence;
 mod runnables;
+mod run_current_file;
 mod rust_analyzer_ext;
 pub mod scroll;
 mod selections_collection;
@@ -1086,6 +1087,9 @@ pub struct Editor {
     last_horizontal_scrollbar_visible: bool,
     expect_bounds_change: Option<Bounds<Pixels>>,
     runnables: RunnableData,
+    /// The command last run with "Run Current File", together with the file it
+    /// was resolved for, so the next run does not have to ask again.
+    last_run: Option<(PathBuf, code_runner::RunCommand)>,
     bookmark_store: Option<Entity<BookmarkStore>>,
     bookmarks_tab_state: Option<Entity<BookmarksTabState>>,
     bookmarks_tab_subscription: Option<Subscription>,
@@ -1817,6 +1821,7 @@ impl Editor {
         clone.needs_initial_data_update = self.enable_lsp_data;
         clone.enable_runnables = self.enable_runnables;
         clone.enable_code_lens = self.enable_code_lens;
+        clone.last_run = self.last_run.clone();
         if let Some(bookmarks_tab_state) = self.bookmarks_tab_state.clone() {
             clone.set_bookmarks_tab_state(bookmarks_tab_state, cx);
         }
@@ -2420,6 +2425,7 @@ impl Editor {
                 })
                 .unwrap_or_default(),
             runnables: RunnableData::new(),
+            last_run: None,
             pull_diagnostics_task: Task::ready(()),
             colors: None,
             code_lens: None,

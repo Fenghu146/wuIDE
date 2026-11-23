@@ -535,6 +535,19 @@ mod tests {
             );
             assert_eq!(captures.name("line").map(|capture| capture.as_str()), line);
         }
+
+        // Compiler diagnostics have to become links, so a failed run can be
+        // jumped to from the terminal.
+        let diagnostic = "broken.cpp:4:50: error: expected ';' before 'return'";
+        let captures = searches
+            .path_hyperlink_regexes
+            .iter()
+            .find_map(|regex| regex.captures(diagnostic))
+            .ok_or_else(|| anyhow::anyhow!("Default regexes do not match {diagnostic}"))?;
+        assert_eq!(
+            captures.name("path").map(|capture| capture.as_str()),
+            Some("broken.cpp:4:50")
+        );
         Ok(())
     }
 
