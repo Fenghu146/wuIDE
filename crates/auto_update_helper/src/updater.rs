@@ -164,7 +164,7 @@ impl Job {
 }
 
 #[cfg(not(test))]
-pub(crate) static JOBS: LazyLock<[Job; 22]> = LazyLock::new(|| {
+pub(crate) static JOBS: LazyLock<[Job; 28]> = LazyLock::new(|| {
     fn p(value: &str) -> &Path {
         Path::new(value)
     }
@@ -176,6 +176,12 @@ pub(crate) static JOBS: LazyLock<[Job; 22]> = LazyLock::new(|| {
         Job::mkdir(p("old\\bin")),
         Job::move_file(p("bin\\IDE.exe"), p("old\\bin\\IDE.exe")),
         Job::move_file(p("bin\\ide"), p("old\\bin\\ide")),
+        // The bundled agent runtimes are replaced wholesale, like the binaries.
+        Job::move_if_exists(p("agents"), p("old\\agents")),
+        // The installer stages these with the binaries; the copies next to the
+        // app have to follow, or the shipped license terms stay on an old version.
+        Job::move_if_exists(p("LICENSE.txt"), p("old\\LICENSE.txt")),
+        Job::move_if_exists(p("NOTICE"), p("old\\NOTICE")),
         //
         // TODO: remove after a few weeks once everyone is on the new version and this file never exists
         Job::move_if_exists(p("OpenConsole.exe"), p("old\\OpenConsole.exe")),
@@ -192,6 +198,9 @@ pub(crate) static JOBS: LazyLock<[Job; 22]> = LazyLock::new(|| {
         Job::move_file(p("install\\IDE.exe"), p("IDE.exe")),
         Job::move_file(p("install\\bin\\IDE.exe"), p("bin\\IDE.exe")),
         Job::move_file(p("install\\bin\\ide"), p("bin\\ide")),
+        Job::move_if_exists(p("install\\agents"), p("agents")),
+        Job::move_if_exists(p("install\\LICENSE.txt"), p("LICENSE.txt")),
+        Job::move_if_exists(p("install\\NOTICE"), p("NOTICE")),
         //
         Job::mkdir_if_exists(p("x64"), p("install\\x64")),
         Job::mkdir_if_exists(p("arm64"), p("install\\arm64")),
@@ -370,6 +379,17 @@ fn zed_launch_command(app_dir: &Path, launch_arguments: &[OsString]) -> std::pro
     command
 }
 
+/// How long a single job may keep retrying before the whole update is rolled
+/// back. A job is one rename, so the window only has to outlast an antivirus
+/// scanner that is still holding the executable the installer just wrote.
+#[cfg(not(test))]
+const JOB_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The tests simulate jobs that never succeed, so they must not sit through the
+/// production window twice.
+#[cfg(test)]
+const JOB_TIMEOUT: Duration = Duration::from_millis(200);
+
 pub(crate) fn perform_update(
     app_dir: &Path,
     hwnd: Option<isize>,
@@ -387,7 +407,7 @@ pub(crate) fn perform_update(
     'outer: for (i, job) in JOBS.iter().enumerate() {
         let start = Instant::now();
         loop {
-            if start.elapsed().as_secs() > 2 {
+            if start.elapsed() > JOB_TIMEOUT {
                 log::error!("Timed out, rolling back");
                 break 'outer;
             }

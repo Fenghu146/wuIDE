@@ -25,18 +25,18 @@ IDE is a fast, native code editor written in Rust, with a clean, modern design a
 
 ## Download
 
-Releases are on this repository's [releases page](https://github.com/Fenghu146/wu/releases/latest).
+Releases are on this repository's [releases page](https://github.com/Fenghu146/wuIDE/releases/latest).
 
-- [macOS (Apple Silicon)](https://github.com/Fenghu146/wu/releases/latest/download/IDE-aarch64.dmg)
-- [macOS (Intel)](https://github.com/Fenghu146/wu/releases/latest/download/IDE-x86_64.dmg)
-- [Windows x86-64](https://github.com/Fenghu146/wu/releases/latest/download/IDE-x86_64.exe)
-- [Linux x86-64](https://github.com/Fenghu146/wu/releases/latest/download/ide-linux-x86_64.tar.gz)
-- [Linux AArch64](https://github.com/Fenghu146/wu/releases/latest/download/ide-linux-aarch64.tar.gz)
+- [macOS (Apple Silicon)](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-aarch64.dmg)
+- [macOS (Intel)](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.dmg)
+- [Windows x86-64](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.exe)
+- [Linux x86-64](https://github.com/Fenghu146/wuIDE/releases/latest/download/ide-linux-x86_64.tar.gz)
+- [Linux AArch64](https://github.com/Fenghu146/wuIDE/releases/latest/download/ide-linux-aarch64.tar.gz)
 
 On macOS and Linux you can also run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Fenghu146/wu/main/script/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Fenghu146/wuIDE/main/script/install.sh | sh
 ```
 
 ### The builds are not code-signed
@@ -75,7 +75,7 @@ IDE sends no analytics, no crash reports, and no usage telemetry. It does make t
 
 | What | Where | When |
 | --- | --- | --- |
-| Release metadata for updates | `api.github.com/repos/Fenghu146/wu/releases` | at startup, then every 12 hours |
+| Release metadata for updates | `api.github.com/repos/Fenghu146/wuIDE/releases` | at startup, then every 12 hours |
 | Extension index and extension downloads | `api.zed.dev` (via the `server_url` setting, still `https://zed.dev`) | when you open the extensions view or a language needs an extension |
 | Node runtime download | `nodejs.org`, only while packaging, never at runtime | during a build |
 | Your coding agents' own API calls | whatever provider you configured | when you send a message to an agent |

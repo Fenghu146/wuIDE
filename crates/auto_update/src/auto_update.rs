@@ -6,7 +6,7 @@ use gpui::{
     App, AppContext as _, AsyncApp, BackgroundExecutor, Context, Entity, Global, PromptButton,
     Task, TaskExt, Window, actions,
 };
-use http_client::{HttpClient, HttpClientWithUrl};
+use http_client::{HttpClient, HttpClientWithUrl, HttpRequestExt, RedirectPolicy};
 use i18n::t;
 use paths::remote_servers_dir;
 use release_channel::ReleaseChannel;
@@ -49,6 +49,10 @@ impl std::fmt::Display for MissingDependencyError {
 
 impl std::error::Error for MissingDependencyError {}
 const POLL_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+/// Release metadata is a small JSON document, so a request that has not answered
+/// by then is riding a dead connection. Without a deadline the poll stays
+/// pending forever and every later check is ignored until the app restarts.
+const RELEASE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_SERVER_CACHE_LIMIT: usize = 5;
 /// Cross-process guard so that two running instances (for example with
 /// different `--user-data-dir`s) never download or install an update at the
@@ -242,7 +246,7 @@ pub struct ReleaseAsset {
     pub digest: Option<String>,
 }
 
-const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/Fenghu146/wu/releases";
+const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/Fenghu146/wuIDE/releases";
 
 #[derive(Deserialize)]
 struct GitHubRelease {
@@ -325,7 +329,7 @@ struct AutoUpdateSetting(bool);
 
 /// Whether or not to automatically check for updates.
 ///
-/// Default: false
+/// Default: true
 impl Settings for AutoUpdateSetting {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         Self(content.auto_update.unwrap())
@@ -424,9 +428,9 @@ pub fn release_notes_url(cx: &mut App) -> Option<String> {
             let mut current_version = auto_updater.current_version.clone();
             current_version.pre = semver::Prerelease::EMPTY;
             current_version.build = semver::BuildMetadata::EMPTY;
-            format!("https://github.com/Fenghu146/wu/releases/tag/v{current_version}")
+            format!("https://github.com/Fenghu146/wuIDE/releases/tag/v{current_version}")
         }
-        ReleaseChannel::Dev => "https://github.com/Fenghu146/wu/commits/main/".to_string(),
+        ReleaseChannel::Dev => "https://github.com/Fenghu146/wuIDE/commits/main/".to_string(),
     };
     Some(url)
 }
@@ -818,9 +822,12 @@ impl AutoUpdater {
             None => format!("{GITHUB_RELEASES_API_URL}/latest"),
         };
 
-        let mut response = http_client
-            .get(url.as_str(), Default::default(), true)
-            .await?;
+        let request = http_client::http::Request::builder()
+            .uri(url.as_str())
+            .follow_redirects(RedirectPolicy::FollowAll)
+            .timeout(RELEASE_REQUEST_TIMEOUT)
+            .body(Default::default())?;
+        let mut response = http_client.send(request).await?;
         let mut body = Vec::new();
         response.body_mut().read_to_end(&mut body).await?;
 
@@ -1604,7 +1611,7 @@ mod tests {
     impl Global for InstallOverride {}
 
     #[gpui::test]
-    fn test_auto_update_defaults_to_false(cx: &mut TestAppContext) {
+    fn test_auto_update_defaults_to_true(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let mut store = SettingsStore::new(cx, &settings::default_settings());
             store
@@ -1614,7 +1621,7 @@ mod tests {
                 .set_user_settings("{}", cx)
                 .expect("Unable to set user settings");
             cx.set_global(store);
-            assert!(!AutoUpdateSetting::get_global(cx).0);
+            assert!(AutoUpdateSetting::get_global(cx).0);
         });
     }
 
@@ -1627,7 +1634,16 @@ mod tests {
         let (dmg_tx, dmg_rx) = oneshot::channel::<String>();
 
         cx.update(|cx| {
-            settings::init(cx);
+            // Pin what this test needs instead of inheriting the shipped default,
+            // which has changed direction before.
+            let mut store = SettingsStore::new(cx, &default_settings());
+            store
+                .set_default_settings(&default_settings(), cx)
+                .expect("Unable to set default settings");
+            store
+                .set_user_settings(r#"{ "auto_update": true }"#, cx)
+                .expect("Unable to set user settings");
+            cx.set_global(store);
 
             let current_version = semver::Version::new(0, 100, 0);
             release_channel::init_test(current_version, ReleaseChannel::Stable, cx);
@@ -1638,7 +1654,7 @@ mod tests {
                 let release_available = release_available.load(atomic::Ordering::Relaxed);
                 let dmg_rx = dmg_rx.clone();
                 async move {
-                if req.uri().path() == "/repos/Fenghu146/wu/releases/latest" {
+                if req.uri().path() == "/repos/Fenghu146/wuIDE/releases/latest" {
                     let (tag_name, download_url) = if release_available {
                         ("v0.100.1", "https://test.example/new-download")
                     } else {
@@ -1931,6 +1947,35 @@ mod tests {
         );
 
         assert_eq!(newer_version.unwrap(), Some(fetched_version));
+    }
+
+    #[test]
+    fn test_build_metadata_is_ignored_when_comparing_versions() {
+        // Release builds carry the channel and commit sha in the build metadata,
+        // so a plain `v1.4.5` tag has to count as an upgrade from
+        // `1.4.4+dev.<sha>`.
+        let installed: semver::Version = "1.4.4+dev.fabdc259e4afa9e585661bedd9137c6fe76e164e"
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            AutoUpdater::check_if_fetched_version_is_newer(
+                installed.clone(),
+                "1.4.5".to_string(),
+                AutoUpdateStatus::Idle,
+            )
+            .unwrap(),
+            Some(semver::Version::new(1, 4, 5))
+        );
+        assert_eq!(
+            AutoUpdater::check_if_fetched_version_is_newer(
+                installed,
+                "1.4.4".to_string(),
+                AutoUpdateStatus::Idle,
+            )
+            .unwrap(),
+            None
+        );
     }
 
     #[test]

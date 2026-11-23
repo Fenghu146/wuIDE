@@ -151,7 +151,7 @@ fn agent_logo(kind: AgentKind) -> IconName {
 
 1. **`paths::APP_NAME`** 是否还是 `"WuIDE"`。上游不会动这一行，但如果合并时整块取了上游版本，改名会失效。
 2. **`LEGACY_DATA_DIR_NAMES`** 是否还在 `crates/paths/src/paths.rs` 里，以及 `init_paths()` 里的两次 `migrate_legacy_*` 调用是否还在。
-3. **`auto_update` 默认值**是否还是 `false`（`assets/settings/default.json`）。
+3. **`auto_update` 默认值**是否还是 `true`（`assets/settings/default.json`）。
 4. **三个打包脚本**是否还带许可证复制逻辑（`LICENSE-GPL` / `LICENSE-APACHE` / `NOTICE` / `agents/licenses/`）。
 5. **ACP 驱动**：`crates/agent_harness/src/acp.rs` 是否还在，`HarnessId::{Dsh, Pi}` 的穷举 match 是否还完整。
 6. 跑一遍：
@@ -181,7 +181,7 @@ fn agent_logo(kind: AgentKind) -> IconName {
 
 ## 上游远程现在指向哪里
 
-`origin` 是本仓库（`Fenghu146/wu`），`upstream` 是 `dstrml/wu`。`git push` 默认推 `origin`，不会误推到上游。
+`origin` 是本仓库（`Fenghu146/wuIDE`），`upstream` 是 `dstrml/wu`。`git push` 默认推 `origin`，不会误推到上游。
 
 ## 本机构建环境的一个坑（macOS 27 + rustc 1.97.1）
 

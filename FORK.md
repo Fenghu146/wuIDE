@@ -36,8 +36,8 @@
 
 ## 5. 自动更新指向本仓库的 release
 
-- 自动更新查的是 `https://api.github.com/repos/Fenghu146/wu/releases`，也就是本仓库自己发布的版本。上游 `dstrml/wu` 的 release（资产名还是 `Wu-*`）不再被考虑——否则会把本地改动覆盖回上游版本。因为客户端是匿名 HTTP，没有 token 机制，**这个仓库必须保持 public**：私有仓库的 release 匿名拉不到（404）。
-- **默认关闭**（`assets/settings/default.json` 里 `auto_update` 为 `false`）。因为这个仓库是私有的，更新器匿名拉 release 元数据会 404；自动检查失败是静默的，但手动点“检查更新”会在标题栏留下一个红色错误按钮。要启用就把 `auto_update` 改回 `true`，前提是仓库已经公开。
+- 自动更新查的是 `https://api.github.com/repos/Fenghu146/wuIDE/releases`，也就是本仓库自己发布的版本。常量直接写仓库现名 `wuIDE`，不再靠 GitHub 改名留下的 301 跳转。上游 `dstrml/wu` 的 release（资产名还是 `Wu-*`）不再被考虑——否则会把本地改动覆盖回上游版本。因为客户端是匿名 HTTP，没有 token 机制，**这个仓库必须保持 public**：私有仓库的 release 匿名拉不到（404）。
+- **默认开启**（`assets/settings/default.json` 里 `auto_update` 为 `true`）；不想自动查就在设置里关掉。自动检查失败是静默的（只写日志、状态回 Idle），手动点「检查更新」失败才会在标题栏留下一个红色错误按钮。启动时查一次，之后每 12 小时一次，失败不退避。
 - 自动检查只发通知、不直接装：状态进 `AutoUpdateStatus::Available`，标题栏出现“有可用更新”按钮，同时弹一张带“下载并安装” / “跳过这个版本”的通知卡。点了才下载（有 digest 时校验 SHA-256）、覆盖当前安装，下次启动提示已更新。菜单里的“检查更新”算手动检查，一路装到底。
 - “跳过这个版本”写进 kvp 的 `auto-updater-skipped-version`，只有出现更高版本才会再提示；同一版本在一次会话里也不会重复弹卡。
 - 资产名与打包脚本对齐：`IDE-{arch}.dmg`、`ide-linux-{arch}.tar.gz`、`IDE-{arch}.exe`（`github_asset_name`）。改名后对不上会让 `release_asset` 直接报 “has no asset named …”。资产是在版本比对**之后**才找的，所以一个不比当前版本新的 release 即使没有对应资产，也不会让检查失败。
