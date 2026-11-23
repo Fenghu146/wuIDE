@@ -396,7 +396,11 @@ pub(crate) fn perform_update(
     'outer: for (i, job) in JOBS.iter().enumerate() {
         let start = Instant::now();
         loop {
-            if start.elapsed().as_secs() > 2 {
+            // Each job is a single rename of a file the installer just wrote. Ten
+            // seconds is generous for that, but a fresh 88 MB executable can still
+            // be held by an antivirus scanner for several seconds, and giving up
+            // early rolls the whole update back.
+            if start.elapsed().as_secs() > 10 {
                 log::error!("Timed out, rolling back");
                 break 'outer;
             }
