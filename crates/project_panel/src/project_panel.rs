@@ -1,5 +1,6 @@
 mod file_info_modal;
 pub mod project_panel_settings;
+mod session_snapshots_modal;
 mod undo;
 mod utils;
 
@@ -564,6 +565,12 @@ pub fn init(cx: &mut App) {
                 });
             }
         });
+
+        workspace.register_action(
+            |workspace, action: &session_snapshots::OpenSessionSnapshots, window, cx| {
+                session_snapshots_modal::SessionSnapshotsModal::open(workspace, action, window, cx);
+            },
+        );
 
         workspace.register_action(|workspace, action: &ExpandAllEntries, window, cx| {
             if let Some(panel) = workspace.panel::<ProjectPanel>(cx) {
@@ -1209,6 +1216,7 @@ impl ProjectPanel {
             };
 
             let has_pasteable_content = self.has_pasteable_content(cx);
+            let worktree_root = worktree.abs_path().to_string_lossy().into_owned();
             let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                 menu.context(self.focus_handle.clone()).map(|menu| {
                     if is_read_only {
@@ -1297,6 +1305,12 @@ impl ProjectPanel {
                                     .when(has_history, |menu| {
                                         menu.action(t!("View History"), Box::new(git::FileHistory))
                                     })
+                                    .action(
+                                        t!("Session Snapshots"),
+                                        Box::new(session_snapshots::OpenSessionSnapshots {
+                                            root: Some(worktree_root.clone()),
+                                        }),
+                                    )
                                     .when(!is_dir, |menu| {
                                         menu.action(
                                             t!("Open File Permalink"),

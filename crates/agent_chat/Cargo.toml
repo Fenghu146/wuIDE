@@ -46,6 +46,7 @@ repo_wiki.workspace = true
 resvg.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+session_snapshots.workspace = true
 settings.workspace = true
 text.workspace = true
 theme.workspace = true

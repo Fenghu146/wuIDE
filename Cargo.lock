@@ -188,6 +188,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "session_snapshots",
  "settings",
  "tempfile",
  "text",
@@ -9449,6 +9450,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "session_snapshots",
  "settings",
  "smallvec",
  "tempfile",
@@ -11070,6 +11072,27 @@ dependencies = [
  "serde_json",
  "util",
  "uuid",
+]
+
+[[package]]
+name = "session_snapshots"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "db",
+ "fs",
+ "git",
+ "gpui",
+ "log",
+ "schemars",
+ "serde",
+ "settings",
+ "sha2",
+ "tempfile",
+ "time",
+ "util",
+ "which",
+ "zstd",
 ]
 
 [[package]]

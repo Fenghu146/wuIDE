@@ -8390,6 +8390,80 @@ fn agent_chat_page() -> SettingsPage {
         ]
     }
 
+    fn session_snapshots_section() -> [SettingsPageItem; 4] {
+        [
+            SettingsPageItem::SectionHeader(n!("Session Snapshots")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Keep Session Snapshots"),
+                description: n!(
+                    "Copy a worktree's dirty files before and after an agent session, so the project panel can put them back. Snapshots are kept in IDE's local SQLite database, and the Session Snapshots dialog can delete all of a worktree's snapshots at once."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("session_snapshots.enabled"),
+                    pick: |settings_content| {
+                        settings_content.session_snapshots.as_ref()?.enabled.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .session_snapshots
+                            .get_or_insert_default()
+                            .enabled = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Snapshot Storage Limit"),
+                description: n!(
+                    "The most disk space, in megabytes, that snapshots may use together. The oldest snapshots are deleted first. Default: 64"
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("session_snapshots.max_total_mb"),
+                    pick: |settings_content| {
+                        settings_content
+                            .session_snapshots
+                            .as_ref()?
+                            .max_total_mb
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .session_snapshots
+                            .get_or_insert_default()
+                            .max_total_mb = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Keep Snapshots For"),
+                description: n!(
+                    "How many days to keep session snapshots. The oldest snapshots are deleted first. Default: 7"
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("session_snapshots.retention_days"),
+                    pick: |settings_content| {
+                        settings_content
+                            .session_snapshots
+                            .as_ref()?
+                            .retention_days
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .session_snapshots
+                            .get_or_insert_default()
+                            .retention_days = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
         title: AGENT_CHAT_PAGE,
         items: concat_sections![
@@ -8398,6 +8472,7 @@ fn agent_chat_page() -> SettingsPage {
             new_chats_section(),
             agents_section(),
             context_section(),
+            session_snapshots_section(),
             commit_message_section(),
             notifications_section()
         ],

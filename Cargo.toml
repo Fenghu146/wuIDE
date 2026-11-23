@@ -126,6 +126,7 @@ members = [
     "crates/schema_generator",
     "crates/search",
     "crates/session",
+    "crates/session_snapshots",
     "crates/settings",
     "crates/settings_content",
     "crates/settings_json",
@@ -321,6 +322,7 @@ rpc = { path = "crates/rpc" }
 scheduler = { path = "crates/scheduler" }
 search = { path = "crates/search" }
 session = { path = "crates/session" }
+session_snapshots = { path = "crates/session_snapshots" }
 settings = { path = "crates/settings" }
 settings_content = { path = "crates/settings_content" }
 settings_json = { path = "crates/settings_json", default-features = false }
