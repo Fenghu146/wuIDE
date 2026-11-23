@@ -1,11 +1,11 @@
 ## Repository map
 
 showing 1–40 of 51 files with definitions.
-Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule.
-Indexed 52 / 60 candidate files (5 unsupported language, 2 over 256 KiB, 1 unreadable).
+Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule; `deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this one, so it is a certain dependency rather than a shared name.
+Indexed 52 / 60 candidate files (5 unsupported language, 2 over 1024 KiB, 1 unreadable).
 Excluded before scanning: 3 vendored or generated paths.
 
-`crates/gpui/src/gpui.rs` (in 128 / out 31, 1820 lines)
+`crates/gpui/src/gpui.rs` (in 128 / out 31 / deps 7, 1820 lines)
 - struct App (line 40)
 - `public:`
   - function run(self) (line 88)
@@ -15,22 +15,22 @@ Excluded before scanning: 3 vendored or generated paths.
 - `private:`
   - function quit(self) (line 120)
 
-`crates/project/src/project.rs` (in 97 / out 24, 1420 lines)
+`crates/project/src/project.rs` (in 97 / out 24 / deps 1, 1420 lines)
 - struct Project (line 70)
 - function worktree_for_entry(self, entry_id: u64) -> Option<Entity<Worktree>> (line 320)
 
-`crates/language/src/language.rs` (in 88 / out 19, 980 lines)
+`crates/language/src/language.rs` (in 88 / out 19 / deps 2, 980 lines)
 - struct Language (line 120)
 
-`crates/editor/src/editor.rs` (in 74 / out 40, 2100 lines)
+`crates/editor/src/editor.rs` (in 74 / out 40 / deps 3, 2100 lines)
 - struct Editor (line 60)
 - function buffer(self) -> &Entity<Buffer> (line 700)
 - function scroll (line 900)
 
-`crates/workspace/src/workspace.rs` (in 61 / out 18, 800 lines)
+`crates/workspace/src/workspace.rs` (in 61 / out 18 / deps 0, 800 lines)
 - struct Workspace (line 30)
 
-`crates/text/src/text.rs` (in 55 / out 12, 640 lines)
+`crates/text/src/text.rs` (in 55 / out 12 / deps 1, 640 lines)
 - function op_0(self) (line 1)
 - function op_1(self) (line 4)
 - function op_2(self) (line 7)
@@ -73,107 +73,107 @@ Excluded before scanning: 3 vendored or generated paths.
 - function op_39(self) (line 118)
 … +2 more symbols
 
-`crates/ui/src/ui.rs` (in 48 / out 6, 410 lines)
+`crates/ui/src/ui.rs` (in 48 / out 6 / deps 2, 410 lines)
 - struct Label (line 22)
 
-`crates/settings/src/settings.rs` (in 41 / out 9, 330 lines)
+`crates/settings/src/settings.rs` (in 41 / out 9 / deps 3, 330 lines)
 - struct Settings (line 12)
 
-`crates/lsp/src/lsp.rs` (in 37 / out 11, 520 lines)
+`crates/lsp/src/lsp.rs` (in 37 / out 11 / deps 0, 520 lines)
 - struct LanguageServer (line 40)
 
-`crates/path/src/path.rs` (in 33 / out 4, 260 lines)
+`crates/path/src/path.rs` (in 33 / out 4 / deps 1, 260 lines)
 - struct RelPath (line 18)
 
-`crates/util/src/util.rs` (in 30 / out 2, 180 lines)
+`crates/util/src/util.rs` (in 30 / out 2 / deps 2, 180 lines)
 - function defer (line 20)
 - variable x3 (lines 30–32)
 
-`crates/theme/src/theme.rs` (in 28 / out 0, 120 lines)
+`crates/theme/src/theme.rs` (in 28 / out 0 / deps 3, 120 lines)
 - struct Theme (line 10)
 
-`crates/input/src/input.rs` (in 27 / out 1, 127 lines)
+`crates/input/src/input.rs` (in 27 / out 1 / deps 0, 127 lines)
 - function Input (line 11)
 
-`crates/menu/src/menu.rs` (in 26 / out 2, 134 lines)
+`crates/menu/src/menu.rs` (in 26 / out 2 / deps 1, 134 lines)
 - function Menu (line 12)
 
-`crates/modal/src/modal.rs` (in 25 / out 3, 141 lines)
+`crates/modal/src/modal.rs` (in 25 / out 3 / deps 2, 141 lines)
 - struct Modal (line 13)
 
-`crates/picker/src/picker.rs` (in 24 / out 4, 148 lines)
+`crates/picker/src/picker.rs` (in 24 / out 4 / deps 3, 148 lines)
 - function Picker (line 14)
 
-`crates/terminal/src/terminal.rs` (in 23 / out 0, 155 lines)
+`crates/terminal/src/terminal.rs` (in 23 / out 0 / deps 0, 155 lines)
 - function Terminal (line 15)
 
-`crates/tasks/src/tasks.rs` (in 22 / out 1, 162 lines)
+`crates/tasks/src/tasks.rs` (in 22 / out 1 / deps 1, 162 lines)
 - struct Tasks (line 16)
 
-`crates/search/src/search.rs` (in 21 / out 2, 169 lines)
+`crates/search/src/search.rs` (in 21 / out 2 / deps 2, 169 lines)
 - function Search (line 17)
 
-`crates/outline/src/outline.rs` (in 20 / out 3, 176 lines)
+`crates/outline/src/outline.rs` (in 20 / out 3 / deps 3, 176 lines)
 - function Outline (line 18)
 
-`crates/diagnostics/src/diagnostics.rs` (in 19 / out 4, 183 lines)
+`crates/diagnostics/src/diagnostics.rs` (in 19 / out 4 / deps 0, 183 lines)
 - struct Diagnostics (line 19)
 
-`crates/git/src/git.rs` (in 18 / out 0, 190 lines)
+`crates/git/src/git.rs` (in 18 / out 0 / deps 1, 190 lines)
 - function Git (line 20)
 
-`crates/fs/src/fs.rs` (in 17 / out 1, 197 lines)
+`crates/fs/src/fs.rs` (in 17 / out 1 / deps 2, 197 lines)
 - function Fs (line 21)
 
-`crates/http/src/http.rs` (in 16 / out 2, 204 lines)
+`crates/http/src/http.rs` (in 16 / out 2 / deps 3, 204 lines)
 - struct Http (line 22)
 
-`crates/rpc/src/rpc.rs` (in 15 / out 3, 211 lines)
+`crates/rpc/src/rpc.rs` (in 15 / out 3 / deps 0, 211 lines)
 - function Rpc (line 23)
 
-`crates/proto/src/proto.rs` (in 14 / out 4, 218 lines)
+`crates/proto/src/proto.rs` (in 14 / out 4 / deps 1, 218 lines)
 - function Proto (line 24)
 
-`crates/json/src/json.rs` (in 13 / out 0, 225 lines)
+`crates/json/src/json.rs` (in 13 / out 0 / deps 2, 225 lines)
 - struct Json (line 25)
 
-`crates/toml/src/toml.rs` (in 12 / out 1, 232 lines)
+`crates/toml/src/toml.rs` (in 12 / out 1 / deps 3, 232 lines)
 - function Toml (line 26)
 
-`crates/yaml/src/yaml.rs` (in 11 / out 2, 239 lines)
+`crates/yaml/src/yaml.rs` (in 11 / out 2 / deps 0, 239 lines)
 - function Yaml (line 27)
 
-`crates/markdown/src/markdown.rs` (in 10 / out 3, 246 lines)
+`crates/markdown/src/markdown.rs` (in 10 / out 3 / deps 1, 246 lines)
 - struct Markdown (line 28)
 
-`crates/syntax/src/syntax.rs` (in 9 / out 4, 253 lines)
+`crates/syntax/src/syntax.rs` (in 9 / out 4 / deps 2, 253 lines)
 - function Syntax (line 29)
 
-`crates/highlight/src/highlight.rs` (in 8 / out 0, 260 lines)
+`crates/highlight/src/highlight.rs` (in 8 / out 0 / deps 3, 260 lines)
 - function Highlight (line 30)
 
-`crates/rope/src/rope.rs` (in 7 / out 1, 267 lines)
+`crates/rope/src/rope.rs` (in 7 / out 1 / deps 0, 267 lines)
 - struct Rope (line 31)
 
-`crates/clock/src/clock.rs` (in 6 / out 2, 274 lines)
+`crates/clock/src/clock.rs` (in 6 / out 2 / deps 1, 274 lines)
 - function Clock (line 32)
 
-`crates/time/src/time.rs` (in 5 / out 3, 281 lines)
+`crates/time/src/time.rs` (in 5 / out 3 / deps 2, 281 lines)
 - function Time (line 33)
 
-`crates/log/src/log.rs` (in 4 / out 4, 288 lines)
+`crates/log/src/log.rs` (in 4 / out 4 / deps 3, 288 lines)
 - struct Log (line 34)
 
-`crates/metrics/src/metrics.rs` (in 3 / out 0, 295 lines)
+`crates/metrics/src/metrics.rs` (in 3 / out 0 / deps 0, 295 lines)
 - function Metrics (line 35)
 
-`crates/cache/src/cache.rs` (in 2 / out 1, 302 lines)
+`crates/cache/src/cache.rs` (in 2 / out 1 / deps 1, 302 lines)
 - function Cache (line 36)
 
-`crates/store/src/store.rs` (in 1 / out 2, 309 lines)
+`crates/store/src/store.rs` (in 1 / out 2 / deps 2, 309 lines)
 - struct Store (line 37)
 
-`crates/config/src/config.rs` (in 0 / out 3, 316 lines)
+`crates/config/src/config.rs` (in 0 / out 3 / deps 3, 316 lines)
 - function Config (line 38)
 
 Omitted files (11, paths only):

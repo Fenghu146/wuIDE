@@ -2,7 +2,7 @@
   "version": 2,
   "project": "/work/project",
   "generated_at": "2026-02-03T04:05:06Z",
-  "order": "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule.",
+  "order": "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule; `deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this one, so it is a certain dependency rather than a shared name.",
   "max_chars": 48000,
   "stats": {
     "considered": 60,
@@ -93,7 +93,8 @@
           "signature": null,
           "local": true
         }
-      ]
+      ],
+      "deps": 7
     },
     {
       "path": "crates/project/src/project.rs",
@@ -123,7 +124,8 @@
           "signature": "(self, entry_id: u64) -> Option<Entity<Worktree>>",
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/language/src/language.rs",
@@ -143,7 +145,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/editor/src/editor.rs",
@@ -193,7 +196,8 @@
           "signature": null,
           "local": true
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/workspace/src/workspace.rs",
@@ -213,7 +217,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/text/src/text.rs",
@@ -643,7 +648,8 @@
           "signature": "(self)",
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/ui/src/ui.rs",
@@ -663,7 +669,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/settings/src/settings.rs",
@@ -683,7 +690,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/lsp/src/lsp.rs",
@@ -703,7 +711,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/path/src/path.rs",
@@ -723,7 +732,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/util/src/util.rs",
@@ -773,7 +783,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/theme/src/theme.rs",
@@ -793,7 +804,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/input/src/input.rs",
@@ -813,7 +825,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/menu/src/menu.rs",
@@ -833,7 +846,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/modal/src/modal.rs",
@@ -853,7 +867,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/picker/src/picker.rs",
@@ -873,7 +888,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/terminal/src/terminal.rs",
@@ -893,7 +909,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/tasks/src/tasks.rs",
@@ -913,7 +930,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/search/src/search.rs",
@@ -933,7 +951,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/outline/src/outline.rs",
@@ -953,7 +972,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/diagnostics/src/diagnostics.rs",
@@ -973,7 +993,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/git/src/git.rs",
@@ -993,7 +1014,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/fs/src/fs.rs",
@@ -1013,7 +1035,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/http/src/http.rs",
@@ -1033,7 +1056,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/rpc/src/rpc.rs",
@@ -1053,7 +1077,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/proto/src/proto.rs",
@@ -1073,7 +1098,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/json/src/json.rs",
@@ -1093,7 +1119,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/toml/src/toml.rs",
@@ -1113,7 +1140,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/yaml/src/yaml.rs",
@@ -1133,7 +1161,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/markdown/src/markdown.rs",
@@ -1153,7 +1182,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/syntax/src/syntax.rs",
@@ -1173,7 +1203,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/highlight/src/highlight.rs",
@@ -1193,7 +1224,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/rope/src/rope.rs",
@@ -1213,7 +1245,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/clock/src/clock.rs",
@@ -1233,7 +1266,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/time/src/time.rs",
@@ -1253,7 +1287,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/log/src/log.rs",
@@ -1273,7 +1308,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/metrics/src/metrics.rs",
@@ -1293,7 +1329,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/cache/src/cache.rs",
@@ -1313,7 +1350,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/store/src/store.rs",
@@ -1333,7 +1371,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/config/src/config.rs",
@@ -1353,7 +1392,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/keymap/src/keymap.rs",
@@ -1373,7 +1413,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/command/src/command.rs",
@@ -1393,7 +1434,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/panel/src/panel.rs",
@@ -1413,7 +1455,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/dock/src/dock.rs",
@@ -1433,7 +1476,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/toolbar/src/toolbar.rs",
@@ -1453,7 +1497,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/status/src/status.rs",
@@ -1473,7 +1518,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/notify/src/notify.rs",
@@ -1493,7 +1539,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     },
     {
       "path": "crates/dialog/src/dialog.rs",
@@ -1513,7 +1560,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 3
     },
     {
       "path": "crates/welcome/src/welcome.rs",
@@ -1533,7 +1581,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 0
     },
     {
       "path": "crates/recent/src/recent.rs",
@@ -1553,7 +1602,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 1
     },
     {
       "path": "crates/chat/src/chat.rs",
@@ -1573,7 +1623,8 @@
           "signature": null,
           "local": false
         }
-      ]
+      ],
+      "deps": 2
     }
   ],
   "empty_files": [

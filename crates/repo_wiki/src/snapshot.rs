@@ -108,6 +108,7 @@ mod tests {
             lines: 42,
             in_degree: 2,
             out_degree: 1,
+            dep_in_degree: 3,
             symbols,
         }
     }

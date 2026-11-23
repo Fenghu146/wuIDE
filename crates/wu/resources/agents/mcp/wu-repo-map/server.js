@@ -29,6 +29,9 @@ const MAX_OMITTED_PATHS = 20;
 const MAX_OMITTED_PATHS_SMALL = 10;
 // Mirrors `repo_wiki::symbol_map::MAX_FILES`: the file count one build indexes.
 const MAX_FILES = 3000;
+// Mirrors `repo_wiki::symbol_map::MAX_FILE_BYTES`: the largest file one build
+// parses. Only used to name the cap in the coverage line.
+const MAX_FILE_BYTES = 1024 * 1024;
 // Mirrors `repo_wiki::symbol_map::VENDORED_DIRS`: used only to explain why a
 // path is absent from the snapshot, since the IDE excludes it while scanning.
 const VENDORED_DIRS = new Set([
@@ -81,7 +84,9 @@ const STALE_DIAGNOSTICS_SNAPSHOT =
 const DEFAULT_ORDER =
   "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. " +
   "`in N` counts distinct files that reference a definition this file owns, ignoring names " +
-  "shared by more than 20 files; `out M` counts the files this one references under the same rule.";
+  "shared by more than 20 files; `out M` counts the files this one references under the same rule; " +
+  "`deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this " +
+  "one, so it is a certain dependency rather than a shared name.";
 
 // Languages the IDE can index; used only to explain why a path is missing.
 const SOURCE_EXTENSIONS = new Set([
@@ -270,8 +275,10 @@ function fileHeader(file) {
     // Version 1 snapshots carry no counts; do not invent zeros.
     return `\`${file.path}\``;
   }
+  // A snapshot written before `deps` existed simply omits it.
+  const deps = file.deps == null ? "" : ` / deps ${file.deps}`;
   return (
-    `\`${file.path}\` (in ${file.in || 0} / out ${file.out || 0}, ` +
+    `\`${file.path}\` (in ${file.in || 0} / out ${file.out || 0}${deps}, ` +
     `${file.lines || 0} lines)`
   );
 }
@@ -313,7 +320,7 @@ function coverageNotes(stats) {
   if (Number.isFinite(stats.considered) && stats.considered > 0) {
     const reasons = [];
     if (stats.unsupported > 0) reasons.push(`${stats.unsupported} unsupported language`);
-    if (stats.too_large > 0) reasons.push(`${stats.too_large} over 256 KiB`);
+    if (stats.too_large > 0) reasons.push(`${stats.too_large} over ${MAX_FILE_BYTES / 1024} KiB`);
     if (stats.over_budget > 0) reasons.push(`${stats.over_budget} over the byte budget`);
     if (stats.file_limit > 0) reasons.push(`${stats.file_limit} beyond the ${MAX_FILES}-file limit`);
     if (stats.unreadable > 0) reasons.push(`${stats.unreadable} unreadable`);

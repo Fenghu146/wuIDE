@@ -48,7 +48,18 @@ use crate::symbol_cache::{self, CacheEntry, FileStamp};
 pub const MAX_FILES: usize = 3000;
 /// Files larger than this are skipped: they are almost always generated or
 /// vendored data, and parsing them dominates the runtime.
-pub const MAX_FILE_BYTES: u64 = 256 * 1024;
+///
+/// 1 MiB. The previous 256 KiB cap excluded 18 of this repository's own core
+/// sources — `crates/workspace/src/workspace.rs` (677 KiB),
+/// `crates/project/src/lsp_store.rs` (637 KiB), `crates/editor/src/editor.rs`
+/// (454 KiB), `crates/gpui/src/window.rs` (333 KiB) and the like — so the map
+/// could never rank them and an agent asking "what depends on the editor" got
+/// `display_map.rs` instead of `editor.rs`. A big hand-written module is exactly
+/// the file a map should name; a big generated one is already caught by
+/// [`VENDORED_DIRS`] or by its language never being indexed. The cap stays as a
+/// guard against a genuinely enormous single file: nothing above 1 MiB is
+/// parsed, and those files are counted as `too_large` in the coverage line.
+pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Cap on identifiers collected per file, which bounds the reference graph.
 const MAX_IDENTIFIERS_PER_FILE: usize = 4_000;
 /// Cap on symbols kept per file.
@@ -125,6 +136,72 @@ const PAGERANK_DAMPING: f32 = 0.85;
 /// monorepo of a few very large files.
 pub const MAX_SHARED_NAME_FILES: usize = 20;
 
+/// Definition kinds that can own an inbound reference edge.
+///
+/// These are the names another file can call or name as an API: functions,
+/// methods, types, traits, constants, macros and modules. What is left out —
+/// `field`, `variant`, `variable` and the generic `symbol` of a data file — is a
+/// name *inside* something: a struct field, an enum variant, a local, a JSON key.
+/// Those spellings collide with unrelated code all over a repository — the
+/// `IconName` enum "defines" `Option`, `Box` and `File`; `EditorSettingsContent`
+/// "defines" `Menu`, `Full` and `Open` — and an edge through one of them says the
+/// two files share a word, not that one depends on the other.
+///
+/// Measured on this repository: `crates/icons/src/icons.rs` owns 200 names, 198
+/// of them variants, and with those counted it is the map's first file (282
+/// referencing files); without them it leaves the top fifteen entirely. The
+/// seven `settings_content` files that own the settings vocabulary fall out the
+/// same way: `editor.rs` keeps 58 referencing files instead of 218, and never
+/// reaches the first page. Tests are unaffected — `tests.rs` and `util.rs` own
+/// functions, so their counts and positions do not move.
+pub const OWNING_KINDS: &[&str] = &[
+    "function",
+    "method",
+    "class",
+    "struct",
+    "enum",
+    "trait",
+    "interface",
+    "type",
+    "constant",
+    "macro",
+    "module",
+];
+
+/// Whether a definition of this kind can own an inbound reference edge.
+fn owns_references(kind: &str) -> bool {
+    OWNING_KINDS.contains(&kind)
+}
+
+/// The group of languages whose identifiers can name one another's definitions.
+///
+/// A mention only counts when the mentioning file and the defining file speak the
+/// same language: `Option`, `Menu` and `theme` are spelled identically in Rust,
+/// TypeScript, JSON and Markdown, so a cross-language match is a coincidence of
+/// spelling. On this repository that removes 1,795 of 45,823 edges (3.9%), but
+/// they are the ones that matter: 91–95% of the inbound edges of
+/// `website/i18n/en.ts`, `zh-CN.ts` and `website/components/WuWindow.tsx` were
+/// Rust files, which is what put three website files in the first page.
+///
+/// Related grammars share a group because their identifiers really do refer to
+/// each other: a `.c` file includes `.h` files that the `C++` grammar claims, and
+/// a `.tsx` component imports `.ts` modules. A language this list does not name
+/// is its own group, so adding a grammar cannot silently borrow another's names.
+fn language_family(name: &str) -> &str {
+    match name {
+        "Rust" => "rust",
+        "C" | "C++" => "c",
+        "TypeScript" | "TSX" | "JavaScript" => "javascript",
+        "Python" => "python",
+        "Go" => "go",
+        "JSON" | "JSONC" => "json",
+        "Markdown" | "Markdown Inline" => "markdown",
+        "YAML" => "yaml",
+        "Shell Script" => "shell",
+        other => other,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolEntry {
     pub name: Arc<str>,
@@ -162,6 +239,13 @@ pub struct FileSymbols {
     /// Distinct files holding a definition this one references, under the same
     /// filter as [`FileSymbols::in_degree`].
     pub out_degree: u32,
+    /// Distinct files whose `include`, `use` or `import` resolves to this file.
+    ///
+    /// Unlike [`FileSymbols::in_degree`] this is not inferred from names: every
+    /// edge here was resolved to a real file path by
+    /// [`resolve_dependencies`], so it is the "certain dependency" count — the
+    /// file imports this one, rather than mentioning a name this one also uses.
+    pub dep_in_degree: u32,
     pub symbols: Vec<SymbolEntry>,
 }
 
@@ -219,7 +303,9 @@ impl SymbolMap {
         "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), \
          then path. `in N` counts distinct files that reference a definition this file owns, \
          ignoring names shared by more than 20 files; `out M` counts the files this one \
-         references under the same rule."
+         references under the same rule; `deps N` counts the files whose `mod`, `use`, \
+         `#include` or relative `import` resolves to this one, so it is a certain \
+         dependency rather than a shared name."
     }
 
     /// Renders the map as markdown for a chat prompt.
@@ -482,10 +568,11 @@ impl SymbolMap {
 
     fn file_block(&self, file: &FileSymbols, options: &RepoMapOptions) -> String {
         let mut block = format!(
-            "\n`{}` (in {} / out {}, {} lines)\n",
+            "\n`{}` (in {} / out {} / deps {}, {} lines)\n",
             file.rel.display(path::PathStyle::Unix),
             file.in_degree,
             file.out_degree,
+            file.dep_in_degree,
             file.lines
         );
         if options.files_only {
@@ -632,6 +719,7 @@ pub fn file_json(file: &FileSymbols) -> serde_json::Value {
         "lines": file.lines,
         "in": file.in_degree,
         "out": file.out_degree,
+        "deps": file.dep_in_degree,
         "symbols": file.symbols.iter().map(symbol_json).collect::<Vec<_>>(),
     })
 }
@@ -1224,6 +1312,7 @@ async fn parse_sources(
 /// Ranks the parsed files and turns them into the map's public shape.
 fn finish(mut parsed: Vec<ParsedFile>, mut stats: BuildStats) -> SymbolMap {
     stats.parsed = parsed.len();
+    resolve_dependencies(&mut parsed);
     rank(&mut parsed);
     parsed.sort_by(|a, b| {
         b.in_degree
@@ -1242,6 +1331,7 @@ fn finish(mut parsed: Vec<ParsedFile>, mut stats: BuildStats) -> SymbolMap {
                 lines: file.lines,
                 in_degree: file.in_degree,
                 out_degree: file.out_degree,
+                dep_in_degree: file.dep_in_degree,
                 symbols: file.symbols,
             })
             .collect(),
@@ -1263,6 +1353,15 @@ struct ParsedFile {
     /// Identifiers mentioned anywhere in the file, used to build the
     /// reference graph.
     mentions: HashSet<Arc<str>>,
+    /// Language group whose identifiers can name this file's definitions, from
+    /// [`language_family`].
+    family: Arc<str>,
+    /// Import specs the file declares, tagged with their kind (`mod:`, `use:`,
+    /// `include:`, `import:`). Resolved to real paths by
+    /// [`resolve_dependencies`].
+    includes: Vec<String>,
+    /// Distinct files whose import spec resolves to this one.
+    dep_in_degree: u32,
 }
 
 /// One file's parse as the cache document holds it.
@@ -1278,6 +1377,13 @@ struct CachedParse {
     symbols: Vec<SymbolEntry>,
     #[serde(default)]
     mentions: Vec<Arc<str>>,
+    /// The group whose identifiers can name this file's definitions, from
+    /// [`language_family`]. Stored rather than derived so a cache document is
+    /// self-describing; changing the grouping means bumping the cache version.
+    #[serde(default)]
+    family: String,
+    #[serde(default)]
+    includes: Vec<String>,
 }
 
 impl CachedParse {
@@ -1297,6 +1403,9 @@ impl CachedParse {
             out_degree: 0,
             symbols: self.symbols.clone(),
             mentions: self.mentions.iter().cloned().collect(),
+            family: self.family.as_str().into(),
+            includes: self.includes.clone(),
+            dep_in_degree: 0,
         }
     }
 }
@@ -1312,6 +1421,8 @@ struct CachedParseRef<'a> {
     lines: u32,
     symbols: &'a [SymbolEntry],
     mentions: Vec<&'a str>,
+    family: &'a str,
+    includes: &'a [String],
 }
 
 impl<'a> From<&'a ParsedFile> for CachedParseRef<'a> {
@@ -1323,6 +1434,8 @@ impl<'a> From<&'a ParsedFile> for CachedParseRef<'a> {
             lines: file.lines,
             symbols: &file.symbols,
             mentions,
+            family: &file.family,
+            includes: &file.includes,
         }
     }
 }
@@ -1342,7 +1455,8 @@ fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Opti
     let tree = parser.parse(text, None)?;
 
     let symbols = collect_symbols(grammar.outline_config.as_ref(), tree.root_node(), text);
-    let mentions = collect_mentions(tree.root_node(), text);
+    let family: Arc<str> = language_family(language.name().as_ref()).into();
+    let (mentions, includes) = collect_references(tree.root_node(), text, &family);
     Some(ParsedFile {
         rel: source.rel.clone(),
         path: absolute_key(&source.abs_path),
@@ -1353,7 +1467,49 @@ fn parse_file(source: &SourceFile, text: &str, language: &Arc<Language>) -> Opti
         out_degree: 0,
         symbols,
         mentions,
+        family,
+        includes,
+        dep_in_degree: 0,
     })
+}
+
+
+/// `use crate::a::{b, c as d};` becomes `crate::a::b` and `crate::a::c`.
+///
+/// One level of braces is enough: every use statement in this repository nests at
+/// most that deep, and a path this cannot expand is simply not resolved.
+fn expand_use_path(raw: &str) -> Vec<String> {
+    let text = raw.trim().trim_end_matches(';').trim();
+    let text = text.strip_prefix("use ").unwrap_or(text).trim();
+    let Some(open) = text.find('{') else {
+        return vec![strip_alias(text)];
+    };
+    let head = text[..open].trim().trim_end_matches("::").trim();
+    let Some(close) = text.rfind('}') else {
+        return vec![strip_alias(text)];
+    };
+    text[open + 1..close]
+        .split(',')
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| {
+            if branch == "self" {
+                head.to_owned()
+            } else {
+                format!("{head}::{}", strip_alias(branch))
+            }
+        })
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+/// Drops a trailing `as Name` from a use path.
+fn strip_alias(path: &str) -> String {
+    let path = path.trim();
+    match path.find(" as ") {
+        Some(at) => path[..at].trim().to_owned(),
+        None => path.to_owned(),
+    }
 }
 
 /// A definition name reported by the outline query, before the per-file cap.
@@ -1987,30 +2143,85 @@ fn has_type_ancestor(node: tree_sitter::Node<'_>) -> bool {
     false
 }
 
-/// Collects identifier-shaped tokens. Every tree-sitter grammar in this
-/// repository names identifiers with a `*_identifier` kind, which keeps this
-/// language-agnostic without a per-language tags query.
-fn collect_mentions(root: tree_sitter::Node<'_>, text: &str) -> HashSet<Arc<str>> {
+/// Collects identifier-shaped tokens and the import specs a file declares, in
+/// one walk of the tree.
+///
+/// Every tree-sitter grammar in this repository names identifiers with a
+/// `*_identifier` kind, which keeps the mention side language-agnostic without a
+/// per-language tags query. The specs are tagged with the rule that resolves
+/// them: `mod:name`, `use:crate::a::b`, `include:path.h`, `import:./path`.
+///
+/// Only specs that name a file are kept. A Rust inline `mod foo { ... }` is a
+/// declaration, not an include, so it is skipped — treating its text as a path is
+/// what used to point every inline test module at the shallowest `tests.rs`.
+/// `use serde::Deserialize` is kept as a spec and refused later by
+/// [`resolve_dependencies`], which knows the crate's module tree.
+fn collect_references(
+    root: tree_sitter::Node<'_>,
+    text: &str,
+    family: &str,
+) -> (HashSet<Arc<str>>, Vec<String>) {
     let bytes = text.as_bytes();
     let mut mentions: HashSet<Arc<str>> = HashSet::new();
+    let mut includes = Vec::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if mentions.len() >= MAX_IDENTIFIERS_PER_FILE {
-            break;
-        }
         let kind = node.kind();
-        if kind.ends_with("identifier")
+        // The mention cap bounds the reference graph; the walk itself continues
+        // so an import declared late in a huge file is still seen.
+        if mentions.len() < MAX_IDENTIFIERS_PER_FILE
+            && kind.ends_with("identifier")
             && let Ok(name) = node.utf8_text(bytes)
             && !name.is_empty()
         {
             mentions.insert(name.into());
+        }
+        match (family, kind) {
+            ("rust", "mod_item") => {
+                if node.child_by_field_name("body").is_none()
+                    && let Some(name) = node.child_by_field_name("name")
+                    && let Ok(raw) = name.utf8_text(bytes)
+                {
+                    includes.push(format!("mod:{raw}"));
+                }
+            }
+            ("rust", "use_declaration") => {
+                if let Ok(raw) = node.utf8_text(bytes) {
+                    for path in expand_use_path(raw) {
+                        includes.push(format!("use:{path}"));
+                    }
+                }
+            }
+            ("c", "preproc_include") => {
+                if let Some(path) = node.child_by_field_name("path")
+                    && let Ok(raw) = path.utf8_text(bytes)
+                    && let Some(spec) = raw.trim().strip_prefix('"')
+                    && let Some(spec) = spec.strip_suffix('"')
+                {
+                    includes.push(format!("include:{spec}"));
+                }
+            }
+            ("javascript", "import_statement" | "export_statement") => {
+                let source = node
+                    .child_by_field_name("source")
+                    .or_else(|| node.child_by_field_name("path"));
+                if let Some(source) = source
+                    && let Ok(raw) = source.utf8_text(bytes)
+                {
+                    let spec = raw.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if spec.starts_with('.') {
+                        includes.push(format!("import:{spec}"));
+                    }
+                }
+            }
+            _ => {}
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push(child);
         }
     }
-    mentions
+    (mentions, includes)
 }
 
 /// Character budget for one `repo_map` page.
@@ -2071,8 +2282,206 @@ fn mention_weight(definers: usize) -> f32 {
     1. / definers as f32
 }
 
-/// Whether a file's definitions are data rather than names code can call.
+/// Resolves every file's import specs to the files they actually name, and sets
+/// [`FileSymbols::dep_in_degree`] on the targets.
 ///
+/// This is the only place a spec becomes an edge, and it refuses anything it
+/// cannot prove: `use crate::a::b` resolves inside the crate's own module tree,
+/// `mod x;` looks where rustc looks, `#include "x.h"` and `import "./x"` follow
+/// the path they spell. A bare name — `use serde::Deserialize`, `import "react"`,
+/// `#include <stdio.h>` — names something outside the map, so it creates nothing.
+/// Guessing by file stem is what used to send every `use serde::…` in this
+/// repository to `crates/util/src/serde.rs` and every inline `mod tests` to the
+/// shallowest `tests.rs`.
+fn resolve_dependencies(files: &mut [ParsedFile]) {
+    let paths: Vec<String> = files
+        .iter()
+        .map(|file| file.rel.display(path::PathStyle::Unix).into_owned())
+        .collect();
+    let by_path: HashMap<&str, usize> = paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| (path.as_str(), index))
+        .collect();
+
+    let mut incoming: Vec<u32> = vec![0; files.len()];
+    for (index, file) in files.iter().enumerate() {
+        let mut targets: HashSet<usize> = HashSet::new();
+        for spec in &file.includes {
+            if let Some(target) = resolve_spec(spec, &paths[index], &by_path)
+                && target != index
+            {
+                targets.insert(target);
+            }
+        }
+        for target in targets {
+            incoming[target] += 1;
+        }
+    }
+    for (index, file) in files.iter_mut().enumerate() {
+        file.dep_in_degree = incoming[index];
+    }
+}
+
+/// Extensions a JavaScript or TypeScript relative import may omit.
+const IMPORT_EXTENSIONS: &[&str] = &["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+/// Resolves one tagged spec (`mod:…`, `use:…`, `include:…`, `import:…`) against
+/// the files the map holds.
+fn resolve_spec(spec: &str, source: &str, by_path: &HashMap<&str, usize>) -> Option<usize> {
+    let (kind, rest) = spec.split_once(':')?;
+    match kind {
+        "mod" => resolve_module(rest, source, by_path),
+        "use" => resolve_use(rest, source, by_path),
+        "include" => resolve_relative(rest, source, by_path, &[""]),
+        "import" => resolve_relative(rest, source, by_path, IMPORT_EXTENSIONS),
+        _ => None,
+    }
+}
+
+/// `mod x;` resolves to the four places rustc looks for `x`: beside the module
+/// file (`foo/x.rs`, `foo/x/mod.rs`) and, for the `foo.rs` style the compiler
+/// still accepts, beside it (`x.rs`, `x/mod.rs`).
+fn resolve_module(name: &str, source: &str, by_path: &HashMap<&str, usize>) -> Option<usize> {
+    let directory = parent_of(source);
+    let base = source.rsplit('/').next().unwrap_or_default();
+    let child = if matches!(base, "mod.rs" | "lib.rs" | "main.rs") {
+        directory.to_owned()
+    } else {
+        format!("{directory}/{}", base.trim_end_matches(".rs"))
+    };
+    for prefix in [child.as_str(), directory] {
+        let prefix = if prefix.is_empty() { "" } else { prefix };
+        for candidate in [
+            format!("{prefix}/{name}.rs"),
+            format!("{prefix}/{name}/mod.rs"),
+        ] {
+            let candidate = candidate.trim_start_matches('/');
+            if let Some(&index) = by_path.get(candidate) {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+/// `use crate::a::b` resolves inside this file's crate module tree.
+///
+/// The longest path that names a file wins, so `use crate::editor::Editor` lands
+/// on `editor.rs` (the last segment is a type, not a module) while
+/// `use crate::editor::display_map` lands on `display_map.rs`. Paths that start
+/// with any other root — `std`, `serde`, another crate — name nothing here.
+fn resolve_use(path: &str, source: &str, by_path: &HashMap<&str, usize>) -> Option<usize> {
+    let root = crate_root(source)?;
+    let mut segments: Vec<&str> = path.split("::").collect();
+    let mut prefix: Vec<&str> = Vec::new();
+    match segments.first().copied()? {
+        "crate" => {
+            segments.remove(0);
+        }
+        "self" => {
+            segments.remove(0);
+            prefix = module_of(source);
+        }
+        "super" => {
+            let mut module = module_of(source);
+            while segments.first() == Some(&"super") {
+                segments.remove(0);
+                module.pop();
+            }
+            prefix = module;
+        }
+        _ => return None,
+    }
+    if segments.is_empty() || segments.iter().any(|segment| *segment == "*" || segment.is_empty()) {
+        return None;
+    }
+    let mut full: Vec<&str> = prefix;
+    full.extend(segments);
+    for cut in (1..=full.len()).rev() {
+        let head = full[..cut].join("/");
+        for candidate in [format!("{root}/{head}.rs"), format!("{root}/{head}/mod.rs")] {
+            if let Some(&index) = by_path.get(candidate.as_str()) {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+/// `#include "x.h"` and `import "./x"` resolve against the including file's
+/// directory, with the extensions the language lets the author omit.
+fn resolve_relative(
+    spec: &str,
+    source: &str,
+    by_path: &HashMap<&str, usize>,
+    extensions: &[&str],
+) -> Option<usize> {
+    let spec = spec.replace('\\', "/");
+    let base = normalize_join(parent_of(source), &spec);
+    if base.is_empty() {
+        return None;
+    }
+    for extension in extensions {
+        if let Some(&index) = by_path.get(format!("{base}{extension}").as_str()) {
+            return Some(index);
+        }
+        for index_file in ["index.ts", "index.tsx", "index.js", "index.jsx"] {
+            if !extension.is_empty() {
+                continue;
+            }
+            if let Some(&index) = by_path.get(format!("{base}/{index_file}").as_str()) {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+/// Joins `spec` onto `base`, applying `.` and `..` the way a path would.
+fn normalize_join(base: &str, spec: &str) -> String {
+    let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
+    for segment in spec.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+fn parent_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+/// The crate root a file belongs to: the path up to and including its `src`.
+fn crate_root(source: &str) -> Option<&str> {
+    let parts: Vec<&str> = source.split('/').collect();
+    let src = parts.iter().position(|part| *part == "src")?;
+    if src + 1 >= parts.len() {
+        return None;
+    }
+    Some(&source[..source.find("/src/")? + 4])
+}
+
+/// The module path of a file inside its crate, as `crate::…` would spell it.
+fn module_of(source: &str) -> Vec<&str> {
+    let Some(root) = crate_root(source) else {
+        return Vec::new();
+    };
+    let rest = source[root.len()..].trim_start_matches('/');
+    let mut parts: Vec<&str> = rest.split('/').collect();
+    let base = parts.pop().unwrap_or_default();
+    if !matches!(base, "mod.rs" | "lib.rs" | "main.rs") {
+        parts.push(base.trim_end_matches(".rs"));
+    }
+    parts
+}
+
+/// Whether a file's definitions are data rather than names code can call.
 /// JSON keys and Markdown headings reach the map through the outline query with
 /// the generic `symbol` kind, and they are spelled like the code that consumes
 /// them: `assets/settings/default.json` "defines" `dev`, `light` and
@@ -2088,12 +2497,15 @@ fn is_data_file(file: &ParsedFile) -> bool {
 /// PageRank over the cross-file reference graph, and the `in`/`out` counts that
 /// describe the same graph.
 ///
-/// An edge `a -> b` means file `a` mentions a name that file `b` defines. A name
-/// more than [`MAX_SHARED_NAME_FILES`] files mention is vocabulary rather than a
-/// dependency and makes no edge at all; every other mention weighs
-/// [`mention_weight`] of the number of files defining the name. Degrees are the
-/// number of distinct files on each side of those filtered edges, so what a page
-/// prints and what the ranking used cannot disagree.
+/// An edge `a -> b` means file `a` mentions a name that file `b` owns. Three
+/// rules decide whether the mention is evidence at all: only
+/// [`OWNING_KINDS`] can own a name, both files must be in the same
+/// [`language_family`] (a `Menu` in TypeScript is not a `Menu` in Rust), and a
+/// name more than [`MAX_SHARED_NAME_FILES`] files mention is vocabulary rather
+/// than a dependency. Every surviving mention weighs [`mention_weight`] of the
+/// number of files owning the name. Degrees are the number of distinct files on
+/// each side of those edges, so what a page prints and what the ranking used
+/// cannot disagree.
 fn rank(files: &mut [ParsedFile]) {
     let count = files.len();
     if count == 0 {
@@ -2117,6 +2529,9 @@ fn rank(files: &mut [ParsedFile]) {
             *mentioned_by.entry(mention.clone()).or_default() += 1;
         }
         for symbol in &file.symbols {
+            if !owns_references(&symbol.kind) {
+                continue;
+            }
             defined_in
                 .entry(symbol.name.clone())
                 .or_default()
@@ -2148,7 +2563,7 @@ fn rank(files: &mut [ParsedFile]) {
             };
             let weight = mention_weight(definers.len());
             for &target in definers {
-                if target != index {
+                if target != index && files[target].family == file.family {
                     *weights.entry(target).or_default() += weight;
                 }
             }
@@ -2269,6 +2684,7 @@ mod tests {
             lines: 1,
             in_degree: 0,
             out_degree: 0,
+            dep_in_degree: 0,
             symbols,
         }
     }
@@ -2282,9 +2698,19 @@ mod tests {
             rank: 0.,
             in_degree: 0,
             out_degree: 0,
+            dep_in_degree: 0,
             symbols: defs.iter().map(|name| entry(name, "function", 0)).collect(),
             mentions: mentions.iter().map(|name| Arc::from(*name)).collect(),
+            family: "rust".into(),
+            includes: Vec::new(),
         }
+    }
+
+    /// The same fixture in another language family.
+    fn file_in_family(rel: &str, family: &str, defs: &[&str], mentions: &[&str]) -> ParsedFile {
+        let mut file = file(rel, defs, mentions);
+        file.family = family.into();
+        file
     }
 
     #[test]
@@ -3374,7 +3800,7 @@ mod tests {
         let text = map.to_markdown(100_000);
         assert!(
             text.contains(
-                "Indexed 812 / 3368 candidate files (1310 unsupported language, 60 over 256 KiB, \
+                "Indexed 812 / 3368 candidate files (1310 unsupported language, 60 over 1024 KiB, \
                  98 over the byte budget, 1086 beyond the 3000-file limit, 2 unreadable)."
             ),
             "{text}"
@@ -3418,7 +3844,7 @@ mod tests {
             100_000,
         );
         assert!(
-            text.contains("`src/lib.rs` (in 0 / out 0, 1 lines)"),
+            text.contains("`src/lib.rs` (in 0 / out 0 / deps 0, 1 lines)"),
             "{text}"
         );
         assert!(!text.contains("function main"), "{text}");
@@ -3890,6 +4316,81 @@ vector<int> bfs(int start) {
     }
 
     #[test]
+    fn only_callable_and_type_names_own_an_edge() {
+        // A field, a variant and a local are spellings inside something, not an
+        // API another file can name, so a mention of one proves nothing.
+        let mut owner = file("settings.rs", &["refresh"], &[]);
+        owner.symbols = vec![
+            entry("menu", "field", 0),
+            entry("open", "variant", 1),
+            entry("refresh", "function", 2),
+        ];
+        let mut files = vec![owner, file("caller.rs", &["caller_api"], &["menu", "open", "refresh"])];
+        rank(&mut files);
+
+        // Only `refresh` is an owner, so the caller has exactly one edge.
+        assert_eq!(files[1].out_degree, 1);
+        assert_eq!(files[0].in_degree, 1);
+
+        let mut fields_only = file("settings.rs", &[], &[]);
+        fields_only.symbols = vec![entry("menu", "field", 0), entry("open", "variant", 1)];
+        let mut files = vec![
+            fields_only,
+            file("caller.rs", &["caller_api"], &["menu", "open"]),
+        ];
+        rank(&mut files);
+        assert_eq!(files[1].out_degree, 0, "no owner, no edge");
+        assert_eq!(files[0].in_degree, 0);
+    }
+
+    #[test]
+    fn dependency_specs_resolve_only_to_paths_that_exist() {
+        let mut lib = file("crates/a/src/lib.rs", &["a"], &[]);
+        lib.includes = vec![
+            "mod:store".to_owned(),
+            "mod:util".to_owned(),
+            "mod:missing".to_owned(),
+            "use:crate::util::Helper".to_owned(),
+            "use:serde::Deserialize".to_owned(),
+            "use:util::Thing".to_owned(),
+        ];
+        let mut store = file("crates/a/src/store.rs", &["b"], &[]);
+        store.includes = vec!["mod:io".to_owned()];
+        let util = file("crates/a/src/util.rs", &["c"], &[]);
+        let io = file("crates/a/src/store/io.rs", &["d"], &[]);
+        let mut page = file_in_family("web/app.tsx", "javascript", &["App"], &[]);
+        page.includes = vec!["import:./theme".to_owned(), "import:react".to_owned()];
+        let theme = file_in_family("web/theme.ts", "javascript", &["Theme"], &[]);
+
+        let mut files = vec![lib, store, util, io, page, theme];
+        resolve_dependencies(&mut files);
+
+        // `mod:store` uses the `foo.rs` layout, `mod:io` the `foo/` layout, and
+        // `use:crate::util::Helper` names a type in `util.rs`.
+        assert_eq!(files[1].dep_in_degree, 1, "store.rs is declared by lib.rs");
+        assert_eq!(files[2].dep_in_degree, 1, "util.rs is used by lib.rs");
+        assert_eq!(files[3].dep_in_degree, 1, "store/io.rs is declared by store.rs");
+        assert_eq!(files[5].dep_in_degree, 1, "theme.ts is imported by app.tsx");
+        // Missing files, external crates and bare crate names create nothing.
+        assert_eq!(files[0].dep_in_degree, 0);
+    }
+
+    #[test]
+    fn a_name_only_counts_inside_one_language_family() {
+        let mut files = vec![
+            file_in_family("website/en.ts", "javascript", &["Menu"], &[]),
+            file_in_family("src/ui.rs", "rust", &["Label"], &["Menu"]),
+            file_in_family("website/app.tsx", "javascript", &["App"], &["Menu"]),
+        ];
+        rank(&mut files);
+
+        // The Rust file writes `Menu` but means nothing the TypeScript file owns.
+        assert_eq!(files[0].in_degree, 1, "only the TypeScript caller counts");
+        assert_eq!(files[1].out_degree, 0);
+        assert_eq!(files[2].out_degree, 1);
+    }
+
+    #[test]
     fn a_distinctive_name_carries_more_rank_than_a_shared_one() {
         let mut files = vec![
             file("rare_owner.rs", &["rare_api"], &[]),
@@ -4059,6 +4560,8 @@ vector<int> bfs(int start) {
         );
     }
 }
+
+
 
 
 

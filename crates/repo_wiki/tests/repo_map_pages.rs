@@ -122,6 +122,7 @@ fn map_from_fixture(doc: &serde_json::Value) -> SymbolMap {
             lines: number(file, "lines") as u32,
             in_degree: number(file, "in") as u32,
             out_degree: number(file, "out") as u32,
+            dep_in_degree: number(file, "deps") as u32,
             symbols: file["symbols"]
                 .as_array()
                 .expect("symbols is an array")

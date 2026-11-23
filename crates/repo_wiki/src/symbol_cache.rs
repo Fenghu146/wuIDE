@@ -32,7 +32,11 @@ use crate::symbol_map::SymbolMap;
 
 /// Bump when the document layout, or what a payload means, changes. Documents
 /// written by another version are ignored instead of reinterpreted.
-const CACHE_VERSION: u32 = 1;
+///
+/// Version 2 added each file's `family` (the language group its names belong to)
+/// and its include specs; a version 1 document has neither, and reusing it would
+/// silently rank the map with every file in one family and no dependencies.
+const CACHE_VERSION: u32 = 2;
 
 /// Total bytes the cache may occupy on disk.
 ///

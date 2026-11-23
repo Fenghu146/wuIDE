@@ -1,11 +1,11 @@
 ## Repository map
 
 showing 1–10 of 51 files with definitions.
-Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule.
-Indexed 52 / 60 candidate files (5 unsupported language, 2 over 256 KiB, 1 unreadable).
+Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. `in N` counts distinct files that reference a definition this file owns, ignoring names shared by more than 20 files; `out M` counts the files this one references under the same rule; `deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this one, so it is a certain dependency rather than a shared name.
+Indexed 52 / 60 candidate files (5 unsupported language, 2 over 1024 KiB, 1 unreadable).
 Excluded before scanning: 3 vendored or generated paths.
 
-`crates/gpui/src/gpui.rs` (in 128 / out 31, 1820 lines)
+`crates/gpui/src/gpui.rs` (in 128 / out 31 / deps 7, 1820 lines)
 - struct App (line 40)
 - `public:`
   - function run(self) (line 88)
@@ -15,22 +15,22 @@ Excluded before scanning: 3 vendored or generated paths.
 - `private:`
   - function quit(self) (line 120)
 
-`crates/project/src/project.rs` (in 97 / out 24, 1420 lines)
+`crates/project/src/project.rs` (in 97 / out 24 / deps 1, 1420 lines)
 - struct Project (line 70)
 - function worktree_for_entry(self, entry_id: u64) -> Option<Entity<Worktree>> (line 320)
 
-`crates/language/src/language.rs` (in 88 / out 19, 980 lines)
+`crates/language/src/language.rs` (in 88 / out 19 / deps 2, 980 lines)
 - struct Language (line 120)
 
-`crates/editor/src/editor.rs` (in 74 / out 40, 2100 lines)
+`crates/editor/src/editor.rs` (in 74 / out 40 / deps 3, 2100 lines)
 - struct Editor (line 60)
 - function buffer(self) -> &Entity<Buffer> (line 700)
 - function scroll (line 900)
 
-`crates/workspace/src/workspace.rs` (in 61 / out 18, 800 lines)
+`crates/workspace/src/workspace.rs` (in 61 / out 18 / deps 0, 800 lines)
 - struct Workspace (line 30)
 
-`crates/text/src/text.rs` (in 55 / out 12, 640 lines)
+`crates/text/src/text.rs` (in 55 / out 12 / deps 1, 640 lines)
 - function op_0(self) (line 1)
 - function op_1(self) (line 4)
 - function op_2(self) (line 7)
@@ -73,16 +73,16 @@ Excluded before scanning: 3 vendored or generated paths.
 - function op_39(self) (line 118)
 … +2 more symbols
 
-`crates/ui/src/ui.rs` (in 48 / out 6, 410 lines)
+`crates/ui/src/ui.rs` (in 48 / out 6 / deps 2, 410 lines)
 - struct Label (line 22)
 
-`crates/settings/src/settings.rs` (in 41 / out 9, 330 lines)
+`crates/settings/src/settings.rs` (in 41 / out 9 / deps 3, 330 lines)
 - struct Settings (line 12)
 
-`crates/lsp/src/lsp.rs` (in 37 / out 11, 520 lines)
+`crates/lsp/src/lsp.rs` (in 37 / out 11 / deps 0, 520 lines)
 - struct LanguageServer (line 40)
 
-`crates/path/src/path.rs` (in 33 / out 4, 260 lines)
+`crates/path/src/path.rs` (in 33 / out 4 / deps 1, 260 lines)
 - struct RelPath (line 18)
 
 Omitted files (41, paths only):
