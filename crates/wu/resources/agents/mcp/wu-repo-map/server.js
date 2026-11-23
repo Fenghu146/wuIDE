@@ -29,6 +29,9 @@ const MAX_OMITTED_PATHS = 20;
 const MAX_OMITTED_PATHS_SMALL = 10;
 // Mirrors `repo_wiki::symbol_map::MAX_FILES`: the file count one build indexes.
 const MAX_FILES = 3000;
+// Mirrors `repo_wiki::symbol_map::MAX_FILE_BYTES`: the largest file one build
+// parses. Only used to name the cap in the coverage line.
+const MAX_FILE_BYTES = 1024 * 1024;
 // Mirrors `repo_wiki::symbol_map::VENDORED_DIRS`: used only to explain why a
 // path is absent from the snapshot, since the IDE excludes it while scanning.
 const VENDORED_DIRS = new Set([
@@ -70,7 +73,7 @@ const STALE_SNAPSHOT =
   "panel in Wu, then call this tool again.";
 const LEGACY_SNAPSHOT =
   "This snapshot was written by an older Wu build, so it has no signatures, access levels or " +
-  "include counts. Ask the user to open the Repository Map panel in Wu to rebuild it.";
+  "reference counts. Ask the user to open the Repository Map panel in Wu to rebuild it.";
 const NO_DIAGNOSTICS_SNAPSHOT =
   "No diagnostics snapshot is available yet. Ask the user to open the Problems panel in Wu " +
   "(or trigger a diagnostic) so the IDE can write one, then call this tool again.";
@@ -79,7 +82,11 @@ const STALE_DIAGNOSTICS_SNAPSHOT =
   "format. Ask the user to open the Problems panel in Wu to refresh it, then call again.";
 
 const DEFAULT_ORDER =
-  "Order: include fan-in (desc), then reference PageRank (desc), then path.";
+  "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. " +
+  "`in N` counts distinct files that reference a definition this file owns, ignoring names " +
+  "shared by more than 20 files; `out M` counts the files this one references under the same rule; " +
+  "`deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this " +
+  "one, so it is a certain dependency rather than a shared name.";
 
 // Languages the IDE can index; used only to explain why a path is missing.
 const SOURCE_EXTENSIONS = new Set([
@@ -268,8 +275,10 @@ function fileHeader(file) {
     // Version 1 snapshots carry no counts; do not invent zeros.
     return `\`${file.path}\``;
   }
+  // A snapshot written before `deps` existed simply omits it.
+  const deps = file.deps == null ? "" : ` / deps ${file.deps}`;
   return (
-    `\`${file.path}\` (in ${file.in || 0} / out ${file.out || 0}, ` +
+    `\`${file.path}\` (in ${file.in || 0} / out ${file.out || 0}${deps}, ` +
     `${file.lines || 0} lines)`
   );
 }
@@ -311,7 +320,7 @@ function coverageNotes(stats) {
   if (Number.isFinite(stats.considered) && stats.considered > 0) {
     const reasons = [];
     if (stats.unsupported > 0) reasons.push(`${stats.unsupported} unsupported language`);
-    if (stats.too_large > 0) reasons.push(`${stats.too_large} over 256 KiB`);
+    if (stats.too_large > 0) reasons.push(`${stats.too_large} over ${MAX_FILE_BYTES / 1024} KiB`);
     if (stats.over_budget > 0) reasons.push(`${stats.over_budget} over the byte budget`);
     if (stats.file_limit > 0) reasons.push(`${stats.file_limit} beyond the ${MAX_FILES}-file limit`);
     if (stats.unreadable > 0) reasons.push(`${stats.unreadable} unreadable`);
@@ -325,9 +334,17 @@ function coverageNotes(stats) {
 }
 
 // Everything before the body: the header, the ordering note and the coverage
-// of the build the page was cut from.
+// of the build the page was cut from. An offset at or past `total` leaves an
+// empty page; saying so beats printing a range that runs backwards.
 function renderPageHead(doc, written, start, end, total, options) {
-  let header = `showing ${start + 1}\u2013${written} of ${total} files with definitions`;
+  let header;
+  if (start >= total) {
+    header =
+      `showing 0 of ${total} files (offset ${options.offset} is past the end; ` +
+      `use an offset below ${total})`;
+  } else {
+    header = `showing ${start + 1}\u2013${written} of ${total} files with definitions`;
+  }
   // Only the budget needs an explanation: a page cut by `limit` is the page the
   // caller asked for, and the paging hint below covers it.
   if (written < end) {
@@ -648,10 +665,10 @@ const TOOLS = [
   {
     name: "repo_map",
     description:
-      "The project's repository map: files ordered by include fan-in, then by how much the " +
-      "rest of the repository refers to them, with their top-level definitions. Use `offset` " +
-      "to page and `files_only` to list paths and line counts. Files that are not shown are " +
-      "listed by path at the end.",
+      "The project's repository map: files ordered by how many files reference their " +
+      "definitions, then by how much the rest of the repository refers to them, with their " +
+      "top-level definitions. Use `offset` to page and `files_only` to list paths and line " +
+      "counts. Files that are not shown are listed by path at the end.",
     inputSchema: {
       type: "object",
       properties: {
@@ -671,7 +688,7 @@ const TOOLS = [
         },
         files_only: {
           type: "boolean",
-          description: "List files with their line counts and include counts, without symbols.",
+          description: "List files with their line counts and reference counts, without symbols.",
         },
         include_locals: {
           type: "boolean",
@@ -843,6 +860,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEFAULT_ORDER,
   renderDiagnostics,
   renderRepoMap,
   renderSymbols,

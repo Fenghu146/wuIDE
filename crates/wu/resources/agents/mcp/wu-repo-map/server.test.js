@@ -3,12 +3,18 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("node:fs");
+const { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
-const { join } = require("node:path");
+const { dirname, join } = require("node:path");
 const { after, test } = require("node:test");
 
-const { omittedPathLimit, renderDiagnostics, renderSymbols } = require("./server.js");
+const {
+  DEFAULT_ORDER,
+  omittedPathLimit,
+  renderDiagnostics,
+  renderRepoMap,
+  renderSymbols,
+} = require("./server.js");
 
 const workdir = mkdtempSync(join(tmpdir(), "wu-repo-map-test-"));
 mkdirSync(join(workdir, "src"));
@@ -104,4 +110,48 @@ test("a snapshot without a timestamp keeps listing its diagnostics", () => {
   );
   assert.doesNotMatch(text, /Snapshot/);
   assert.match(text, /^- src\/a\.rs:2:3 error error here$/m);
+});
+
+// The IDE renders the same page in Rust (`repo_wiki::symbol_map`) from the same
+// snapshot, and both sides compare against these golden files, so a change to
+// one renderer without the other fails here or in
+// `crates/repo_wiki/tests/repo_map_pages.rs`.
+function repoRoot() {
+  let directory = __dirname;
+  for (;;) {
+    if (existsSync(join(directory, "crates", "repo_wiki", "tests", "fixtures", "repo-map"))) {
+      return directory;
+    }
+    const parent = dirname(directory);
+    assert.notEqual(parent, directory, "no crates/repo_wiki above this test");
+    directory = parent;
+  }
+}
+
+const fixtures = join(repoRoot(), "crates/repo_wiki/tests/fixtures/repo-map");
+const snapshot = JSON.parse(readFileSync(join(fixtures, "snapshot.json"), "utf8"));
+
+const pages = [
+  ["limit-1", { limit: 1, offset: 0, filesOnly: false, includeLocals: false }],
+  ["limit-10", { limit: 10, offset: 0, filesOnly: false, includeLocals: false }],
+  ["limit-40", { limit: 40, offset: 0, filesOnly: false, includeLocals: false }],
+  ["files-only", { limit: 10, offset: 0, filesOnly: true, includeLocals: false }],
+  ["offset-past-end", { limit: 40, offset: 51, filesOnly: false, includeLocals: false }],
+];
+
+test("the fallback ordering note is the one the IDE writes", () => {
+  assert.equal(snapshot.order, DEFAULT_ORDER);
+});
+
+for (const [name, options] of pages) {
+  test(`renders ${name} exactly like the IDE`, () => {
+    const golden = readFileSync(join(fixtures, `${name}.md`), "utf8");
+    assert.equal(renderRepoMap(snapshot, options), golden);
+  });
+}
+
+test("an offset past the end says so instead of reversing the range", () => {
+  const text = renderRepoMap(snapshot, { limit: 40, offset: snapshot.files.length });
+  assert.match(text, /showing 0 of 51 files \(offset 51 is past the end; use an offset below 51\)/);
+  assert.doesNotMatch(text, /showing 52/);
 });

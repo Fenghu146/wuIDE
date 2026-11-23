@@ -1065,6 +1065,7 @@ mod tests {
                     lines: 12,
                     in_degree: 1,
                     out_degree: 1,
+                    dep_in_degree: 0,
                     symbols: vec![SymbolEntry {
                         name: format!("item{index}").into(),
                         kind: "function".into(),
