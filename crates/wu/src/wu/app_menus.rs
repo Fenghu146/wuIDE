@@ -1,4 +1,4 @@
-use gpui::{App, Menu, MenuItem, OsAction};
+use gpui::{Action as _, App, Menu, MenuItem, OsAction};
 use i18n::{t, tc};
 use release_channel::ReleaseChannel;
 use terminal_view::terminal_panel;
@@ -57,7 +57,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         view_items.push(MenuItem::separator());
     }
 
-    vec![
+    let mut menus = vec![
         Menu {
             name: "IDE".into(),
             disabled: false,
@@ -355,5 +355,22 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 ),
             ],
         },
-    ]
+    ];
+
+    // `check` does nothing on a channel that never polls, so offering the item
+    // there is only a menu entry that goes nowhere.
+    let polls_for_updates = ReleaseChannel::try_global(cx)
+        .map(|channel| channel.poll_for_updates())
+        .unwrap_or(false);
+    if !polls_for_updates && let Some(items) = menus.first_mut().map(|menu| &mut menu.items) {
+        items.retain(|item| {
+            !matches!(
+                item,
+                MenuItem::Action { action, .. }
+                    if action.name() == auto_update::Check.name()
+            )
+        });
+    }
+
+    menus
 }
