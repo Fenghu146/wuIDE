@@ -983,6 +983,57 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn a_chat_in_a_closed_panel_is_not_a_visible_chat(cx: &mut TestAppContext) {
+        let (setup, cx) = setup(cx).await;
+        let chat = open_tab(&setup, cx);
+        dock(&setup, &chat, cx);
+        assert!(panel_open(&setup, cx));
+
+        setup.workspace.update_in(cx, |workspace, window, cx| {
+            workspace.close_panel::<ChatPanel>(window, cx)
+        });
+        cx.run_until_parked();
+        assert!(!panel_open(&setup, cx));
+        assert!(
+            setup
+                .workspace
+                .read_with(cx, |workspace, cx| crate::agent_panel::visible_chat(
+                    workspace, cx
+                ))
+                .is_none(),
+            "a chat in a closed panel is not one the user is looking at"
+        );
+
+        setup.workspace.update_in(cx, |workspace, window, cx| {
+            crate::editor_bridge::add_diagnostics_to_chat(
+                workspace,
+                vec![crate::chat_view::DiagnosticCitation {
+                    path: setup.directory.path().join("src/worker.rs"),
+                    line: 4,
+                    column: 1,
+                    severity: "error".to_string(),
+                    code: Some("E0308".to_string()),
+                    message: "mismatched types".to_string(),
+                }],
+                false,
+                window,
+                cx,
+            )
+        });
+        setup.workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.notification_ids().len(),
+                1,
+                "the click asks for a chat instead of writing into the hidden one"
+            )
+        });
+        assert!(
+            !panel_open(&setup, cx),
+            "no chat is opened or revealed behind the user's back"
+        );
+    }
+
+    #[gpui::test]
     async fn chats_open_where_the_last_one_was(cx: &mut TestAppContext) {
         let (setup, cx) = setup(cx).await;
         let opens_in_panel = |cx: &mut VisualTestContext| {

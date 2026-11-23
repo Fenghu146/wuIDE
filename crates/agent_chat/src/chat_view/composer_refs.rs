@@ -508,13 +508,14 @@ fn badge(reference: &ComposerRef, chat: WeakEntity<ChatView>, cwd: &Path) -> Fol
 impl ChatView {
     /// Appends a reference to the composer as one compact chip, without sending
     /// anything. The same target is only added once, and a group leaves out
-    /// diagnostics an existing chip already points at.
+    /// diagnostics an existing chip already points at. Returns whether a chip
+    /// was added, so a caller can tell the user the reference was already there.
     pub(crate) fn insert_composer_reference(
         &mut self,
         target: ComposerRefTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         window.focus(&self.composer.focus_handle(cx), cx);
         let target = match target {
             ComposerRefTarget::Diagnostics(citations) => {
@@ -530,13 +531,13 @@ impl ChatView {
                     kept.push(citation);
                 }
                 if kept.is_empty() {
-                    return;
+                    return false;
                 }
                 ComposerRefTarget::Diagnostics(kept)
             }
             ComposerRefTarget::Diagnostic(citation) => {
                 if self.references_diagnostic(&citation) {
-                    return;
+                    return false;
                 }
                 ComposerRefTarget::Diagnostic(citation)
             }
@@ -548,11 +549,12 @@ impl ChatView {
             .iter()
             .any(|existing| existing.target.same_target(&target))
         {
-            return;
+            return false;
         }
         let id = self.next_composer_ref_id;
         self.next_composer_ref_id += 1;
         self.add_composer_ref(ComposerRef::new(id, target), false, window, cx);
+        true
     }
 
     /// Inserts a reference at the start of the composer, before anything the

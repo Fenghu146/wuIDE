@@ -232,10 +232,19 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
         language_registry: Option<Arc<LanguageRegistry>>,
         cx: &mut App,
     ) -> Vec<BlockProperties<Anchor>> {
+        // The block is rendered inside the file's own editor, so the buffer it
+        // came from is the file to cite. Without it the block has no cite
+        // button at all, which is why the entry used to exist only in the
+        // Problems panel.
+        let citation_path = snapshot
+            .buffer_snapshot()
+            .as_singleton()
+            .and_then(|buffer| buffer.file())
+            .map(|file| file.path().as_std_path().to_path_buf());
         let blocks = Self::diagnostic_blocks_for_group(
             diagnostic_group,
             buffer_id,
-            None,
+            citation_path.as_deref(),
             None,
             language_registry,
             cx,
@@ -420,19 +429,24 @@ impl DiagnosticBlock {
             )
             .when_some(self.citation.clone(), |this, citation| {
                 this.child(
-                    IconButton::new(chat_button_id, IconName::AgentChatRoundLine)
-                        .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text(t!("Add Diagnostic to Chat")))
-                        .aria_label(t!("Add Diagnostic to Chat"))
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(AddDiagnosticsToChat {
-                                    citations: vec![citation.clone()],
-                                    announce: false,
+                    div()
+                        .flex_none()
+                        .debug_selector(|| "diagnostic-row-chat".into())
+                        .child(
+                            IconButton::new(chat_button_id, IconName::AgentChatRoundLine)
+                                .icon_size(IconSize::Small)
+                                .tooltip(Tooltip::text(t!("Add Diagnostic to Chat")))
+                                .aria_label(t!("Add Diagnostic to Chat"))
+                                .on_click(move |_, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(AddDiagnosticsToChat {
+                                            citations: vec![citation.clone()],
+                                            announce: false,
+                                        }),
+                                        cx,
+                                    );
                                 }),
-                                cx,
-                            );
-                        }),
+                        ),
                 )
             })
             .child(

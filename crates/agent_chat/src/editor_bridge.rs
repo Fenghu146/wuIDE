@@ -98,9 +98,22 @@ pub fn add_diagnostics_to_chat(
     } else {
         ComposerRefTarget::Diagnostics(citations)
     };
-    chat.update(cx, |chat, cx| {
+    let added = chat.update(cx, |chat, cx| {
         chat.insert_composer_reference(target, window, cx)
     });
+    if !added {
+        // The chip is already there; saying so is the difference between "it
+        // worked before" and a click that appears to do nothing.
+        workspace.show_toast(
+            Toast::new(
+                NotificationId::unique::<ChatView>(),
+                t!("Already added to the chat.").to_string(),
+            )
+            .autohide(),
+            cx,
+        );
+        return;
+    }
     if announce {
         workspace.show_toast(
             Toast::new(
