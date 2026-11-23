@@ -2,6 +2,19 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## 1.4.4 - 2026-11-23
+
+- Repository map: vendored and generated directories such as `node_modules`, `vendor` and `dist` are excluded, so a Rust monorepo no longer comes back as third-party JavaScript.
+- Repository map: files are bucketed by their first two path components and the byte budget is shared between the buckets, so one directory cannot crowd out the rest and selection no longer depends on the order the caller supplies.
+- Repository map: up to 3000 files are indexed instead of 900, with a 64 MiB parse budget, and the header states how many candidate files were skipped.
+- Repository map: a per-file cache keyed by size and modification time makes reopening the panel almost instant, about a second on an unchanged repository instead of twenty.
+- Repository map: the list of omitted files names at most 20 paths instead of up to 100.
+- Tests: a cross-platform Rust stand-in replaces the POSIX `fake-claude.sh`, so the chat and Claude harness tests run on Windows; nineteen tests that only ran on Unix now run everywhere.
+- Edit predictions: a twenty-second total timeout, a warning that names only the endpoint host, and a one-to-thirty-second retry backoff, instead of failing silently.
+- A chat opened for a selection inherits the agent and model but no longer the approval mode.
+- Agent data now lives in one directory: `--user-data-dir` moves the Pi home, the repository map snapshots and the diagnostics snapshots together.
+- Fix the built-in Pi agent being reported as missing when Wu runs from a copied executable: the search includes the session's project, remembers the first successful resolution, and names the folders it checked.
+
 ## 1.4.3 - 2026-11-21
 
 - Fix the Windows test suite: 17 tests that drove a POSIX shell harness are skipped there instead of failing, the loopback proxy test no longer depends on the registry, and the code lens test derives its expected set from the viewport.
