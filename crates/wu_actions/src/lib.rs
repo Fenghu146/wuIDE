@@ -81,6 +81,12 @@ actions!(
         AddSelectionToChat,
         /// Asks the configured agent to fix the diagnostics around the cursor in the active editor.
         FixDiagnosticsWithAgent,
+        /// Runs the file in the editor with the command configured for its language.
+        RunCurrentFile,
+        /// Opens the run dialog to edit the command before running the file.
+        RunCurrentFileWithCommand,
+        /// Builds the file with debug symbols and starts a debug session.
+        DebugCurrentFile,
     ]
 );
 

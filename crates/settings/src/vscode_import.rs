@@ -184,6 +184,7 @@ impl VsCodeSettings {
             auto_update: None,
             base_keymap: Some(BaseKeymapContent::VSCode),
             credentials_url: None,
+            code_runner: None,
             debugger: self.side_bar_on_right().then(|| DebuggerSettingsContent {
                 dock: Some(DockPosition::Right),
                 ..DebuggerSettingsContent::default()

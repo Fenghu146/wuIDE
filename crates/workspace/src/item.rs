@@ -415,6 +415,11 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     ) -> Vec<(SharedString, Box<dyn Action>)> {
         Vec::new()
     }
+
+    /// Controls shown in this item's tab, after its title.
+    fn tab_controls(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Vec<AnyElement> {
+        Vec::new()
+    }
 }
 
 pub trait SerializableItem: Item {
@@ -594,6 +599,7 @@ pub trait ItemHandle: 'static + Send {
         window: &mut Window,
         cx: &mut App,
     ) -> Vec<(SharedString, Box<dyn Action>)>;
+    fn tab_controls(&self, window: &mut Window, cx: &mut App) -> Vec<AnyElement>;
     fn can_autosave(&self, cx: &App) -> bool {
         let is_deleted = self.project_entry_ids(cx).is_empty();
         self.is_dirty(cx) && !self.has_conflict(cx) && self.can_save(cx) && !is_deleted
@@ -1122,6 +1128,10 @@ impl<T: Item> ItemHandle for Entity<T> {
         self.update(cx, |this, cx| {
             this.tab_extra_context_menu_actions(window, cx)
         })
+    }
+
+    fn tab_controls(&self, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
+        self.update(cx, |this, cx| this.tab_controls(window, cx))
     }
 }
 

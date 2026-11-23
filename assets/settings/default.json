@@ -1667,6 +1667,41 @@
     // Control when to show the active encoding in the status bar.
     "active_encoding_button": "non_utf8",
   },
+  // Settings specific to running and debugging the file in the editor
+  "code_runner": {
+    // One shell command line per language, used by "Run Current File"
+    // (`ctrl-f5`) and the run button on the editor tab. `$ZED_FILE`,
+    // `$ZED_FILENAME`, `$ZED_DIRNAME`, `$ZED_STEM`, `$ZED_WORKTREE_ROOT` and
+    // `$ZED_LANGUAGE` are substituted before the command runs, in the
+    // directory of the file (the CMake project directory for `cmake`).
+    //
+    // Keys are language ids: `c`, `cpp`, `rust`, `python`, `javascript`,
+    // `typescript`, and `cmake` for C/C++ files in a project with a
+    // `CMakeLists.txt`. Any other key is matched against the file extension,
+    // so `"lua": "lua \"$ZED_FILENAME\""` runs `.lua` files. An empty value
+    // removes the built-in command for that language.
+    //
+    // Entries left out here use the built-in defaults. Runs reuse one terminal,
+    // so the command and its output stay visible there; "Run Current File…"
+    // opens the command for editing first.
+    //
+    // The built-in commands join the steps with `&&`, which needs a shell that
+    // supports it: PowerShell 7+, cmd and POSIX shells do, Windows PowerShell
+    // 5.1 does not. Use `;` instead there.
+    "executor_map": {},
+    // How to build and start a debug session per language, used by
+    // "Debug Current File" (`ctrl-shift-f5`) and the debug button on the
+    // editor tab.
+    //
+    // `build` has to produce a binary with debug symbols, `program` says where
+    // that binary lands (relative to the build's directory), and `adapter`
+    // names the debug adapter, `GDB` by default. Debug builds use their own
+    // binary name, so they never overwrite the binary a plain run writes.
+    //
+    // C and C++ have built-in entries; other languages have none until you add
+    // them here, and the debug button only shows where a plan exists.
+    "debug_map": {},
+  },
   // Settings specific to the terminal
   "terminal": {
     // What shell to use when opening a terminal. May take 3 values:

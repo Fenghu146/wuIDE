@@ -1,4 +1,5 @@
 mod action;
+mod code_runner;
 mod editor;
 mod extension;
 mod fallible_options;
@@ -13,6 +14,7 @@ mod workspace;
 
 pub use action::{ActionName, ActionWithArguments, CommandAliasTarget};
 use anyhow::Context;
+pub use code_runner::*;
 pub use editor::*;
 pub use extension::*;
 pub use fallible_options::*;
@@ -312,6 +314,9 @@ pub struct SettingsContent {
     /// Configuration of the terminal in IDE.
     pub terminal: Option<TerminalSettingsContent>,
 
+    /// Configuration for running the file in the editor with a single click.
+    pub code_runner: Option<CodeRunnerSettingsContent>,
+
     pub title_bar: Option<TitleBarSettingsContent>,
 
     /// Number of lines to search for modelines at the beginning and end of files.
@@ -366,6 +371,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         global_lsp_settings, image_viewer, markdown_preview, hide_mouse,
         log, line_indicator_format, outline_panel, project_panel, search_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, terminal,
+        code_runner,
         title_bar, modeline_lines,
         instrumentation,
     },
