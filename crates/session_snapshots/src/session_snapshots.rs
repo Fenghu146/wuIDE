@@ -16,6 +16,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
+use ::settings::Settings as _;
 use capture::capture_snapshot;
 pub use capture::{
     CaptureReport, CaptureRequest, MAX_FILE_BYTES, RestoreReport, find_worktree_root,
@@ -25,9 +26,8 @@ use fs::Fs;
 use gpui::{Action, App, AppContext as _};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 pub use settings::SessionSnapshotSettings;
-use ::settings::Settings as _;
+use std::path::PathBuf;
 pub use store::{
     SKIP_BINARY, SKIP_DELETED, SKIP_NOT_A_FILE, SKIP_TOO_LARGE, SessionSnapshotDb,
     SnapshotFileSummary, SnapshotKind, SnapshotSummary,

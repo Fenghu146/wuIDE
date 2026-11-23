@@ -1,7 +1,9 @@
 use crate::{
-    CaptureRequest, SessionSnapshotDb, SessionSnapshotSettings, SnapshotKind,
-    SKIP_BINARY, SKIP_DELETED, SKIP_TOO_LARGE,
-    capture::{capture_snapshot, find_worktree_root, read_file_text, restore_file, restore_snapshot},
+    CaptureRequest, SKIP_BINARY, SKIP_DELETED, SKIP_TOO_LARGE, SessionSnapshotDb,
+    SessionSnapshotSettings, SnapshotKind,
+    capture::{
+        capture_snapshot, find_worktree_root, read_file_text, restore_file, restore_snapshot,
+    },
     store::{NewSnapshot, NewSnapshotFile},
 };
 use fs::{Fs, RealFs};
@@ -37,7 +39,10 @@ fn run_git(directory: &Path, args: &[&str]) {
 
 fn init_repo(directory: &Path) {
     run_git(directory, &["init", "-b", "main"]);
-    run_git(directory, &["config", "user.email", "snapshots@example.com"]);
+    run_git(
+        directory,
+        &["config", "user.email", "snapshots@example.com"],
+    );
     run_git(directory, &["config", "user.name", "Snapshots"]);
     run_git(directory, &["config", "commit.gpgsign", "false"]);
     std::fs::write(directory.join("clean.txt"), "clean\n").unwrap();
@@ -121,7 +126,11 @@ async fn test_store_round_trip_and_cascade(cx: &mut TestAppContext) {
     .await
     .unwrap();
     // Incomplete snapshots stay out of the list.
-    assert!(db.list_snapshots("/project".to_string(), 10).unwrap().is_empty());
+    assert!(
+        db.list_snapshots("/project".to_string(), 10)
+            .unwrap()
+            .is_empty()
+    );
 
     db.finish_snapshot(snapshot_id, 1, 1, 7).await.unwrap();
 
@@ -155,7 +164,11 @@ async fn test_store_round_trip_and_cascade(cx: &mut TestAppContext) {
 
     // Trimming past the retention window removes the snapshot and its files.
     db.trim(64 * 1024 * 1024, 0, now()).await.unwrap();
-    assert!(db.list_snapshots("/project".to_string(), 10).unwrap().is_empty());
+    assert!(
+        db.list_snapshots("/project".to_string(), 10)
+            .unwrap()
+            .is_empty()
+    );
     assert!(db.list_files(snapshot_id).unwrap().is_empty());
 }
 
@@ -189,7 +202,10 @@ async fn test_list_snapshots_pages_with_keyset(cx: &mut TestAppContext) {
         .list_snapshots_before("/project".to_string(), ids[3], 2)
         .unwrap();
     assert_eq!(
-        second.iter().map(|snapshot| snapshot.id).collect::<Vec<_>>(),
+        second
+            .iter()
+            .map(|snapshot| snapshot.id)
+            .collect::<Vec<_>>(),
         vec![ids[2], ids[1]]
     );
 }
@@ -220,7 +236,10 @@ async fn test_trim_removes_the_oldest_snapshot_first(cx: &mut TestAppContext) {
     db.trim(25, 365 * 24 * 60 * 60, now()).await.unwrap();
     let remaining = db.list_snapshots("/project".to_string(), 10).unwrap();
     assert_eq!(
-        remaining.iter().map(|snapshot| snapshot.id).collect::<Vec<_>>(),
+        remaining
+            .iter()
+            .map(|snapshot| snapshot.id)
+            .collect::<Vec<_>>(),
         vec![ids[3], ids[2]]
     );
 }
@@ -230,7 +249,10 @@ async fn test_trim_keeps_recent_within_budget(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let db = SessionSnapshotDb::open_test_db("snapshots_trim_keep").await;
     let current = now();
-    for (index, created_at) in [current - 10 * 24 * 60 * 60, current - 60, current].iter().enumerate() {
+    for (index, created_at) in [current - 10 * 24 * 60 * 60, current - 60, current]
+        .iter()
+        .enumerate()
+    {
         let session_id = format!("session-{index}");
         let id = db
             .insert_snapshot(NewSnapshot {
@@ -242,15 +264,17 @@ async fn test_trim_keeps_recent_within_budget(cx: &mut TestAppContext) {
             })
             .await
             .unwrap();
-        db.finish_snapshot(id, 1, 0, 10)
-            .await
-            .unwrap();
+        db.finish_snapshot(id, 1, 0, 10).await.unwrap();
     }
 
     db.trim(1000, 7 * 24 * 60 * 60, current).await.unwrap();
     let snapshots = db.list_snapshots("/project".to_string(), 10).unwrap();
     assert_eq!(snapshots.len(), 2, "only the 10 day old snapshot expires");
-    assert!(snapshots.iter().all(|snapshot| snapshot.created_at != current - 10 * 24 * 60 * 60));
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.created_at != current - 10 * 24 * 60 * 60)
+    );
 }
 
 #[gpui::test]
@@ -391,7 +415,11 @@ async fn test_restore_single_file_and_whole_snapshot(cx: &mut TestAppContext) {
         .into_iter()
         .find(|file| file.path == "changed.txt")
         .unwrap();
-    assert!(restore_file(&db, fs.clone(), root, snapshot_id, &changed).await.unwrap());
+    assert!(
+        restore_file(&db, fs.clone(), root, snapshot_id, &changed)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         std::fs::read_to_string(root.join("changed.txt")).unwrap(),
         "the good version\n"
@@ -438,6 +466,56 @@ async fn test_restore_does_not_touch_skipped_files(cx: &mut TestAppContext) {
         std::fs::read(root.join("binary.bin")).unwrap(),
         b"changed\0bytes"
     );
+}
+
+#[gpui::test]
+async fn test_delete_snapshots_in_a_worktree(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let db = SessionSnapshotDb::open_test_db("snapshots_delete_all").await;
+    for (index, root) in ["/project", "/other", "/project"].iter().enumerate() {
+        let session_id = format!("session-{index}");
+        let id = db
+            .insert_snapshot(NewSnapshot {
+                session_id: &session_id,
+                session_title: "Chat",
+                kind: SnapshotKind::AfterSession,
+                root,
+                created_at: now() + index as i64,
+            })
+            .await
+            .unwrap();
+        db.insert_file(
+            id,
+            NewSnapshotFile {
+                path: format!("file-{index}.txt"),
+                git_status: "modified".to_string(),
+                size: 4,
+                mtime: 1,
+                sha256: "abc".to_string(),
+                compressed_size: 4,
+                body: Some(vec![1, 2, 3, 4]),
+                skip_reason: None,
+            },
+        )
+        .await
+        .unwrap();
+        db.finish_snapshot(id, 1, 0, 4).await.unwrap();
+    }
+
+    db.delete_snapshots_in_worktree("/project".to_string())
+        .await
+        .unwrap();
+    assert!(
+        db.list_snapshots("/project".to_string(), 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        db.list_snapshots("/other".to_string(), 10).unwrap().len(),
+        1,
+        "another worktree keeps its snapshots"
+    );
+    assert!(db.list_files(1).unwrap().is_empty());
 }
 
 #[gpui::test]

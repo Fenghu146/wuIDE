@@ -369,6 +369,13 @@ impl SessionSnapshotDb {
         }
     }
 
+    // Deletes every snapshot of one worktree, leaving it with none.
+    query! {
+        pub async fn delete_snapshots_in_worktree(root: String) -> Result<()> {
+            DELETE FROM session_snapshots WHERE root = (?)
+        }
+    }
+
     /// Deletes snapshots until the stored size fits in `max_total_bytes` and
     /// nothing is older than `retention_seconds`, oldest first. Snapshots left
     /// incomplete by an interrupted capture are deleted after an hour.

@@ -3,13 +3,15 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use collections::HashMap;
 use fs::Fs;
-use gpui::{
-    App, Context, DismissEvent, ElementId, EventEmitter, FocusHandle, Focusable, PromptButton,
-    PromptLevel, SharedString, Task, WeakEntity, Window, prelude::*,
-};
 use git_ui_core::file_diff_view::{FileDiffView, build_buffer_diff};
+use gpui::{
+    App, Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    PromptButton, PromptLevel, SharedString, Task, WeakEntity, Window, prelude::*,
+};
 use i18n::t;
+use language::Buffer;
 use session_snapshots::{
     SKIP_BINARY, SKIP_DELETED, SKIP_NOT_A_FILE, SKIP_TOO_LARGE, SessionSnapshotDb,
     SnapshotFileSummary, SnapshotKind, SnapshotSummary, read_file_text, restore_file,
@@ -19,13 +21,14 @@ use time::{OffsetDateTime, UtcOffset};
 use time_format::TimestampFormat;
 use ui::{
     Button, ButtonStyle, Color, ElevationIndex, Headline, HeadlineSize, Icon, IconButton, IconName,
-    IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section, SectionHeader,
-    Tooltip, prelude::*,
+    IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section, SectionHeader, Tooltip,
+    prelude::*,
 };
 use util::size::format_file_size;
 use workspace::{ModalView, Workspace};
 
 const SNAPSHOT_PAGE_SIZE: i64 = 30;
+const MAX_NAMES_IN_PROMPT: usize = 3;
 
 enum LoadState {
     Loading,
@@ -46,6 +49,19 @@ struct FileRow {
     disk: DiskState,
 }
 
+struct GroupedSnapshot {
+    summary: SnapshotSummary,
+    /// Which turn of its chat the snapshot belongs to, counting from one.
+    turn: usize,
+}
+
+/// The snapshots of one chat, newest first. A chat that ran several turns has a
+/// "before" and an "after" copy for each of them, which belong together.
+struct SessionGroup {
+    title: SharedString,
+    snapshots: Vec<GroupedSnapshot>,
+}
+
 /// Lists the snapshots taken around agent sessions in one worktree, shows what
 /// changed since, and puts files back.
 pub struct SessionSnapshotsModal {
@@ -53,6 +69,7 @@ pub struct SessionSnapshotsModal {
     workspace: WeakEntity<Workspace>,
     focus_handle: FocusHandle,
     snapshots: Vec<SnapshotSummary>,
+    groups: Vec<SessionGroup>,
     all_snapshots_loaded: bool,
     selected_snapshot: Option<i64>,
     snapshot_state: LoadState,
@@ -108,6 +125,7 @@ impl SessionSnapshotsModal {
             workspace,
             focus_handle: cx.focus_handle(),
             snapshots: Vec::new(),
+            groups: Vec::new(),
             all_snapshots_loaded: false,
             selected_snapshot: None,
             snapshot_state: LoadState::Loading,
@@ -143,6 +161,7 @@ impl SessionSnapshotsModal {
                         let first = snapshots.first().map(|snapshot| snapshot.id);
                         this.snapshots.extend(snapshots);
                         this.snapshot_state = LoadState::Ready;
+                        this.rebuild_groups();
                         if this.selected_snapshot.is_none()
                             && let Some(first) = first
                         {
@@ -157,6 +176,49 @@ impl SessionSnapshotsModal {
             })
             .ok();
         }));
+    }
+
+    /// Regroups the loaded snapshots by chat, so a chat that ran many turns
+    /// shows up once instead of flooding the list.
+    fn rebuild_groups(&mut self) {
+        let mut ascending = self.snapshots.iter().collect::<Vec<_>>();
+        ascending.sort_by_key(|snapshot| (snapshot.created_at, snapshot.id));
+
+        let mut groups: Vec<SessionGroup> = Vec::new();
+        let mut turns: Vec<usize> = Vec::new();
+        let mut group_for_chat: HashMap<String, usize> = HashMap::default();
+        for snapshot in ascending {
+            let group_index = match group_for_chat.get(&snapshot.session_id) {
+                Some(index) => *index,
+                None => {
+                    let index = groups.len();
+                    group_for_chat.insert(snapshot.session_id.clone(), index);
+                    groups.push(SessionGroup {
+                        title: t!("Untitled chat"),
+                        snapshots: Vec::new(),
+                    });
+                    turns.push(0);
+                    index
+                }
+            };
+            if snapshot.kind == SnapshotKind::BeforeSession {
+                turns[group_index] += 1;
+            }
+            if !snapshot.session_title.is_empty() {
+                groups[group_index].title = SharedString::from(snapshot.session_title.clone());
+            }
+            groups[group_index].snapshots.push(GroupedSnapshot {
+                summary: snapshot.clone(),
+                turn: turns[group_index].max(1),
+            });
+        }
+
+        // Newest chat first, and within a chat the newest copy first.
+        groups.reverse();
+        for group in &mut groups {
+            group.snapshots.reverse();
+        }
+        self.groups = groups;
     }
 
     fn select_snapshot(&mut self, id: i64, cx: &mut Context<Self>) {
@@ -196,6 +258,29 @@ impl SessionSnapshotsModal {
         }));
     }
 
+    /// The open buffer for a path, when the file is in the editor.
+    fn open_buffer(&self, absolute_path: &Path, cx: &App) -> Option<Entity<Buffer>> {
+        let workspace = self.workspace.upgrade()?;
+        open_buffer(&workspace, absolute_path, cx)
+    }
+
+    /// Names of the files that have unsaved edits in the editor, which a
+    /// restore would throw away.
+    fn paths_with_unsaved_changes(&self, paths: &[PathBuf], cx: &App) -> Vec<SharedString> {
+        paths
+            .iter()
+            .filter(|path| {
+                self.open_buffer(path, cx)
+                    .is_some_and(|buffer| buffer.read(cx).is_dirty())
+            })
+            .filter_map(|path| {
+                Some(SharedString::from(
+                    path.file_name()?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect()
+    }
+
     fn restore_one(
         &mut self,
         file: SnapshotFileSummary,
@@ -205,12 +290,22 @@ impl SessionSnapshotsModal {
         let Some(snapshot_id) = self.selected_snapshot else {
             return;
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t!(
+        let absolute_path = self.root.join(disk_path(&file.path));
+        let unsaved = self.paths_with_unsaved_changes(std::slice::from_ref(&absolute_path), cx);
+        let prompt = if unsaved.is_empty() {
+            t!(
                 "Put back {path} as it was when this snapshot was taken?",
                 path = &file.path
-            ),
+            )
+        } else {
+            t!(
+                "{path} has unsaved changes in the editor, and putting the snapshot back will discard them. Continue?",
+                path = &file.path
+            )
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &prompt,
             None,
             &[
                 PromptButton::new(t!("Restore")),
@@ -227,15 +322,20 @@ impl SessionSnapshotsModal {
                 return;
             }
             let path = file.path.clone();
-            let restored =
-                cx.background_spawn(async move { restore_file(&db, fs, &root, snapshot_id, &file).await })
-                    .await;
+            let restored = cx
+                .background_spawn(
+                    async move { restore_file(&db, fs, &root, snapshot_id, &file).await },
+                )
+                .await;
             this.update(cx, |this, cx| {
                 this.message = Some(match restored {
                     Ok(true) => (false, t!("Put back {path}", path = path)),
                     Ok(false) => (true, t!("This snapshot has no copy of {path}", path = path)),
                     Err(error) => (true, format!("{error:#}").into()),
                 });
+                // The buffer has to take the restored bytes, or it keeps its
+                // stale text and reports a conflict against the new file.
+                this.reload_buffers(std::slice::from_ref(&absolute_path), cx);
                 if let Some(snapshot_id) = this.selected_snapshot {
                     this.select_snapshot(snapshot_id, cx);
                 }
@@ -252,9 +352,28 @@ impl SessionSnapshotsModal {
         else {
             return;
         };
+        let targets = self.stored_paths();
+        let unsaved = self.paths_with_unsaved_changes(&targets, cx);
+        let prompt = if unsaved.is_empty() {
+            t!("Put every file of this snapshot back, replacing what is on disk now?")
+        } else {
+            let mut names = unsaved
+                .iter()
+                .take(MAX_NAMES_IN_PROMPT)
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>();
+            if unsaved.len() > MAX_NAMES_IN_PROMPT {
+                names.push("…".to_string());
+            }
+            t!(
+                "{count} of these files have unsaved changes, and putting the snapshot back will discard them: {files}. Continue?",
+                count = unsaved.len(),
+                files = names.join(", ")
+            )
+        };
         let answer = window.prompt(
             PromptLevel::Warning,
-            &t!("Put every file of this snapshot back, replacing what is on disk now?"),
+            &prompt,
             None,
             &[
                 PromptButton::new(t!("Restore All")),
@@ -274,10 +393,9 @@ impl SessionSnapshotsModal {
                 .await;
             this.update(cx, |this, cx| {
                 this.message = Some(match restored {
-                    Ok(report) if report.failed.is_empty() => (
-                        false,
-                        t!("Put back {count} files", count = report.restored),
-                    ),
+                    Ok(report) if report.failed.is_empty() => {
+                        (false, t!("Put back {count} files", count = report.restored))
+                    }
                     Ok(report) => {
                         let errors = report
                             .failed
@@ -297,9 +415,49 @@ impl SessionSnapshotsModal {
                     }
                     Err(error) => (true, format!("{error:#}").into()),
                 });
+                this.reload_buffers(&targets, cx);
                 if let Some(snapshot_id) = this.selected_snapshot {
                     this.select_snapshot(snapshot_id, cx);
                 }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn delete_everything(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t!("Delete every snapshot taken in this worktree?"),
+            None,
+            &[
+                PromptButton::new(t!("Delete All")),
+                PromptButton::cancel(t!("Cancel")),
+            ],
+            cx,
+        );
+        let db = SessionSnapshotDb::global(cx);
+        let root = self.root.to_string_lossy().into_owned();
+        let this = cx.entity();
+        self.restore_task = Some(cx.spawn_in(window, async move |_, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            let deleted = cx
+                .background_spawn(async move { db.delete_snapshots_in_worktree(root).await })
+                .await;
+            this.update(cx, |this, cx| {
+                this.message = Some(match deleted {
+                    Ok(()) => {
+                        this.snapshots.clear();
+                        this.groups.clear();
+                        this.files.clear();
+                        this.selected_snapshot = None;
+                        this.snapshot_state = LoadState::Ready;
+                        this.file_state = LoadState::Ready;
+                        (false, t!("Deleted every snapshot"))
+                    }
+                    Err(error) => (true, format!("{error:#}").into()),
+                });
                 cx.notify();
             });
         }));
@@ -390,6 +548,28 @@ impl SessionSnapshotsModal {
         }));
     }
 
+    /// Every restored file that is open in the editor takes the bytes that were
+    /// just written, so it neither keeps stale text nor flags a conflict.
+    fn reload_buffers(&self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            if let Some(buffer) = self.open_buffer(path, cx) {
+                buffer.update(cx, |buffer, cx| {
+                    // The reload runs on the buffer's own task; the receiver is
+                    // only for awaiting it, which a restore does not need.
+                    let _ = buffer.reload(cx);
+                });
+            }
+        }
+    }
+
+    fn stored_paths(&self) -> Vec<PathBuf> {
+        self.files
+            .iter()
+            .filter(|row| row.file.is_stored())
+            .map(|row| self.root.join(disk_path(&row.file.path)))
+            .collect()
+    }
+
     fn cancel(&mut self, _: &menu::Cancel, _window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(DismissEvent);
     }
@@ -417,48 +597,65 @@ impl SessionSnapshotsModal {
             }
             LoadState::Loading | LoadState::Ready => {}
         }
-        for snapshot in &self.snapshots {
-            let id = snapshot.id;
-            let title = if snapshot.session_title.is_empty() {
-                t!("Untitled chat")
-            } else {
-                SharedString::from(snapshot.session_title.clone())
-            };
-            let kind = match snapshot.kind {
-                SnapshotKind::BeforeSession => t!("before the session"),
-                SnapshotKind::AfterSession => t!("after the session"),
-            };
-            let mut details = vec![
-                format_time(snapshot.created_at).to_string(),
-                kind.to_string(),
-                file_count_text(snapshot.file_count).to_string(),
-                format_file_size(snapshot.total_bytes.max(0) as u64, true),
-            ];
-            if snapshot.skipped_count > 0 {
-                details.push(t!("{count} skipped", count = snapshot.skipped_count).to_string());
-            }
-            let selected = self.selected_snapshot == Some(id);
+        for group in &self.groups {
             list = list.child(
-                div()
-                    .id(ElementId::named_usize("snapshot", id as usize))
+                h_flex()
                     .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(cx.theme().colors().element_selected))
-                    .hover(|row| row.bg(cx.theme().colors().element_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_snapshot(id, cx)))
+                    .pt_2()
+                    .pb_1()
+                    .gap_2()
                     .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(Label::new(title))
-                            .child(
-                                Label::new(details.join(" · "))
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            ),
+                        div().flex_1().min_w_0().child(
+                            Label::new(group.title.clone())
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
+                    )
+                    .child(
+                        Label::new(snapshot_count_text(group.snapshots.len()))
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
                     ),
             );
+            for grouped in &group.snapshots {
+                let snapshot = &grouped.summary;
+                let id = snapshot.id;
+                let selected = self.selected_snapshot == Some(id);
+                let kind = match snapshot.kind {
+                    SnapshotKind::BeforeSession => t!("before the session"),
+                    SnapshotKind::AfterSession => t!("after the session"),
+                };
+                let mut details = vec![
+                    t!("Turn {turn}", turn = grouped.turn).to_string(),
+                    kind.to_string(),
+                    format_time(snapshot.created_at).to_string(),
+                    file_count_text(snapshot.file_count).to_string(),
+                    format_file_size(snapshot.total_bytes.max(0) as u64, true),
+                ];
+                if snapshot.skipped_count > 0 {
+                    details.push(t!("{count} skipped", count = snapshot.skipped_count).to_string());
+                }
+                list = list.child(
+                    div()
+                        .id(ElementId::named_usize("snapshot", id as usize))
+                        .ml_2()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .when(selected, |row| row.bg(cx.theme().colors().element_selected))
+                        .hover(|row| row.bg(cx.theme().colors().element_hover))
+                        .on_click(cx.listener(move |this, _, _, cx| this.select_snapshot(id, cx)))
+                        .child({
+                            let label = Label::new(details.join(" · ")).size(LabelSize::Small);
+                            if selected {
+                                label
+                            } else {
+                                label.color(Color::Muted)
+                            }
+                        }),
+                );
+            }
         }
         if !self.all_snapshots_loaded
             && let Some(oldest) = self.snapshots.last().map(|snapshot| snapshot.id)
@@ -534,9 +731,11 @@ impl SessionSnapshotsModal {
                                 )
                                 .icon_size(IconSize::Small)
                                 .tooltip(Tooltip::text(t!("Compare with the File on Disk")))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_diff(diff_target.clone(), window, cx)
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.open_diff(diff_target.clone(), window, cx)
+                                    },
+                                )),
                             )
                             .when(stored, |row| {
                                 row.child(
@@ -546,9 +745,11 @@ impl SessionSnapshotsModal {
                                     )
                                     .icon_size(IconSize::Small)
                                     .tooltip(Tooltip::text(t!("Put This File Back")))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.restore_one(restore_target.clone(), window, cx)
-                                    })),
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            this.restore_one(restore_target.clone(), window, cx)
+                                        },
+                                    )),
                                 )
                             }),
                     ),
@@ -561,17 +762,36 @@ impl SessionSnapshotsModal {
 impl Render for SessionSnapshotsModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let can_restore_all = self.files.iter().any(|row| row.file.is_stored());
+        let has_snapshots = !self.snapshots.is_empty();
         let mut footer = h_flex().gap_2();
         if let Some((is_error, message)) = &self.message {
-            let color = if *is_error { Color::Error } else { Color::Success };
-            footer = footer.child(Label::new(message.clone()).color(color).size(LabelSize::Small));
+            let color = if *is_error {
+                Color::Error
+            } else {
+                Color::Success
+            };
+            footer = footer.child(
+                Label::new(message.clone())
+                    .color(color)
+                    .size(LabelSize::Small),
+            );
         }
         footer = footer
+            .child(
+                Button::new("delete-all-snapshots", t!("Delete All Snapshots"))
+                    .style(ButtonStyle::Subtle)
+                    .disabled(!has_snapshots)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.delete_everything(window, cx)),
+                    ),
+            )
             .child(
                 Button::new("restore-all-snapshots", t!("Restore All Files"))
                     .style(ButtonStyle::Subtle)
                     .disabled(!can_restore_all)
-                    .on_click(cx.listener(|this, _, window, cx| this.restore_everything(window, cx))),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.restore_everything(window, cx)),
+                    ),
             )
             .child(
                 Button::new("close-session-snapshots", t!("Close"))
@@ -585,14 +805,16 @@ impl Render for SessionSnapshotsModal {
             .elevation_3(cx)
             .on_action(cx.listener(Self::cancel))
             .occlude()
-            .w(rems(52.))
+            .w(rems(56.))
             .child(
                 Modal::new("session-snapshots", None)
                     .header(
                         ModalHeader::new()
                             .show_dismiss_button(true)
                             .icon(Icon::new(IconName::HistoryRerun).color(Color::Muted))
-                            .child(Headline::new(t!("Session Snapshots")).size(HeadlineSize::Small)),
+                            .child(
+                                Headline::new(t!("Session Snapshots")).size(HeadlineSize::Small),
+                            ),
                     )
                     .section(
                         Section::new()
@@ -601,7 +823,7 @@ impl Render for SessionSnapshotsModal {
                             .child(
                                 v_flex()
                                     .id("snapshot-list-scroll")
-                                    .max_h(rems(14.))
+                                    .max_h(rems(18.))
                                     .overflow_y_scroll()
                                     .child(self.render_snapshots(cx)),
                             ),
@@ -612,7 +834,7 @@ impl Render for SessionSnapshotsModal {
                             .child(
                                 v_flex()
                                     .id("snapshot-file-list-scroll")
-                                    .max_h(rems(20.))
+                                    .max_h(rems(18.))
                                     .overflow_y_scroll()
                                     .child(self.render_files(cx)),
                             ),
@@ -620,6 +842,20 @@ impl Render for SessionSnapshotsModal {
                     .footer(ModalFooter::new().end_slot(footer)),
             )
     }
+}
+
+fn open_buffer(
+    workspace: &Entity<Workspace>,
+    absolute_path: &Path,
+    cx: &App,
+) -> Option<Entity<Buffer>> {
+    let project = workspace.read(cx).project().clone();
+    let project_path = project.read(cx).find_project_path(absolute_path, cx)?;
+    project
+        .read(cx)
+        .buffer_store()
+        .read(cx)
+        .get_by_path(&project_path)
 }
 
 fn disk_path(path: &str) -> PathBuf {
@@ -661,6 +897,14 @@ fn file_count_text(count: i64) -> SharedString {
         t!("1 file")
     } else {
         t!("{count} files", count = count)
+    }
+}
+
+fn snapshot_count_text(count: usize) -> SharedString {
+    if count == 1 {
+        t!("1 snapshot")
+    } else {
+        t!("{count} snapshots", count = count)
     }
 }
 

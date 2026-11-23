@@ -13135,8 +13135,8 @@ async fn test_session_snapshots_action_opens_the_modal(cx: &mut gpui::TestAppCon
     let project = Project::test(fs, [Path::new("/project")], cx).await;
     cx.run_until_parked();
 
-    let (multi_workspace, cx) = cx
-        .add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
     let workspace = multi_workspace.read_with(&*cx, |multi_workspace, _| {
         multi_workspace.workspace().clone()
     });
@@ -13145,10 +13145,9 @@ async fn test_session_snapshots_action_opens_the_modal(cx: &mut gpui::TestAppCon
     cx.run_until_parked();
 
     assert!(
-        workspace
-            .read_with(&*cx, |workspace, cx| workspace
-                .active_modal::<crate::session_snapshots_modal::SessionSnapshotsModal>(cx)
-                .is_some()),
+        workspace.read_with(&*cx, |workspace, cx| workspace
+            .active_modal::<crate::session_snapshots_modal::SessionSnapshotsModal>(cx)
+            .is_some()),
         "Session Snapshots should open from the command palette action"
     );
 

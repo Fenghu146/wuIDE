@@ -116,9 +116,13 @@ pub async fn capture_snapshot(
     for (repo_path, git_status) in dirty {
         let path = repo_path.as_unix_str().to_string();
         let absolute_path = worktree_root.join(repo_path.as_std_path());
-        let file =
-            capture_file(&*fs, &absolute_path, git_status).await.with_context(|| {
-                format!("reading {} while taking a snapshot", absolute_path.display())
+        let file = capture_file(&*fs, &absolute_path, git_status)
+            .await
+            .with_context(|| {
+                format!(
+                    "reading {} while taking a snapshot",
+                    absolute_path.display()
+                )
             })?;
         if file.is_stored() {
             report.stored += 1;
@@ -229,10 +233,18 @@ async fn capture_file(fs: &dyn Fs, path: &Path, git_status: FileStatus) -> Resul
 
     let content = fs.load_bytes(path).await?;
     if content.len() as u64 > MAX_FILE_BYTES {
-        return Ok(CapturedFile::skipped(content.len() as u64, mtime, SKIP_TOO_LARGE));
+        return Ok(CapturedFile::skipped(
+            content.len() as u64,
+            mtime,
+            SKIP_TOO_LARGE,
+        ));
     }
     if is_binary(&content) {
-        return Ok(CapturedFile::skipped(content.len() as u64, mtime, SKIP_BINARY));
+        return Ok(CapturedFile::skipped(
+            content.len() as u64,
+            mtime,
+            SKIP_BINARY,
+        ));
     }
 
     let sha256 = hex(&Sha256::digest(&content));
@@ -328,7 +340,9 @@ pub async fn restore_file(
         zstd::stream::decode_all(body.as_slice()).context("decompressing a snapshot file")?;
     drop(body);
 
-    let absolute_path = root.join(Path::new(&file.path.replace('/', std::path::MAIN_SEPARATOR_STR)));
+    let absolute_path = root.join(Path::new(
+        &file.path.replace('/', std::path::MAIN_SEPARATOR_STR),
+    ));
     if let Some(parent) = absolute_path.parent() {
         fs.create_dir(parent)
             .await
