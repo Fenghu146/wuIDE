@@ -9,10 +9,41 @@ use crate::settings::CodeRunnerSettings;
 pub enum CommandSource {
     /// The IDE's default for the language.
     BuiltIn,
-    /// `code_runner.executor_map` in the settings file.
+    /// `code_runner.executor_map` or `code_runner.debug_map` in the settings.
     Settings,
     /// Edited in the run dialog for this run only.
     Edited,
+}
+
+/// How a language is built for and started in the debugger.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugEntry {
+    /// Shell command line that builds the binary with debug symbols.
+    pub build: String,
+    /// Path of that binary, relative to the build's directory.
+    pub program: String,
+    /// Debug adapter to start.
+    pub adapter: String,
+    pub source: CommandSource,
+}
+
+/// A debug build and the session that follows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugPlan {
+    pub language: String,
+    /// File name only, used for labels.
+    pub filename: String,
+    /// The build that has to succeed before the session starts.
+    pub build: RunCommand,
+    /// Absolute path of the binary to debug.
+    pub program: PathBuf,
+    pub adapter: String,
+}
+
+impl DebugPlan {
+    pub fn label(&self) -> String {
+        format!("debug {}", self.filename)
+    }
 }
 
 /// A command line that is ready to be handed to the terminal's shell.
@@ -53,7 +84,7 @@ pub struct RunRequest<'a> {
     pub cmake_root: Option<&'a Path>,
 }
 
-/// Maps a file to the language id used as a key in `code_runner.executor_map`.
+/// Maps a file to the language id used as a key in the `code_runner` maps.
 ///
 /// Known languages get their language id; anything else falls back to the
 /// lowercased extension, which is what lets a user add a command for a file
@@ -99,16 +130,94 @@ pub fn resolve(request: &RunRequest<'_>, settings: &CodeRunnerSettings) -> Optio
 
     Some(RunCommand {
         language,
-        filename: request
-            .file
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        filename: file_name(request.file),
         template: template.to_owned(),
         command_line,
         cwd,
         source,
     })
+}
+
+/// Picks the debug build for a file and the binary the session should launch.
+///
+/// Debug plans compile the single file even inside a CMake project: the binary a
+/// project build produces is not known here, and guessing it is worse than
+/// letting the user point `code_runner.debug_map` at their target.
+pub fn resolve_debug(request: &RunRequest<'_>, settings: &CodeRunnerSettings) -> Option<DebugPlan> {
+    let language = language_id_for_path(request.file)?;
+    let entry = settings.debug_entry(&language)?;
+    if entry.build.trim().is_empty() || entry.program.trim().is_empty() {
+        return None;
+    }
+
+    let cwd = request
+        .file
+        .parent()
+        .unwrap_or(request.worktree_root)
+        .to_path_buf();
+    let context = task_context(request, &cwd, &language);
+    let build_line = substitute_variables_in_str(&entry.build, &context)?;
+    let program_line = substitute_variables_in_str(&entry.program, &context)?;
+    let program = if Path::new(&program_line).is_absolute() {
+        PathBuf::from(program_line)
+    } else {
+        cwd.join(program_line)
+    };
+
+    Some(DebugPlan {
+        filename: file_name(request.file),
+        language: language.clone(),
+        build: RunCommand {
+            language,
+            filename: file_name(request.file),
+            template: entry.build.clone(),
+            command_line: build_line,
+            cwd,
+            source: entry.source,
+        },
+        program,
+        adapter: entry.adapter.clone(),
+    })
+}
+
+/// Whether the debug adapter can start here.
+///
+/// Only `GDB` is checked, because it is the adapter the built-in debug plans
+/// use and it has to be on `PATH`; adapters that download themselves or are
+/// provided by extensions are assumed to be available.
+pub fn debug_adapter_available(adapter: &str) -> bool {
+    debug_adapter_available_in(adapter, &search_path())
+}
+
+pub fn debug_adapter_available_in(adapter: &str, paths: &[PathBuf]) -> bool {
+    match adapter {
+        "GDB" => find_executable("gdb", paths).is_some(),
+        _ => true,
+    }
+}
+
+pub fn find_executable(name: &str, paths: &[PathBuf]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .flat_map(|directory| {
+            [
+                directory.join(name),
+                directory.join(format!("{name}.exe")),
+            ]
+        })
+        .find(|candidate| candidate.is_file())
+}
+
+fn search_path() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default()
+}
+
+fn file_name(file: &Path) -> String {
+    file.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn task_context(request: &RunRequest<'_>, cwd: &Path, language: &str) -> TaskContext {
@@ -156,7 +265,7 @@ mod tests {
             .iter()
             .map(|(language, command)| (language.to_string(), command.to_string()))
             .collect::<HashMap<_, _>>();
-        CodeRunnerSettings::new(&entries, is_windows)
+        CodeRunnerSettings::new(&entries, &HashMap::default(), is_windows)
     }
 
     #[test]
@@ -213,8 +322,10 @@ mod tests {
         )
         .expect("cmake has a default command");
 
-        assert_eq!(command.language, "cpp");
-        assert_eq!(command.command_line, "cmake -S . -B build && cmake --build build");
+        assert_eq!(
+            command.command_line,
+            "cmake -S . -B build && cmake --build build"
+        );
         assert_eq!(command.cwd, Path::new("/work/project"));
     }
 
@@ -271,7 +382,10 @@ mod tests {
             ("/work/src/main.rs", "cargo run"),
             ("/work/tool.py", r#"python3 "tool.py""#),
             ("/work/index.mjs", r#"node "index.mjs""#),
-            ("/work/app.tsx", r#"node --experimental-strip-types "app.tsx""#),
+            (
+                "/work/app.tsx",
+                r#"node --experimental-strip-types "app.tsx""#,
+            ),
         ] {
             let command = resolve(
                 &RunRequest {
@@ -311,5 +425,115 @@ mod tests {
             Some("python".to_owned())
         );
         assert_eq!(language_id_for_path(Path::new("/work/Makefile")), None);
+    }
+
+    #[test]
+    fn a_debug_plan_builds_with_symbols_and_launches_the_dbg_binary() {
+        let plan = resolve_debug(
+            &RunRequest {
+                file: Path::new(r"C:\work\my file.cpp"),
+                worktree_root: Path::new(r"C:\work"),
+                cmake_root: None,
+            },
+            &settings(&[], true),
+        )
+        .expect("cpp has a default debug plan");
+
+        assert_eq!(
+            plan.build.command_line,
+            r#"g++ -std=c++17 -g -O0 "my file.cpp" -o "my file.dbg.exe""#
+        );
+        assert_eq!(plan.build.cwd, Path::new(r"C:\work"));
+        assert_eq!(plan.program, Path::new(r"C:\work\my file.dbg.exe"));
+        assert_eq!(plan.adapter, "GDB");
+        assert_eq!(plan.label(), "debug my file.cpp");
+    }
+
+    #[test]
+    fn the_debug_binary_never_collides_with_the_run_binary() {
+        let request = RunRequest {
+            file: Path::new("/work/main.c"),
+            worktree_root: Path::new("/work"),
+            cmake_root: None,
+        };
+        let settings = settings(&[], false);
+        let run = resolve(&request, &settings).expect("run command");
+        let debug = resolve_debug(&request, &settings).expect("debug plan");
+
+        assert_eq!(debug.program, Path::new("/work/main.dbg"));
+        assert_ne!(
+            run.cwd.join("main"),
+            debug.program,
+            "run and debug must write different files"
+        );
+    }
+
+    #[test]
+    fn a_debug_plan_uses_the_configured_build_with_the_file_directory_fallback() {
+        let mut debug_map = HashMap::default();
+        debug_map.insert(
+            "cpp".to_owned(),
+            DebugEntry {
+                build: "clang++ -g \"$ZED_FILENAME\" -o out".to_owned(),
+                program: "$ZED_DIRNAME/out".to_owned(),
+                adapter: "GDB".to_owned(),
+                source: CommandSource::Settings,
+            },
+        );
+        let settings = CodeRunnerSettings::new(&HashMap::default(), &debug_map, false);
+
+        let plan = resolve_debug(
+            &RunRequest {
+                file: Path::new("/work/main.cpp"),
+                worktree_root: Path::new("/work"),
+                cmake_root: Some(Path::new("/work")),
+            },
+            &settings,
+        )
+        .expect("cpp has a debug plan");
+
+        // An absolute `program` is kept as it is, and the file's own directory
+        // is where the build runs even inside a CMake project.
+        assert_eq!(plan.program, Path::new("/work/out"));
+        assert_eq!(plan.build.cwd, Path::new("/work"));
+        assert_eq!(plan.build.source, CommandSource::Settings);
+    }
+
+    #[test]
+    fn languages_without_a_debug_plan_do_not_resolve_to_debug() {
+        let plan = resolve_debug(
+            &RunRequest {
+                file: Path::new("/work/main.py"),
+                worktree_root: Path::new("/work"),
+                cmake_root: None,
+            },
+            &settings(&[], false),
+        );
+
+        assert_eq!(plan, None);
+    }
+
+    #[test]
+    fn gdb_is_looked_up_on_the_given_search_path() {
+        let directory = std::env::temp_dir().join(format!("code-runner-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("temp directory");
+        let gdb = directory.join("gdb.exe");
+        std::fs::write(&gdb, b"not really gdb").expect("fake gdb");
+
+        assert_eq!(
+            find_executable("gdb", std::slice::from_ref(&directory)),
+            Some(gdb)
+        );
+        assert_eq!(find_executable("gdb", &[std::env::temp_dir()]), None);
+        assert_eq!(find_executable("gdb", &[]), None);
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    #[test]
+    fn only_the_gdb_adapter_needs_a_binary_on_the_path() {
+        assert_eq!(debug_adapter_available_in("GDB", &[]), false);
+        assert_eq!(debug_adapter_available_in("CodeLLDB", &[]), true);
+        assert_eq!(debug_adapter_available_in("gdb", &[]), true);
     }
 }
