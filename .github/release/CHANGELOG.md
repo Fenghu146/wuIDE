@@ -5,8 +5,8 @@ All notable user-facing changes to Wu are listed here, newest first.
 ## 1.4.5 - 2026-11-23
 
 - Repository map: an edge now needs an API another file can name in the same language, so test modules, the icon enum and the `settings_content` files no longer crowd the top of the map.
-- Repository map: `in` and `out` count only `mod`, `use`, `#include` and relative imports that resolve strictly, so `use serde` is no longer read as a local `serde.rs`, and a new `deps N` counts the files that import this one.
-- Repository map: files up to 1 MiB are parsed instead of 256 KiB, which brings `editor.rs` and `workspace.rs` into the map; the size-and-mtime cache keeps a cold map of a large repository at about fifteen seconds, an already-built map at 0.02 s, and a map after one edit at about a second.
+- Repository map: `in` and `out` now count only distinctive mentions — a name written by more than twenty files is vocabulary and makes no edge, the rest weigh by how rare the name is, and only an API another file can write (not a field, an enum variant, a local or a JSON key) can receive references. A new `deps N` counts certain dependencies instead: the files whose `mod`, `use`, `#include` or relative `import` resolves to this one.
+- Repository map: files up to 1 MiB are parsed instead of 256 KiB, which brings `editor.rs` and `workspace.rs` into the map; the size-and-mtime cache keeps a cold map of a large repository at about twenty seconds, an already-built map at 0.02 s, and a map after one edit at about a second.
 - Diagnostics: fix the summary freezing while updates arrive in a burst — every event used to replace the pending refresh timer, so the count never caught up; several problems at one position now share a row with a `×N` badge.
 - Diagnostics: the `diagnostics` tool says how old its snapshot is and asks for a refresh past five minutes; the Problems panel gives every row a checkbox and an **Add Selected to Chat (N)** action, and ticks now survive a click made with no chat open.
 - Diagnostics: the **Add to Chat** button in an editor's inline diagnostic block renders again, since the block finally knows its file path, and a repeat click answers **Already added to the chat** instead of doing nothing; a batch after a single adds only the problems that have no chip yet.
@@ -67,7 +67,6 @@ All notable user-facing changes to Wu are listed here, newest first.
 - Give the release workflow read-only default permissions and hand write access only to the job that publishes.
 - Replace the upstream ReadMe and install guide with documentation for this fork: correct download names, unsigned-build instructions, update behaviour, the list of outbound requests, and licensing.
 - Move the profile directory to a unique name, `WuIDE`, so it cannot collide with another application called IDE. An existing `IDE`, `ide`, `Wu` or `wu` profile is copied over on first launch, so settings, sessions and agent data survive the rename.
-- Stop checking for updates by default. The release metadata this fork fetches lives in a private repository, so the check can never succeed.
 - Add `SYNC.md` and `script/sync-upstream` to record where this fork diverged from upstream and what merging the next upstream release will touch.
 - Fix the Git panel going stale after running git commands outside Wu. (from upstream)
 - Fix new files ignoring the `line_ending` setting. (from upstream)
