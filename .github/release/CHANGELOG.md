@@ -2,6 +2,21 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## 1.4.5 - 2026-11-23
+
+- Repository map: an edge now needs an API another file can name in the same language, so test modules, the icon enum and the `settings_content` files no longer crowd the top of the map.
+- Repository map: `in` and `out` count only `mod`, `use`, `#include` and relative imports that resolve strictly, so `use serde` is no longer read as a local `serde.rs`, and a new `deps N` counts the files that import this one.
+- Repository map: files up to 1 MiB are parsed instead of 256 KiB, which brings `editor.rs` and `workspace.rs` into the map; the size-and-mtime cache keeps a cold map of a large repository at about fifteen seconds, an already-built map at 0.02 s, and a map after one edit at about a second.
+- Diagnostics: fix the summary freezing while updates arrive in a burst — every event used to replace the pending refresh timer, so the count never caught up; several problems at one position now share a row with a `×N` badge.
+- Diagnostics: the `diagnostics` tool says how old its snapshot is and asks for a refresh past five minutes; the Problems panel gives every row a checkbox and an **Add Selected to Chat (N)** action, and ticks now survive a click made with no chat open.
+- Diagnostics: the **Add to Chat** button in an editor's inline diagnostic block renders again, since the block finally knows its file path, and a repeat click answers **Already added to the chat** instead of doing nothing; a batch after a single adds only the problems that have no chip yet.
+- Add **Run** and **Debug** to an editor tab, on `Ctrl-F5` and `Ctrl-Shift-F5`: C, C++, Rust, Python and Node/TypeScript work out of the box, any other extension can be given a command under `code_runner.executor_map`, and a C or C++ file in a CMake project builds the whole project instead of one file.
+- The command about to run stays visible in the terminal and can be edited for that file; a debug build writes its own `*.dbg` binary beside the run one, and a missing `gdb` is reported in a toast instead of failing inside the session.
+- Add session snapshots: when an agent starts and finishes a run, the worktree's uncommitted files are stored zstd-compressed in the local SQLite database, so a working tree with no commit behind it can be put back; files over 2 MB and binary files are listed with the reason they were skipped.
+- **Session Snapshots** in the project panel lists the copies by chat and restores one file or a whole snapshot, warns first when an open buffer has unsaved changes, and keeps 64 MB and 7 days, dropping the oldest.
+- Check for updates by default again: the release metadata is public now, so installs notice new releases without being asked, and a channel that never polls no longer shows a **Check for Updates** item that does nothing.
+- A Windows update now replaces the bundled agent runtimes too, so Pi and DeepSeek stop running the previous release's Node and `dsh-acp`; the release request gives up after thirty seconds instead of leaving later checks silent, and the update check and its links use `wuIDE`.
+
 ## 1.4.4 - 2026-11-23
 
 - Repository map: vendored and generated directories such as `node_modules`, `vendor` and `dist` are excluded, so a Rust monorepo no longer comes back as third-party JavaScript.
