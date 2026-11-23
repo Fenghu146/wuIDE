@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".amp/in/rust-sample",
+members = [
     "crates/activity_indicator",
     "crates/agent_chat",
     "crates/agent_fixtures",
