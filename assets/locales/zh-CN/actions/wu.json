@@ -23,6 +23,10 @@
     "description": "将系统信息复制到剪贴板，用于提交问题报告。",
     "name": "复制系统信息到剪贴板"
   },
+  "wu::DebugCurrentFile": {
+    "description": "用 code_runner.debug_map 中的命令构建带调试符号的二进制，然后启动调试会话。",
+    "name": "调试当前文件"
+  },
   "wu::DebugElements": {
     "description": "打开元素检查器以调试界面。",
     "name": "调试元素"
@@ -207,8 +211,12 @@
     "name": "在文件管理器中显示日志"
   },
   "wu::RunCurrentFile": {
-    "description": "用当前语言配置的命令运行编辑器里的文件：首次运行会先显示命令并允许修改，之后重复运行上一次的命令。",
+    "description": "用当前语言配置的命令运行编辑器里的文件，命令和输出显示在复用的终端里。",
     "name": "运行当前文件"
+  },
+  "wu::RunCurrentFileWithCommand": {
+    "description": "先打开运行对话框修改命令，再运行编辑器里的文件。",
+    "name": "运行当前文件（编辑命令）"
   },
   "wu::SaveEtwTrace": {
     "description": "把进行中的 ETW 跟踪会话保存到磁盘。",

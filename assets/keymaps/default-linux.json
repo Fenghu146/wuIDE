@@ -516,6 +516,8 @@
       // Runs the file in the editor with the command for its language; the
       // first run shows the command, later runs rerun it.
       "ctrl-f5": "wu::RunCurrentFile",
+      // Debugging builds with -g first, then starts the configured adapter.
+      "ctrl-shift-f5": "wu::DebugCurrentFile",
       "f5": "debugger::Rerun",
       "ctrl-f4": "workspace::CloseActiveDock",
     },

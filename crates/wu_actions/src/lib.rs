@@ -81,19 +81,14 @@ actions!(
         AddSelectionToChat,
         /// Asks the configured agent to fix the diagnostics around the cursor in the active editor.
         FixDiagnosticsWithAgent,
+        /// Runs the file in the editor with the command configured for its language.
+        RunCurrentFile,
+        /// Opens the run dialog to edit the command before running the file.
+        RunCurrentFileWithCommand,
+        /// Builds the file with debug symbols and starts a debug session.
+        DebugCurrentFile,
     ]
 );
-
-/// Runs the file in the editor with the command configured for its language.
-#[derive(PartialEq, Clone, Default, Debug, Deserialize, JsonSchema, Action)]
-#[action(namespace = wu)]
-#[serde(deny_unknown_fields)]
-pub struct RunCurrentFile {
-    /// Opens the run dialog to edit the command, instead of rerunning the
-    /// command that ran last for this file.
-    #[serde(default)]
-    pub edit: bool,
-}
 
 /// One problem from the Problems panel, in the form the chat keeps as a chip.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
