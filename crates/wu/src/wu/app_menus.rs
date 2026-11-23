@@ -350,7 +350,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     t!("IDE Repository"),
                     super::OpenBrowser {
-                        url: "https://github.com/Fenghu146/wu".into(),
+                        url: "https://github.com/Fenghu146/wuIDE".into(),
                     },
                 ),
             ],

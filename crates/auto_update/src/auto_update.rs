@@ -428,9 +428,9 @@ pub fn release_notes_url(cx: &mut App) -> Option<String> {
             let mut current_version = auto_updater.current_version.clone();
             current_version.pre = semver::Prerelease::EMPTY;
             current_version.build = semver::BuildMetadata::EMPTY;
-            format!("https://github.com/Fenghu146/wu/releases/tag/v{current_version}")
+            format!("https://github.com/Fenghu146/wuIDE/releases/tag/v{current_version}")
         }
-        ReleaseChannel::Dev => "https://github.com/Fenghu146/wu/commits/main/".to_string(),
+        ReleaseChannel::Dev => "https://github.com/Fenghu146/wuIDE/commits/main/".to_string(),
     };
     Some(url)
 }
