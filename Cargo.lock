@@ -1834,6 +1834,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "code_runner"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "gpui",
+ "pretty_assertions",
+ "settings",
+ "task",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3133,6 +3144,7 @@ dependencies = [
  "buffer_diff",
  "client",
  "clock",
+ "code_runner",
  "collections",
  "convert_case 0.11.0",
  "ctor",
@@ -10544,6 +10556,10 @@ dependencies = [
  "sha2",
  "walkdir",
 ]
+
+[[package]]
+name = "rust-sample"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-demangle"

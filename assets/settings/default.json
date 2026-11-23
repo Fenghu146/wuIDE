@@ -1667,6 +1667,25 @@
     // Control when to show the active encoding in the status bar.
     "active_encoding_button": "non_utf8",
   },
+  // Settings specific to running the file in the editor
+  "code_runner": {
+    // One shell command line per language, used by "Run Current File"
+    // (`ctrl-f5`) and the run button on the editor tab. `$ZED_FILE`,
+    // `$ZED_FILENAME`, `$ZED_DIRNAME`, `$ZED_STEM`, `$ZED_WORKTREE_ROOT` and
+    // `$ZED_LANGUAGE` are substituted before the command runs, in the
+    // directory of the file (the CMake project directory for `cmake`).
+    //
+    // Keys are language ids: `c`, `cpp`, `rust`, `python`, `javascript`,
+    // `typescript`, and `cmake` for C/C++ files in a project with a
+    // `CMakeLists.txt`. Any other key is matched against the file extension,
+    // so `"lua": "lua \"$ZED_FILENAME\""` runs `.lua` files. An empty value
+    // removes the built-in command for that language.
+    //
+    // Entries left out here use the built-in defaults, which the run dialog
+    // shows as "built-in command". The first run of a file shows the command
+    // for editing; the next run reruns it.
+    "executor_map": {},
+  },
   // Settings specific to the terminal
   "terminal": {
     // What shell to use when opening a terminal. May take 3 values:

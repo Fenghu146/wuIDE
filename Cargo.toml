@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
+members = [".amp/in/rust-sample",
     "crates/activity_indicator",
     "crates/agent_chat",
     "crates/agent_fixtures",
@@ -18,6 +18,7 @@ members = [
     "crates/client",
     "crates/clock",
     "crates/cloud_api_types",
+    "crates/code_runner",
     "crates/collections",
     "crates/command_palette",
     "crates/command_palette_hooks",
@@ -218,6 +219,7 @@ cli = { path = "crates/cli" }
 client = { path = "crates/client" }
 clock = { path = "crates/clock" }
 cloud_api_types = { path = "crates/cloud_api_types" }
+code_runner = { path = "crates/code_runner" }
 collections = { path = "crates/collections", version = "0.1.0" }
 command_palette = { path = "crates/command_palette" }
 command_palette_hooks = { path = "crates/command_palette_hooks" }
