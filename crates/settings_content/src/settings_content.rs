@@ -234,7 +234,7 @@ pub struct SettingsContent {
 
     /// Whether or not to automatically check for updates.
     ///
-    /// Default: false
+    /// Default: true
     pub auto_update: Option<bool>,
 
     /// This base keymap settings adjusts the default keybindings in IDE to be similar

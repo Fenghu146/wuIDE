@@ -329,7 +329,7 @@ struct AutoUpdateSetting(bool);
 
 /// Whether or not to automatically check for updates.
 ///
-/// Default: false
+/// Default: true
 impl Settings for AutoUpdateSetting {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         Self(content.auto_update.unwrap())
@@ -1611,7 +1611,7 @@ mod tests {
     impl Global for InstallOverride {}
 
     #[gpui::test]
-    fn test_auto_update_defaults_to_false(cx: &mut TestAppContext) {
+    fn test_auto_update_defaults_to_true(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let mut store = SettingsStore::new(cx, &settings::default_settings());
             store
@@ -1621,7 +1621,7 @@ mod tests {
                 .set_user_settings("{}", cx)
                 .expect("Unable to set user settings");
             cx.set_global(store);
-            assert!(!AutoUpdateSetting::get_global(cx).0);
+            assert!(AutoUpdateSetting::get_global(cx).0);
         });
     }
 
@@ -1634,7 +1634,8 @@ mod tests {
         let (dmg_tx, dmg_rx) = oneshot::channel::<String>();
 
         cx.update(|cx| {
-            // Checks only run while the setting is on, and it defaults to off.
+            // Pin what this test needs instead of inheriting the shipped default,
+            // which has changed direction before.
             let mut store = SettingsStore::new(cx, &default_settings());
             store
                 .set_default_settings(&default_settings(), cx)
