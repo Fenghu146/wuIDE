@@ -159,6 +159,20 @@
       "instructions": null,
     },
   },
+  // A snapshot copies a worktree's dirty files before and after an agent
+  // session, so they can be put back if the agent leaves them broken. Snapshots
+  // are stored in IDE's local SQLite database.
+  "session_snapshots": {
+    // Copy the worktree's dirty files, including untracked ones, around each
+    // agent session. Files over 2 MB and binary files are listed as skipped
+    // instead of being stored.
+    "enabled": true,
+    // The most disk space, in megabytes, that all snapshots may use together.
+    // The oldest snapshots are deleted first when the limit is reached.
+    "max_total_mb": 64,
+    // How many days to keep snapshots. The oldest snapshots are deleted first.
+    "retention_days": 7,
+  },
   // Image viewer settings
   "image_viewer": {
     // The unit for image file sizes: "binary" (KiB, MiB) or decimal (KB, MB)

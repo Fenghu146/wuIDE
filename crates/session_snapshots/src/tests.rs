@@ -536,3 +536,52 @@ async fn test_capture_finds_the_worktree_above_a_subdirectory(cx: &mut TestAppCo
     let outside = tempfile::tempdir().unwrap();
     assert_eq!(find_worktree_root(outside.path()), None);
 }
+
+#[gpui::test]
+fn test_default_json_matches_runtime_defaults(cx: &mut gpui::App) {
+    use settings::{
+        RootUserSettings as _, Settings as _, SettingsContent, SettingsFile, SettingsStore,
+    };
+
+    // What an empty settings file yields, i.e. the values snapshots actually run
+    // with when the user has not configured them.
+    let code_defaults = SessionSnapshotSettings::from_settings(&SettingsContent::default());
+
+    let defaults = SettingsContent::parse_json_with_comments(&settings::default_settings())
+        .expect("assets/settings/default.json parses");
+    let section = defaults
+        .session_snapshots
+        .as_ref()
+        .expect("assets/settings/default.json must contain a session_snapshots section");
+
+    // Every key has to be spelled out and equal the code default; a missing key
+    // falls back to the code default at runtime but shows as off in settings.
+    assert_eq!(
+        section.enabled,
+        Some(code_defaults.enabled),
+        "session_snapshots.enabled in default.json drifted from the code default"
+    );
+    assert_eq!(
+        section.max_total_mb,
+        Some(code_defaults.max_total_mb),
+        "session_snapshots.max_total_mb in default.json drifted from the code default"
+    );
+    assert_eq!(
+        section.retention_days,
+        Some(code_defaults.retention_days),
+        "session_snapshots.retention_days in default.json drifted from the code default"
+    );
+
+    // The bool toggle renders the value this pick returns, so it must show what
+    // sessions run with rather than a missing-key false.
+    let mut store = SettingsStore::new(cx, &settings::default_settings());
+    store.register_setting::<SessionSnapshotSettings>();
+    let (_, shown) = store.get_value_from_file(SettingsFile::User, |content| {
+        content.session_snapshots.as_ref()?.enabled
+    });
+    assert_eq!(
+        shown,
+        Some(store.get::<SessionSnapshotSettings>(None).enabled),
+        "the settings page shows a different snapshot default than sessions use"
+    );
+}
