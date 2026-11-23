@@ -164,7 +164,7 @@ impl Job {
 }
 
 #[cfg(not(test))]
-pub(crate) static JOBS: LazyLock<[Job; 22]> = LazyLock::new(|| {
+pub(crate) static JOBS: LazyLock<[Job; 24]> = LazyLock::new(|| {
     fn p(value: &str) -> &Path {
         Path::new(value)
     }
@@ -176,6 +176,8 @@ pub(crate) static JOBS: LazyLock<[Job; 22]> = LazyLock::new(|| {
         Job::mkdir(p("old\\bin")),
         Job::move_file(p("bin\\IDE.exe"), p("old\\bin\\IDE.exe")),
         Job::move_file(p("bin\\ide"), p("old\\bin\\ide")),
+        // The bundled agent runtimes are replaced wholesale, like the binaries.
+        Job::move_if_exists(p("agents"), p("old\\agents")),
         //
         // TODO: remove after a few weeks once everyone is on the new version and this file never exists
         Job::move_if_exists(p("OpenConsole.exe"), p("old\\OpenConsole.exe")),
@@ -192,6 +194,7 @@ pub(crate) static JOBS: LazyLock<[Job; 22]> = LazyLock::new(|| {
         Job::move_file(p("install\\IDE.exe"), p("IDE.exe")),
         Job::move_file(p("install\\bin\\IDE.exe"), p("bin\\IDE.exe")),
         Job::move_file(p("install\\bin\\ide"), p("bin\\ide")),
+        Job::move_if_exists(p("install\\agents"), p("agents")),
         //
         Job::mkdir_if_exists(p("x64"), p("install\\x64")),
         Job::mkdir_if_exists(p("arm64"), p("install\\arm64")),
