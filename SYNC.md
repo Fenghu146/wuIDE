@@ -181,7 +181,7 @@ fn agent_logo(kind: AgentKind) -> IconName {
 
 ## 上游远程现在指向哪里
 
-`origin` 是本仓库（`Fenghu146/wu`），`upstream` 是 `dstrml/wu`。`git push` 默认推 `origin`，不会误推到上游。
+`origin` 是本仓库（`Fenghu146/wuIDE`），`upstream` 是 `dstrml/wu`。`git push` 默认推 `origin`，不会误推到上游。
 
 ## 本机构建环境的一个坑（macOS 27 + rustc 1.97.1）
 

@@ -25,18 +25,18 @@ IDE 是一款用 Rust 编写的快速原生代码编辑器，界面简洁现代�
 
 ## 下载
 
-发行版在本仓库的 [releases 页面](https://github.com/Fenghu146/wu/releases/latest)。
+发行版在本仓库的 [releases 页面](https://github.com/Fenghu146/wuIDE/releases/latest)。
 
-- [macOS（Apple 芯片）](https://github.com/Fenghu146/wu/releases/latest/download/IDE-aarch64.dmg)
-- [macOS（Intel 芯片）](https://github.com/Fenghu146/wu/releases/latest/download/IDE-x86_64.dmg)
-- [Windows x86-64](https://github.com/Fenghu146/wu/releases/latest/download/IDE-x86_64.exe)
-- [Linux x86-64](https://github.com/Fenghu146/wu/releases/latest/download/ide-linux-x86_64.tar.gz)
-- [Linux AArch64](https://github.com/Fenghu146/wu/releases/latest/download/ide-linux-aarch64.tar.gz)
+- [macOS（Apple 芯片）](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-aarch64.dmg)
+- [macOS（Intel 芯片）](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.dmg)
+- [Windows x86-64](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.exe)
+- [Linux x86-64](https://github.com/Fenghu146/wuIDE/releases/latest/download/ide-linux-x86_64.tar.gz)
+- [Linux AArch64](https://github.com/Fenghu146/wuIDE/releases/latest/download/ide-linux-aarch64.tar.gz)
 
 在 macOS 和 Linux 上也可以直接运行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Fenghu146/wu/main/script/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Fenghu146/wuIDE/main/script/install.sh | sh
 ```
 
 ### 构建产物没有代码签名
@@ -75,7 +75,7 @@ IDE 不做统计上报、不发崩溃报告、不采集使用遥测。它确实�
 
 | 用途 | 目标 | 时机 |
 | --- | --- | --- |
-| 检查更新用的 release 元数据 | `api.github.com/repos/Fenghu146/wu/releases` | 启动时一次，之后每 12 小时 |
+| 检查更新用的 release 元数据 | `api.github.com/repos/Fenghu146/wuIDE/releases` | 启动时一次，之后每 12 小时 |
 | 扩展索引与扩展下载 | `api.zed.dev`（经 `server_url` 设置，目前仍是 `https://zed.dev`） | 打开扩展视图，或某种语言需要扩展时 |
 | 下载 Node 运行时 | `nodejs.org`，只在打包时，运行期不会 | 构建过程中 |
 | 智能体自己的 API 请求 | 你自己配置的供应商 | 你给智能体发消息时 |

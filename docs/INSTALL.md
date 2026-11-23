@@ -1,6 +1,6 @@
 ## Install
 
-All releases are available [here](https://github.com/Fenghu146/wu/releases/latest).
+All releases are available [here](https://github.com/Fenghu146/wuIDE/releases/latest).
 
 None of these builds are code-signed. Check the SHA-256 of whatever you download against the digest GitHub lists for that release asset before you run it:
 
@@ -11,8 +11,8 @@ shasum -a 256 IDE-aarch64.dmg
 ### macOS (Apple Silicon and Intel)
 
 1. Download the disk image for your Mac, open it, and drag IDE into your Applications folder.
-    - [**Apple Silicon**](https://github.com/Fenghu146/wu/releases/latest/download/IDE-aarch64.dmg) (M1 and later)
-    - [**Intel**](https://github.com/Fenghu146/wu/releases/latest/download/IDE-x86_64.dmg)
+    - [**Apple Silicon**](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-aarch64.dmg) (M1 and later)
+    - [**Intel**](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.dmg)
 
    The build is not signed with an Apple Developer certificate, so macOS will block it the first time you open it.
 2. Open Terminal and run:
@@ -47,7 +47,7 @@ export PATH="$HOME/.local/bin:$PATH"
 Run this in a terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Fenghu146/wu/main/script/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Fenghu146/wuIDE/main/script/install.sh | sh
 ```
 
 It installs IDE into `~/.local`, adds the `ide` command, and adds IDE to your app menu with its icon. Run it again any time to reinstall. IDE keeps itself up to date after that, as long as this repository stays public.
@@ -57,8 +57,8 @@ The script reads `WU_VERSION=1.2.3` to install a specific release and `WU_BUNDLE
 #### Manual install
 
 1. Download the tarball for your platform.
-    - [**Linux x86-64**](https://github.com/Fenghu146/wu/releases/latest/download/ide-linux-x86_64.tar.gz)
-    - [**Linux AArch64**](https://github.com/Fenghu146/wu/releases/latest/download/ide-linux-aarch64.tar.gz)
+    - [**Linux x86-64**](https://github.com/Fenghu146/wuIDE/releases/latest/download/ide-linux-x86_64.tar.gz)
+    - [**Linux AArch64**](https://github.com/Fenghu146/wuIDE/releases/latest/download/ide-linux-aarch64.tar.gz)
 
 2. Unpack its contents into `~/.local`:
 
@@ -79,7 +79,7 @@ WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER=1 ide
 
 ### Windows (x86-64)
 
-Download the [installer](https://github.com/Fenghu146/wu/releases/latest/download/IDE-x86_64.exe) and click to run. The installer isn't code-signed, so Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
+Download the [installer](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.exe) and click to run. The installer isn't code-signed, so Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
 
 The installer registers the app as IDE but keeps the identifier the earlier Wu builds used, so upgrading in place works and your settings carry over.
 
