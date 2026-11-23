@@ -13117,3 +13117,44 @@ fn entry_row_bounds(panel: &ProjectPanel, entry_id: ProjectEntryId) -> Bounds<Pi
         size(viewport.size.width, row_height),
     )
 }
+
+#[gpui::test]
+async fn test_session_snapshots_action_opens_the_modal(cx: &mut gpui::TestAppContext) {
+    init_test_with_git_ui(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        Path::new("/project"),
+        json!({
+            "file.txt": "one",
+            "other.txt": "two",
+        }),
+    )
+    .await;
+
+    let project = Project::test(fs, [Path::new("/project")], cx).await;
+    cx.run_until_parked();
+
+    let (multi_workspace, cx) = cx
+        .add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let workspace = multi_workspace.read_with(&*cx, |multi_workspace, _| {
+        multi_workspace.workspace().clone()
+    });
+
+    cx.dispatch_action(session_snapshots::OpenSessionSnapshots::default());
+    cx.run_until_parked();
+
+    assert!(
+        workspace
+            .read_with(&*cx, |workspace, cx| workspace
+                .active_modal::<crate::session_snapshots_modal::SessionSnapshotsModal>(cx)
+                .is_some()),
+        "Session Snapshots should open from the command palette action"
+    );
+
+    // Drawing the modal exercises its rendering path.
+    cx.update(|window, cx| {
+        let clear = window.draw(cx);
+        clear.clear(cx);
+    });
+}

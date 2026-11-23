@@ -1,0 +1,6 @@
+{
+  "session_snapshots::OpenSessionSnapshots": {
+    "description": "列出智能体在此工作区改动过的文件，并把它们恢复回去。",
+    "name": "会话快照"
+  }
+}

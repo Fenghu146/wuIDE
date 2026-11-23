@@ -855,6 +855,7 @@ pub struct AgentSession {
     pending_questions: Vec<PendingQuestion>,
     noticed_auto_unavailable: bool,
     languages: Arc<LanguageRegistry>,
+    snapshot_before_pending: bool,
     save_metadata_task: Task<()>,
     save_entries_task: Task<()>,
 }
@@ -926,6 +927,7 @@ impl AgentSession {
             pending_questions: Vec::new(),
             noticed_auto_unavailable: false,
             languages,
+            snapshot_before_pending: true,
             save_metadata_task: Task::ready(()),
             save_entries_task: Task::ready(()),
         }
@@ -1474,7 +1476,31 @@ impl AgentSession {
         self.answer(id, answers, cx);
     }
 
+    /// Copies the worktree's dirty files around a session boundary, so edits made
+    /// by an agent with no commit behind them can be put back. The copy runs on
+    /// the background executor and never blocks the chat.
+    fn snapshot_session_boundary(
+        &mut self,
+        kind: session_snapshots::SnapshotKind,
+        cx: &mut Context<Self>,
+    ) {
+        // One "before" snapshot per chat: later messages continue the same session.
+        if kind == session_snapshots::SnapshotKind::BeforeSession
+            && !std::mem::take(&mut self.snapshot_before_pending)
+        {
+            return;
+        }
+        let request = session_snapshots::CaptureRequest {
+            root: self.metadata.cwd.clone(),
+            session_id: self.metadata.id.clone(),
+            session_title: self.metadata.title.clone(),
+            kind,
+        };
+        session_snapshots::capture_session_boundary(cx, request);
+    }
+
     fn start_run(&mut self, prompt: Prompt, cx: &mut Context<Self>) {
+        self.snapshot_session_boundary(session_snapshots::SnapshotKind::BeforeSession, cx);
         self.restart_on_next_send = false;
         self.turn_prompts = 1;
         self.turn_prompt_id = None;
@@ -1809,6 +1835,7 @@ impl AgentSession {
                 self.compacting = false;
                 self.transcript.text_block_open = false;
                 self.cancel_running_tools();
+                self.snapshot_session_boundary(session_snapshots::SnapshotKind::AfterSession, cx);
                 match status {
                     DoneStatus::Completed => {
                         self.metadata.outcome = Some(ChatOutcome::Completed);

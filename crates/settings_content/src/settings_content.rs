@@ -249,6 +249,9 @@ pub struct SettingsContent {
     /// Configuration for Diagnostics-related features.
     pub diagnostics: Option<DiagnosticsSettingsContent>,
 
+    /// Settings for the copies of a worktree's dirty files taken around agent sessions.
+    pub session_snapshots: Option<SessionSnapshotSettingsContent>,
+
     /// Configuration for Git-related features
     pub git: Option<GitSettings>,
 
@@ -358,6 +361,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         agent_chat, call_hierarchy, file_finder, git_panel, tabs, tab_bar, status_bar, activity_bar,
         preview_tabs,
         auto_update, base_keymap, debugger, diagnostics,
+        session_snapshots,
         git,
         global_lsp_settings, image_viewer, markdown_preview, hide_mouse,
         log, line_indicator_format, outline_panel, project_panel, search_panel,
@@ -1157,6 +1161,31 @@ pub struct AgentChatCommitMessageContent {
     pub model: Option<String>,
     /// Extra instructions for commit messages, such as the language or style to use.
     pub instructions: Option<String>,
+}
+
+/// Settings for the copies of a worktree's dirty files taken before and after an
+/// agent session, which can be restored from the project panel.
+#[with_fallible_options]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, Default, PartialEq)]
+pub struct SessionSnapshotSettingsContent {
+    /// Copy a worktree's dirty files before and after an agent session, so they can be
+    /// restored if the agent leaves them broken. Only files git reports as changed are
+    /// copied, including untracked ones; files over 2 MB and binary files are listed as
+    /// skipped instead.
+    ///
+    /// Default: true
+    pub enabled: Option<bool>,
+
+    /// The most disk space, in megabytes, that session snapshots may use together. The
+    /// oldest snapshots are deleted first when the limit is reached.
+    ///
+    /// Default: 64
+    pub max_total_mb: Option<u32>,
+
+    /// How many days to keep session snapshots. The oldest snapshots are deleted first.
+    ///
+    /// Default: 7
+    pub retention_days: Option<u32>,
 }
 
 #[with_fallible_options]
