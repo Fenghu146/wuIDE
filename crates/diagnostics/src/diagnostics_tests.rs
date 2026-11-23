@@ -9,7 +9,7 @@ use editor::{
         editor_test_context::EditorTestContext,
     },
 };
-use gpui::{TestAppContext, VisualTestContext};
+use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px, size};
 use indoc::indoc;
 use language::{BufferId, Diagnostic, DiagnosticEntryRef, DiagnosticSourceKind, Rope};
 use lsp::LanguageServerId;
@@ -22,8 +22,10 @@ use rand::{Rng, rngs::StdRng, seq::IteratorRandom as _};
 use serde_json::json;
 use settings::SettingsStore;
 use std::{
+    cell::Cell,
     env,
     path::{Path, PathBuf},
+    rc::Rc,
     str::FromStr,
 };
 use unindent::Unindent as _;
@@ -1386,6 +1388,7 @@ fn test_nearby_related_diagnostic_links_back_to_primary(cx: &mut TestAppContext)
             buffer_id,
             None,
             None,
+            None,
             cx,
         );
 
@@ -1500,7 +1503,7 @@ async fn test_markup_content_diagnostic_messages_render_as_markdown(cx: &mut Tes
             .diagnostic_group(buffer_id, 0)
             .collect::<Vec<_>>();
         let blocks = diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
-            group, buffer_id, None, None, cx,
+            group, buffer_id, None, None, None, cx,
         );
         assert_eq!(
             blocks[0].markdown.read(cx).source(),
@@ -1512,7 +1515,7 @@ async fn test_markup_content_diagnostic_messages_render_as_markdown(cx: &mut Tes
             .diagnostic_group(buffer_id, 1)
             .collect::<Vec<_>>();
         let blocks = diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
-            group, buffer_id, None, None, cx,
+            group, buffer_id, None, None, None, cx,
         );
         assert_eq!(
             blocks[0].markdown.read(cx).source(),
@@ -1524,7 +1527,7 @@ async fn test_markup_content_diagnostic_messages_render_as_markdown(cx: &mut Tes
             .diagnostic_group(buffer_id, 2)
             .collect::<Vec<_>>();
         let blocks = diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
-            group, buffer_id, None, None, cx,
+            group, buffer_id, None, None, None, cx,
         );
         assert_eq!(
             blocks[0].markdown.read(cx).source(),
@@ -1536,7 +1539,7 @@ async fn test_markup_content_diagnostic_messages_render_as_markdown(cx: &mut Tes
             .diagnostic_group(buffer_id, 3)
             .collect::<Vec<_>>();
         let blocks = diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
-            group, buffer_id, None, None, cx,
+            group, buffer_id, None, None, None, cx,
         );
         assert_eq!(
             blocks[0].markdown.read(cx).source(),
@@ -2431,6 +2434,391 @@ async fn test_buffer_diagnostics_multiple_servers(cx: &mut TestAppContext) {
             }
         );
     })
+}
+
+#[gpui::test]
+async fn dense_diagnostics_updates_do_not_starve_the_summary_refresh(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(path!("/test"), json!({ "main.rs": "line\n".repeat(20) }))
+        .await;
+
+    let language_server_id = LanguageServerId(0);
+    let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+    let lsp_store = project.read_with(cx, |project, _| project.lsp_store());
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let workspace = window
+        .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+        .unwrap();
+    let uri = lsp::Uri::from_file_path(path!("/test/main.rs")).unwrap();
+
+    let diagnostics = window.build_entity(cx, |window, cx| {
+        ProjectDiagnosticsEditor::new(true, project.clone(), workspace.downgrade(), window, cx)
+    });
+
+    let refreshes = Rc::new(Cell::new(0usize));
+    cx.update(|_, cx| {
+        let refreshes = refreshes.clone();
+        cx.subscribe(&diagnostics, move |_, event: &EditorEvent, _| {
+            if matches!(event, EditorEvent::TitleChanged) {
+                refreshes.set(refreshes.get() + 1);
+            }
+        })
+    })
+    .detach();
+
+    let publish = |error_count: usize, cx: &mut VisualTestContext| {
+        let published = (0..error_count)
+            .map(|row| lsp::Diagnostic {
+                range: lsp::Range::new(
+                    lsp::Position::new(row as u32, 0),
+                    lsp::Position::new(row as u32, 1),
+                ),
+                severity: Some(lsp::DiagnosticSeverity::ERROR),
+                message: lsp::DiagnosticMessage::from(format!("error number {row}")),
+                ..Default::default()
+            })
+            .collect();
+        lsp_store
+            .update(cx, |lsp_store, cx| {
+                lsp_store.update_diagnostics(
+                    language_server_id,
+                    lsp::PublishDiagnosticsParams {
+                        uri: uri.clone(),
+                        diagnostics: published,
+                        version: None,
+                    },
+                    None,
+                    DiagnosticSourceKind::Pushed,
+                    &[],
+                    cx,
+                )
+            })
+            .unwrap();
+    };
+
+    // The panel refreshes once when it opens; count from after that.
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+    refreshes.set(0);
+
+    // Ten updates 10ms apart: each arrives before the 30ms debounce ends.
+    for error_count in 1..=10 {
+        publish(error_count, cx);
+        cx.executor().advance_clock(Duration::from_millis(10));
+        cx.executor().run_until_parked();
+    }
+    assert!(
+        refreshes.get() >= 1,
+        "the summary must refresh while a dense stream of updates is still arriving"
+    );
+
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+    assert_eq!(
+        diagnostics.read_with(cx, |diagnostics, _| diagnostics.summary.error_count),
+        10,
+        "the refresh after the stream must read the newest summary"
+    );
+
+    // Five updates inside one debounce window cost exactly one refresh.
+    refreshes.set(0);
+    for error_count in 11..=15 {
+        publish(error_count, cx);
+        cx.executor().advance_clock(Duration::from_millis(2));
+        cx.executor().run_until_parked();
+    }
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+    assert_eq!(
+        refreshes.get(),
+        1,
+        "a burst inside one debounce window refreshes the summary once"
+    );
+    assert_eq!(
+        diagnostics.read_with(cx, |diagnostics, _| diagnostics.summary.error_count),
+        15
+    );
+}
+
+#[gpui::test]
+async fn diagnostics_at_one_position_share_one_row_that_says_how_many(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/test"),
+        json!({ "main.rs": "fn main() {\n    let x = 1;\n    let y = 2;\n}\n" }),
+    )
+    .await;
+
+    let language_server_id = LanguageServerId(0);
+    let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+    let lsp_store = project.read_with(cx, |project, _| project.lsp_store());
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let workspace = window
+        .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+        .unwrap();
+    let uri = lsp::Uri::from_file_path(path!("/test/main.rs")).unwrap();
+
+    lsp_store.update(cx, |lsp_store, cx| {
+        lsp_store
+            .update_diagnostics(
+                language_server_id,
+                lsp::PublishDiagnosticsParams {
+                    uri: uri.clone(),
+                    diagnostics: (0..3)
+                        .map(|index| lsp::Diagnostic {
+                            range: lsp::Range::new(
+                                lsp::Position::new(1, 4),
+                                lsp::Position::new(1, 9),
+                            ),
+                            severity: Some(lsp::DiagnosticSeverity::WARNING),
+                            message: lsp::DiagnosticMessage::from(format!("warning {index}")),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    version: None,
+                },
+                None,
+                DiagnosticSourceKind::Pushed,
+                &[],
+                cx,
+            )
+            .unwrap();
+    });
+
+    let diagnostics = window.build_entity(cx, |window, cx| {
+        ProjectDiagnosticsEditor::new(true, project.clone(), workspace.downgrade(), window, cx)
+    });
+    let editor = diagnostics.update(cx, |diagnostics, _| diagnostics.editor.clone());
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+
+    pretty_assertions::assert_eq!(
+        editor_content_with_blocks(&editor, cx),
+        indoc::indoc! {
+            "§ main.rs
+             § -----
+             fn main() {
+                 let x = 1;
+             § warning 0
+             § warning 1
+             § warning 2
+                 let y = 2;
+             }"
+        },
+        "the three warnings share one row and every message stays visible"
+    );
+
+    // Rows that land on the same position would paint over each other, so the
+    // panel keeps one row per position and counts what it stands for.
+    let rows = editor.update_in(cx, |editor, window, cx| {
+        let snapshot = editor.snapshot(window, cx);
+        snapshot
+            .blocks_in_range(DisplayRow(0)..snapshot.max_point().row())
+            .map(|(row, _)| row)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        rows,
+        vec![DisplayRow(0), DisplayRow(4)],
+        "one header block and one row for the three warnings"
+    );
+
+    cx.draw(
+        point(px(0.), px(0.)),
+        size(px(1200.), px(800.)),
+        |_, _| diagnostics.clone().into_any_element(),
+    );
+    assert!(
+        cx.debug_bounds("diagnostic-count-badge").is_some(),
+        "the shared row shows how many diagnostics it lists"
+    );
+}
+
+#[gpui::test]
+async fn ticking_a_diagnostic_row_selects_it_for_a_batch_reference(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/test"),
+        json!({ "main.rs": "fn main() {\n    let x = 1;\n}\n" }),
+    )
+    .await;
+
+    let language_server_id = LanguageServerId(0);
+    let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+    let lsp_store = project.read_with(cx, |project, _| project.lsp_store());
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let workspace = window
+        .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+        .unwrap();
+    let uri = lsp::Uri::from_file_path(path!("/test/main.rs")).unwrap();
+
+    lsp_store.update(cx, |lsp_store, cx| {
+        lsp_store
+            .update_diagnostics(
+                language_server_id,
+                lsp::PublishDiagnosticsParams {
+                    uri: uri.clone(),
+                    diagnostics: vec![lsp::Diagnostic {
+                        range: lsp::Range::new(lsp::Position::new(1, 8), lsp::Position::new(1, 9)),
+                        severity: Some(lsp::DiagnosticSeverity::WARNING),
+                        message: lsp::DiagnosticMessage::from("unused variable `x`"),
+                        code: Some(lsp::NumberOrString::String("unused".to_string())),
+                        ..Default::default()
+                    }],
+                    version: None,
+                },
+                None,
+                DiagnosticSourceKind::Pushed,
+                &[],
+                cx,
+            )
+            .unwrap();
+    });
+
+    let diagnostics = window.build_entity(cx, |window, cx| {
+        ProjectDiagnosticsEditor::new(true, project.clone(), workspace.downgrade(), window, cx)
+    });
+    let panel = diagnostics.downgrade();
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.add_item_to_active_pane(Box::new(diagnostics.clone()), None, true, window, cx);
+    });
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    let checkbox = cx
+        .debug_bounds("diagnostic-row-checkbox")
+        .expect("every diagnostic row offers a checkbox");
+    assert!(checkbox.size.width > px(0.), "the checkbox is laid out");
+
+    cx.simulate_click(checkbox.center(), Modifiers::none());
+    cx.run_until_parked();
+    let selected = cx.update(|_, cx| panel.selected_diagnostic_citations(cx));
+    assert_eq!(selected.len(), 1, "clicking the checkbox ticks the row");
+    assert_eq!(selected[0].line, 2);
+    assert_eq!(selected[0].column, 9);
+    assert_eq!(selected[0].code.as_deref(), Some("unused"));
+
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let checkbox = cx
+        .debug_bounds("diagnostic-row-checkbox")
+        .expect("the ticked row keeps its checkbox");
+    cx.simulate_click(checkbox.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| panel.selected_diagnostic_citations(cx))
+            .is_empty(),
+        "clicking a ticked row removes it from the selection"
+    );
+}
+
+#[gpui::test]
+async fn a_ticked_row_survives_a_refresh_and_drops_once_it_is_fixed(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/test"),
+        json!({ "main.rs": "fn main() {\n    let x = 1;\n    let y = 2;\n}\n" }),
+    )
+    .await;
+
+    let language_server_id = LanguageServerId(0);
+    let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+    let lsp_store = project.read_with(cx, |project, _| project.lsp_store());
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let workspace = window
+        .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+        .unwrap();
+    let uri = lsp::Uri::from_file_path(path!("/test/main.rs")).unwrap();
+    let warning = |row: u32, message: &str| lsp::Diagnostic {
+        range: lsp::Range::new(lsp::Position::new(row, 8), lsp::Position::new(row, 9)),
+        severity: Some(lsp::DiagnosticSeverity::WARNING),
+        message: lsp::DiagnosticMessage::from(message),
+        ..Default::default()
+    };
+    let publish = |diagnostics: Vec<lsp::Diagnostic>, cx: &mut VisualTestContext| {
+        lsp_store
+            .update(cx, |lsp_store, cx| {
+                lsp_store.update_diagnostics(
+                    language_server_id,
+                    lsp::PublishDiagnosticsParams {
+                        uri: uri.clone(),
+                        diagnostics,
+                        version: None,
+                    },
+                    None,
+                    DiagnosticSourceKind::Pushed,
+                    &[],
+                    cx,
+                )
+            })
+            .unwrap();
+    };
+
+    publish(
+        vec![
+            warning(1, "unused variable `x`"),
+            warning(2, "unused variable `y`"),
+        ],
+        cx,
+    );
+
+    let diagnostics = window.build_entity(cx, |window, cx| {
+        ProjectDiagnosticsEditor::new(true, project.clone(), workspace.downgrade(), window, cx)
+    });
+    let panel = diagnostics.downgrade();
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+
+    let citations = cx.update(|_, cx| panel.diagnostic_citations(cx));
+    assert_eq!(citations.len(), 2);
+    for citation in &citations {
+        cx.update(|_, cx| panel.toggle_diagnostic_selection(citation.clone(), cx));
+    }
+    assert_eq!(
+        cx.update(|_, cx| panel.selected_diagnostic_citations(cx))
+            .len(),
+        2,
+        "both rows are ticked"
+    );
+
+    // `x` is fixed and `y`'s message changes: the tick for `x` goes away, and
+    // the tick for `y` keeps its row with the new message.
+    publish(vec![warning(2, "unused variable `y`, renamed")], cx);
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+
+    let selected = cx.update(|_, cx| panel.selected_diagnostic_citations(cx));
+    assert_eq!(selected.len(), 1, "the fixed diagnostic leaves the selection");
+    assert_eq!(selected[0].line, 3);
+    assert_eq!(
+        selected[0].message, "unused variable `y`, renamed",
+        "a surviving row takes the new message"
+    );
 }
 
 fn init_test(cx: &mut TestAppContext) {

@@ -724,6 +724,7 @@ fn register_actions(
                 agent_chat::add_diagnostics_to_chat(
                     workspace,
                     action.citations.clone(),
+                    action.announce,
                     window,
                     cx,
                 );

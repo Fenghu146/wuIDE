@@ -1,5 +1,5 @@
 use crate::{BufferDiagnosticsEditor, ProjectDiagnosticsEditor, ToggleDiagnosticsRefresh};
-use gpui::{Context, EventEmitter, ParentElement, Render, Window};
+use gpui::{Context, EventEmitter, ParentElement, Render, Subscription, Window};
 use i18n::t;
 use language::DiagnosticEntry;
 use text::{Anchor, BufferId};
@@ -9,6 +9,10 @@ use wu_actions::{AddDiagnosticsToChat, DiagnosticCitation, buffer_search};
 
 pub struct ToolbarControls {
     editor: Option<Box<dyn DiagnosticsToolbarEditor>>,
+    /// Keeps the toolbar in step with the panel: `Add Selected (N)` has to
+    /// appear and count up as the user ticks rows, which only notifies the
+    /// panel itself.
+    _observe_editor: Option<Subscription>,
 }
 
 pub(crate) trait DiagnosticsToolbarEditor: Send + Sync {
@@ -31,10 +35,30 @@ pub(crate) trait DiagnosticsToolbarEditor: Send + Sync {
         buffer_id: BufferId,
         cx: &App,
     ) -> Vec<DiagnosticEntry<Anchor>>;
-    /// Returns the file a buffer's diagnostics belong to, when it is on disk.
-    fn diagnostic_path(&self, buffer_id: BufferId, cx: &App) -> Option<std::path::PathBuf>;
     /// Returns the diagnostics the panel is showing, for the "add all" button.
     fn diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation>;
+
+    /// Whether this view lets the user tick diagnostic rows. Only the
+    /// project-wide panel does; the buffer view cites one diagnostic at a time.
+    fn supports_diagnostic_selection(&self) -> bool {
+        false
+    }
+
+    /// Whether the row showing `citation` is ticked.
+    fn is_diagnostic_selected(&self, _citation: &DiagnosticCitation, _cx: &App) -> bool {
+        false
+    }
+
+    /// Ticks or unticks the row showing `citation`.
+    fn toggle_diagnostic_selection(&self, _citation: DiagnosticCitation, _cx: &mut App) {}
+
+    /// The ticked diagnostics, in panel order, for the "add selected" button.
+    fn selected_diagnostic_citations(&self, _cx: &App) -> Vec<DiagnosticCitation> {
+        Vec::new()
+    }
+
+    /// Drops every tick after the selection became a chat reference.
+    fn clear_diagnostic_selection(&self, _cx: &mut App) {}
 }
 
 impl Render for ToolbarControls {
@@ -53,6 +77,11 @@ impl Render for ToolbarControls {
             .editor
             .as_ref()
             .map(|editor| editor.diagnostic_citations(cx))
+            .unwrap_or_default();
+        let selected = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.selected_diagnostic_citations(cx))
             .unwrap_or_default();
 
         let (warning_tooltip, warning_color) = if include_warnings {
@@ -120,6 +149,36 @@ impl Render for ToolbarControls {
                         }
                     })),
             )
+            .when(!selected.is_empty(), |this| {
+                let count = selected.len();
+                this.child(
+                    Button::new(
+                        "add-selected-diagnostics-to-chat",
+                        t!("Add Selected to Chat ({count})", count = count),
+                    )
+                    .label_size(LabelSize::Small)
+                    .tooltip(Tooltip::text(t!(
+                        "The agent gets one reference chip listing the ticked diagnostics."
+                    )))
+                    .on_click(cx.listener(|toolbar_controls, _, window, cx| {
+                        let Some(editor) = toolbar_controls.editor() else {
+                            return;
+                        };
+                        let citations = editor.selected_diagnostic_citations(cx);
+                        if citations.is_empty() {
+                            return;
+                        }
+                        window.dispatch_action(
+                            Box::new(AddDiagnosticsToChat {
+                                citations,
+                                announce: true,
+                            }),
+                            cx,
+                        );
+                        editor.clear_diagnostic_selection(cx);
+                    })),
+                )
+            })
             .when(!citations.is_empty(), |this| {
                 let citations = citations.clone();
                 this.child(
@@ -131,6 +190,7 @@ impl Render for ToolbarControls {
                             window.dispatch_action(
                                 Box::new(AddDiagnosticsToChat {
                                     citations: citations.clone(),
+                                    announce: false,
                                 }),
                                 cx,
                             );
@@ -147,18 +207,21 @@ impl ToolbarItemView for ToolbarControls {
         &mut self,
         active_pane_item: Option<&dyn ItemHandle>,
         _window: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> ToolbarItemLocation {
-        if let Some(pane_item) = active_pane_item.as_ref() {
-            if let Some(editor) = pane_item.downcast::<ProjectDiagnosticsEditor>() {
-                self.editor = Some(Box::new(editor.downgrade()));
-                ToolbarItemLocation::PrimaryRight
-            } else if let Some(editor) = pane_item.downcast::<BufferDiagnosticsEditor>() {
-                self.editor = Some(Box::new(editor.downgrade()));
-                ToolbarItemLocation::PrimaryRight
-            } else {
-                ToolbarItemLocation::Hidden
-            }
+        self.editor = None;
+        self._observe_editor = None;
+        let Some(pane_item) = active_pane_item.as_ref() else {
+            return ToolbarItemLocation::Hidden;
+        };
+        if let Some(editor) = pane_item.downcast::<ProjectDiagnosticsEditor>() {
+            self.editor = Some(Box::new(editor.downgrade()));
+            self._observe_editor = Some(cx.observe(&editor, |_, _, cx| cx.notify()));
+            ToolbarItemLocation::PrimaryRight
+        } else if let Some(editor) = pane_item.downcast::<BufferDiagnosticsEditor>() {
+            self.editor = Some(Box::new(editor.downgrade()));
+            self._observe_editor = Some(cx.observe(&editor, |_, _, cx| cx.notify()));
+            ToolbarItemLocation::PrimaryRight
         } else {
             ToolbarItemLocation::Hidden
         }
@@ -173,7 +236,10 @@ impl Default for ToolbarControls {
 
 impl ToolbarControls {
     pub fn new() -> Self {
-        ToolbarControls { editor: None }
+        ToolbarControls {
+            editor: None,
+            _observe_editor: None,
+        }
     }
 
     fn editor(&self) -> Option<&dyn DiagnosticsToolbarEditor> {

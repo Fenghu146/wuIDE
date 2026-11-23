@@ -74,6 +74,7 @@ pub fn add_selection_to_chat(
 pub fn add_diagnostics_to_chat(
     workspace: &mut Workspace,
     mut citations: Vec<DiagnosticCitation>,
+    announce: bool,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -91,6 +92,7 @@ pub fn add_diagnostics_to_chat(
         );
         return;
     };
+    let count = citations.len();
     let target = if citations.len() == 1 {
         ComposerRefTarget::Diagnostic(citations.remove(0))
     } else {
@@ -99,6 +101,16 @@ pub fn add_diagnostics_to_chat(
     chat.update(cx, |chat, cx| {
         chat.insert_composer_reference(target, window, cx)
     });
+    if announce {
+        workspace.show_toast(
+            Toast::new(
+                NotificationId::unique::<ChatView>(),
+                t!("Added {count} diagnostics to the chat", count = count).to_string(),
+            )
+            .autohide(),
+            cx,
+        );
+    }
 }
 
 struct Selection {

@@ -13,7 +13,7 @@ use ui::{Button, ButtonLike, Color, Icon, IconName, Label, Tooltip, h_flex, prel
 use util::ResultExt;
 use workspace::{HideStatusItem, StatusItemView, ToolbarItemEvent, Workspace, item::ItemHandle};
 
-use crate::{Deploy, IncludeWarnings, ProjectDiagnosticsEditor};
+use crate::{DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE, Deploy, IncludeWarnings, ProjectDiagnosticsEditor};
 
 /// The status bar item that displays diagnostic counts.
 pub struct DiagnosticIndicator {
@@ -25,6 +25,7 @@ pub struct DiagnosticIndicator {
 
     diagnostics_update: Task<()>,
     diagnostic_summary_update: Task<()>,
+    diagnostic_summary_update_pending: bool,
 }
 
 impl Render for DiagnosticIndicator {
@@ -108,6 +109,7 @@ impl Render for DiagnosticIndicator {
                 warnings = warning_count_text(warnings)
             ),
         };
+        let summary_tooltip = summary_tooltip(self.summary.error_count, self.summary.warning_count);
 
         indicator
             .child(
@@ -116,7 +118,12 @@ impl Render for DiagnosticIndicator {
                     .tab_index(0isize)
                     .aria_label(diagnostics_label)
                     .tooltip(move |_window, cx| {
-                        Tooltip::for_action(t!("Project Diagnostics"), &Deploy, cx)
+                        Tooltip::with_meta(
+                            summary_tooltip.clone(),
+                            Some(&Deploy),
+                            t!("Project Diagnostics"),
+                            cx,
+                        )
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(workspace) = this.workspace.upgrade() {
@@ -155,16 +162,26 @@ impl DiagnosticIndicator {
             }
 
             project::Event::DiagnosticsUpdated { .. } => {
-                this.diagnostic_summary_update = cx.spawn(async move |this, cx| {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(30))
-                        .await;
-                    this.update(cx, |this, cx| {
-                        this.summary = project.read(cx).diagnostic_summary(false, cx);
-                        cx.notify();
-                    })
-                    .log_err();
-                });
+                // Only one timer may be pending: assigning a new task here
+                // would drop the previous one and cancel its timer, so a dense
+                // stream of updates (one per keystroke while rust-analyzer
+                // re-checks the file) would never reach the end of the debounce.
+                // A pending refresh reads the summary after the timer fires, so
+                // it already sees the newest diagnostics.
+                if !this.diagnostic_summary_update_pending {
+                    this.diagnostic_summary_update_pending = true;
+                    this.diagnostic_summary_update = cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE)
+                            .await;
+                        this.update(cx, |this, cx| {
+                            this.diagnostic_summary_update_pending = false;
+                            this.summary = project.read(cx).diagnostic_summary(false, cx);
+                            cx.notify();
+                        })
+                        .log_err();
+                    });
+                }
             }
 
             _ => {}
@@ -179,6 +196,7 @@ impl DiagnosticIndicator {
             _observe_active_editor: None,
             diagnostics_update: Task::ready(()),
             diagnostic_summary_update: Task::ready(()),
+            diagnostic_summary_update_pending: false,
         }
     }
 
@@ -281,5 +299,27 @@ fn warning_count_text(count: usize) -> SharedString {
         t!("1 warning")
     } else {
         t!("{count} warnings", count = count)
+    }
+}
+
+/// The chip's tooltip says what its numbers cover. `DiagnosticSummary` counts
+/// errors and warnings only, so the chip can show fewer problems than the
+/// Problems panel or the `diagnostics` tool, which also list info.
+fn summary_tooltip(error_count: usize, warning_count: usize) -> SharedString {
+    match (error_count, warning_count) {
+        (0, 0) => t!("No errors or warnings (info excluded)"),
+        (errors, 0) => t!(
+            "{errors} (info excluded)",
+            errors = error_count_text(errors)
+        ),
+        (0, warnings) => t!(
+            "{warnings} (info excluded)",
+            warnings = warning_count_text(warnings)
+        ),
+        (errors, warnings) => t!(
+            "{errors}, {warnings} (info excluded)",
+            errors = error_count_text(errors),
+            warnings = warning_count_text(warnings)
+        ),
     }
 }

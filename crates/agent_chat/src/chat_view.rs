@@ -4765,6 +4765,7 @@ mod tests {
                     code: Some("E0308".to_string()),
                     message: "mismatched types".to_string(),
                 }],
+                false,
                 window,
                 cx,
             );
@@ -4779,6 +4780,66 @@ mod tests {
                 workspace.notification_ids().len(),
                 1,
                 "the user is told to open a chat first"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn a_batch_of_diagnostics_is_added_and_confirmed_with_a_toast(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let project = project::Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(cx, |multi, _| multi.workspace().clone());
+        let chat = workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.entity().downgrade();
+            let chat = cx.new(|cx| {
+                ChatView::new(session.clone(), store.clone(), project.clone(), weak, window, cx)
+            });
+            workspace.add_item_to_active_pane(Box::new(chat.clone()), None, true, window, cx);
+            chat
+        });
+        let path = directory.path().join("src/worker.rs");
+        let citation = |line: u32, message: &str| DiagnosticCitation {
+            path: path.clone(),
+            line,
+            column: 1,
+            severity: "warning".to_string(),
+            code: Some("W1".to_string()),
+            message: message.to_string(),
+        };
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            crate::editor_bridge::add_diagnostics_to_chat(
+                workspace,
+                vec![citation(1, "first"), citation(7, "second")],
+                true,
+                window,
+                cx,
+            );
+        });
+
+        chat.read_with(cx, |chat, _| assert_eq!(chat.composer_refs.len(), 1));
+        let text = composer_text(&chat, cx);
+        assert!(
+            text.starts_with("@diagnostics 2 "),
+            "the batch is one reference chip for two diagnostics: {text}"
+        );
+        workspace.read_with(cx, |workspace, _| {
+            assert_eq!(
+                workspace.notification_ids().len(),
+                1,
+                "the user is told the batch reached the chat"
             );
         });
     }

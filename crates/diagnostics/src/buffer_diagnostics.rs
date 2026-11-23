@@ -28,7 +28,7 @@ use std::{
     ops::Range,
     sync::Arc,
 };
-use text::{Anchor, BufferId, BufferSnapshot, OffsetRangeExt, ToPoint as _};
+use text::{Anchor, BufferSnapshot, OffsetRangeExt, ToPoint as _};
 use ui::{Button, ButtonStyle, Icon, IconName, Label, Tooltip, h_flex, prelude::*};
 use workspace::{
     ItemHandle, ItemNavHistory, Workspace,
@@ -360,6 +360,9 @@ impl BufferDiagnosticsEditor {
             }
 
             let mut blocks: Vec<DiagnosticBlock> = Vec::new();
+            let citation_path = buffer_snapshot
+                .file()
+                .map(|file| file.path().as_std_path().to_path_buf());
             for (_, group) in grouped {
                 // If the minimum severity of the group is higher than the
                 // maximum severity, or it doesn't even have severity, skip this
@@ -381,6 +384,7 @@ impl BufferDiagnosticsEditor {
                     DiagnosticRenderer::diagnostic_blocks_for_group(
                         group,
                         buffer_snapshot.remote_id(),
+                        citation_path.as_deref(),
                         Some(Arc::new(buffer_diagnostics_editor.clone())),
                         languages,
                         cx,
@@ -1012,16 +1016,6 @@ impl DiagnosticsToolbarEditor for WeakEntity<BufferDiagnosticsEditor> {
             buffer_diagnostics_editor.diagnostics.clone()
         })
         .unwrap_or_default()
-    }
-
-    fn diagnostic_path(&self, _buffer_id: BufferId, cx: &App) -> Option<std::path::PathBuf> {
-        self.read_with(cx, |buffer_diagnostics_editor, cx| {
-            let buffer = buffer_diagnostics_editor.buffer.as_ref()?.read(cx);
-            let file = buffer.file()?;
-            Some(file.path().as_std_path().to_path_buf())
-        })
-        .ok()
-        .flatten()
     }
 
     fn diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation> {

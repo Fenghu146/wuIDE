@@ -1,6 +1,6 @@
 use std::{
     ops::Range,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
@@ -17,7 +17,7 @@ use markdown::{CopyButtonVisibility, Markdown, MarkdownElement};
 use settings::Settings;
 use text::Point;
 use theme_settings::ThemeSettings;
-use ui::{CopyButton, IconButton, IconName, IconSize, Tooltip, prelude::*};
+use ui::{Checkbox, CopyButton, IconButton, IconName, IconSize, ToggleState, Tooltip, prelude::*};
 use util::maybe;
 use wu_actions::{AddDiagnosticsToChat, DiagnosticCitation};
 
@@ -29,6 +29,7 @@ impl DiagnosticRenderer {
     pub fn diagnostic_blocks_for_group(
         diagnostic_group: Vec<DiagnosticEntryRef<'_, Point>>,
         buffer_id: BufferId,
+        citation_path: Option<&Path>,
         diagnostics_editor: Option<Arc<dyn DiagnosticsToolbarEditor>>,
         language_registry: Option<Arc<LanguageRegistry>>,
         cx: &mut App,
@@ -41,9 +42,6 @@ impl DiagnosticRenderer {
         };
         let primary = &diagnostic_group[primary_ix];
         let group_id = primary.diagnostic.group_id;
-        let citation_path = diagnostics_editor
-            .as_ref()
-            .and_then(|editor| editor.diagnostic_path(buffer_id, cx));
         let mut results = vec![];
         for entry in diagnostic_group.iter() {
             let mut markdown = Self::markdown(&entry.diagnostic);
@@ -64,10 +62,10 @@ impl DiagnosticRenderer {
                 results.push(DiagnosticBlock {
                     initial_range: primary.range.clone(),
                     severity: primary.diagnostic.severity,
+                    count: 1,
                     diagnostics_editor: diagnostics_editor.clone(),
                     copy_message: primary.diagnostic.message.as_shared_string().clone(),
                     citation: citation_path
-                        .as_deref()
                         .map(|path| citation_for(path, primary.range.start, &primary.diagnostic)),
                     markdown: cx.new(|cx| {
                         Markdown::new(markdown.into(), language_registry.clone(), None, cx)
@@ -83,10 +81,10 @@ impl DiagnosticRenderer {
                 results.push(DiagnosticBlock {
                     initial_range: entry.range.clone(),
                     severity: entry.diagnostic.severity,
+                    count: 1,
                     diagnostics_editor: diagnostics_editor.clone(),
                     copy_message: entry.diagnostic.message.as_shared_string().clone(),
                     citation: citation_path
-                        .as_deref()
                         .map(|path| citation_for(path, entry.range.start, &entry.diagnostic)),
                     markdown: cx.new(|cx| {
                         Markdown::new(markdown.into(), language_registry.clone(), None, cx)
@@ -107,6 +105,49 @@ impl DiagnosticRenderer {
             markdown.push_str(&Markdown::escape(diagnostic.message.as_str()));
         };
         markdown
+    }
+
+    /// Merges blocks whose diagnostics start at the same position into one row
+    /// that lists every message. The display map anchors a block to a position,
+    /// so blocks there end up on the same display row and paint over each
+    /// other; which one stays visible then depends on paint order.
+    pub(crate) fn merge_blocks_at_same_position(
+        mut blocks: Vec<DiagnosticBlock>,
+        language_registry: Option<Arc<LanguageRegistry>>,
+        cx: &mut App,
+    ) -> Vec<DiagnosticBlock> {
+        if blocks.len() < 2 {
+            return blocks;
+        }
+        // The blocks come out of a `HashMap`, so their order is arbitrary; the
+        // merged text must not be. The worst severity leads the row.
+        blocks.sort_by(|left, right| {
+            (left.initial_range.start, left.severity, left.initial_range.end)
+                .cmp(&(
+                    right.initial_range.start,
+                    right.severity,
+                    right.initial_range.end,
+                ))
+                .then_with(|| left.copy_message.cmp(&right.copy_message))
+        });
+
+        let mut merged: Vec<DiagnosticBlock> = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            let Some(existing) = merged
+                .iter_mut()
+                .find(|existing| existing.initial_range.start == block.initial_range.start)
+            else {
+                merged.push(block);
+                continue;
+            };
+            let mut markdown = existing.markdown.read(cx).source().to_string();
+            markdown.push_str("\n\n");
+            markdown.push_str(block.markdown.read(cx).source());
+            existing.markdown =
+                cx.new(|cx| Markdown::new(markdown.into(), language_registry.clone(), None, cx));
+            existing.count += block.count;
+        }
+        merged
     }
 }
 
@@ -146,18 +187,6 @@ pub(crate) fn max_shown_severity(include_warnings: bool) -> DiagnosticSeverity {
     } else {
         DiagnosticSeverity::ERROR
     }
-}
-
-/// Path of a buffer in the diagnostics multibuffer, when it is on disk.
-pub(crate) fn buffer_path(
-    multibuffer: &Entity<editor::MultiBuffer>,
-    buffer_id: BufferId,
-    cx: &gpui::App,
-) -> Option<PathBuf> {
-    let buffer = multibuffer.read(cx).buffer(buffer_id)?;
-    let buffer = buffer.read(cx);
-    let file = buffer.file()?;
-    Some(file.path().as_std_path().to_path_buf())
 }
 
 fn append_source_and_code(markdown: &mut String, diagnostic: &Diagnostic) {
@@ -207,6 +236,7 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
             diagnostic_group,
             buffer_id,
             None,
+            None,
             language_registry,
             cx,
         );
@@ -242,6 +272,7 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
             diagnostic_group,
             buffer_id,
             None,
+            None,
             language_registry,
             cx,
         );
@@ -265,6 +296,10 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
 pub(crate) struct DiagnosticBlock {
     pub(crate) initial_range: Range<Point>,
     pub(crate) severity: DiagnosticSeverity,
+    /// How many diagnostics this row stands for. Diagnostics that start at the
+    /// same position share one display row, so they are merged and counted here
+    /// instead of silently disappearing behind each other.
+    pub(crate) count: usize,
     pub(crate) markdown: Entity<Markdown>,
     pub(crate) diagnostics_editor: Option<Arc<dyn DiagnosticsToolbarEditor>>,
     pub(crate) copy_message: SharedString,
@@ -308,6 +343,34 @@ impl DiagnosticBlock {
             self.initial_range.end.row,
             self.initial_range.end.column
         );
+        let checkbox = self
+            .diagnostics_editor
+            .clone()
+            .filter(|diagnostics_editor| diagnostics_editor.supports_diagnostic_selection())
+            .zip(self.citation.clone())
+            .map(|(diagnostics_editor, citation)| {
+                let checkbox_id = format!(
+                    "select-diagnostic-{}-{}-{}-{}",
+                    citation.path.display(),
+                    citation.line,
+                    citation.column,
+                    citation.code.as_deref().unwrap_or("-")
+                );
+                let toggle_state = if diagnostics_editor.is_diagnostic_selected(&citation, cx) {
+                    ToggleState::Selected
+                } else {
+                    ToggleState::Unselected
+                };
+                div()
+                    .flex_none()
+                    .debug_selector(|| "diagnostic-row-checkbox".into())
+                    .child(
+                        Checkbox::new(checkbox_id, toggle_state).on_click(move |_, _, cx| {
+                            diagnostics_editor.toggle_diagnostic_selection(citation.clone(), cx)
+                        }),
+                    )
+                    .into_any_element()
+            });
 
         h_flex()
             .max_w(max_width)
@@ -319,6 +382,20 @@ impl DiagnosticBlock {
             .line_height(line_height)
             .bg(background_color)
             .border_color(border_color)
+            .children(checkbox)
+            .when(self.count > 1, |this| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .mt_0p5()
+                        .px_1()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(border_color)
+                        .debug_selector(|| "diagnostic-count-badge".into())
+                        .child(Label::new(format!("×{}", self.count)).size(LabelSize::Small)),
+                )
+            })
             .child(
                 div().flex_1().min_w_0().child(
                     MarkdownElement::new(
@@ -351,6 +428,7 @@ impl DiagnosticBlock {
                             window.dispatch_action(
                                 Box::new(AddDiagnosticsToChat {
                                     citations: vec![citation.clone()],
+                                    announce: false,
                                 }),
                                 cx,
                             );

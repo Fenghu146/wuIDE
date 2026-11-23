@@ -36,6 +36,7 @@ use std::{
     any::{Any, TypeId},
     cmp,
     ops::{Range, RangeInclusive},
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -87,13 +88,17 @@ pub(crate) struct ProjectDiagnosticsEditor {
     include_warnings: bool,
     update_excerpts_task: Option<Task<Result<()>>>,
     diagnostic_summary_update: Task<()>,
+    diagnostic_summary_update_pending: bool,
+    /// Rows the user ticked for a batch reference in the chat, kept whole so a
+    /// refresh can rewrite their message without losing the selection.
+    selected_diagnostics: Vec<DiagnosticCitation>,
     _subscription: Subscription,
 }
 
 impl EventEmitter<EditorEvent> for ProjectDiagnosticsEditor {}
 
 const DIAGNOSTICS_UPDATE_DEBOUNCE: Duration = Duration::from_millis(50);
-const DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE: Duration = Duration::from_millis(30);
+pub(crate) const DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE: Duration = Duration::from_millis(30);
 
 impl Render for ProjectDiagnosticsEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -190,15 +195,22 @@ impl ProjectDiagnosticsEditor {
                     paths,
                 } => {
                     this.paths_to_update.extend(paths.clone());
-                    this.diagnostic_summary_update = cx.spawn(async move |this, cx| {
-                        cx.background_executor()
-                            .timer(DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE)
-                            .await;
-                        this.update(cx, |this, cx| {
-                            this.update_diagnostic_summary(cx);
-                        })
-                        .log_err();
-                    });
+                    // See `items.rs`: replacing the task would cancel the only
+                    // pending debounce timer, and a burst of updates never lets
+                    // a new one fire.
+                    if !this.diagnostic_summary_update_pending {
+                        this.diagnostic_summary_update_pending = true;
+                        this.diagnostic_summary_update = cx.spawn(async move |this, cx| {
+                            cx.background_executor()
+                                .timer(DIAGNOSTICS_SUMMARY_UPDATE_DEBOUNCE)
+                                .await;
+                            this.update(cx, |this, cx| {
+                                this.diagnostic_summary_update_pending = false;
+                                this.update_diagnostic_summary(cx);
+                            })
+                            .log_err();
+                        });
+                    }
 
                     log::debug!(
                         "diagnostics updated for server {language_server_id}, \
@@ -285,6 +297,8 @@ impl ProjectDiagnosticsEditor {
             paths_to_update: Default::default(),
             update_excerpts_task: None,
             diagnostic_summary_update: Task::ready(()),
+            diagnostic_summary_update_pending: false,
+            selected_diagnostics: Vec::new(),
             _subscription: project_event_subscription,
         };
         this.refresh(window, cx);
@@ -495,6 +509,10 @@ impl ProjectDiagnosticsEditor {
     ) -> Task<Result<()>> {
         let was_empty = self.multibuffer.read(cx).is_empty();
         let buffer_id = buffer.read(cx).remote_id();
+        let buffer_path = buffer
+            .read(cx)
+            .file()
+            .map(|file| file.path().as_std_path().to_path_buf());
         let first_parse = buffer.update(cx, |buffer, cx| buffer.wait_for_first_parse(cx));
 
         let max_severity = if self.include_warnings {
@@ -528,6 +546,9 @@ impl ProjectDiagnosticsEditor {
                         .map(DiagnosticEntryRef::to_owned)
                         .collect(),
                 );
+                if let Some(path) = buffer_path.as_deref() {
+                    this.refresh_selected_diagnostics(path, &diagnostics, &buffer_snapshot);
+                }
                 false
             })?;
             if unchanged {
@@ -546,27 +567,34 @@ impl ProjectDiagnosticsEditor {
             }
             let mut blocks: Vec<DiagnosticBlock> = Vec::new();
 
+            let languages = this
+                .read_with(cx, |t, cx| t.project.read(cx).languages().clone())
+                .ok();
             let diagnostics_toolbar_editor = Arc::new(this.clone());
             for (_, group) in grouped {
                 let group_severity = group.iter().map(|d| d.diagnostic.severity).min();
                 if group_severity.is_none_or(|s| s > max_severity) {
                     continue;
                 }
-                let languages = this
-                    .read_with(cx, |t, cx| t.project.read(cx).languages().clone())
-                    .ok();
                 let more = cx.update(|_, cx| {
                     crate::diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
                         group,
                         buffer_snapshot.remote_id(),
+                        buffer_path.as_deref(),
                         Some(diagnostics_toolbar_editor.clone()),
-                        languages,
+                        languages.clone(),
                         cx,
                     )
                 })?;
 
                 blocks.extend(more);
             }
+
+            let blocks = cx.update(|_, cx| {
+                crate::diagnostic_renderer::DiagnosticRenderer::merge_blocks_at_same_position(
+                    blocks, languages, cx,
+                )
+            })?;
 
             let cmp_excerpts = |buffer_snapshot: &BufferSnapshot,
                                 a: &ExcerptRange<text::Anchor>,
@@ -723,6 +751,66 @@ impl ProjectDiagnosticsEditor {
         self.summary = self.project.read(cx).diagnostic_summary(false, cx);
         cx.emit(EditorEvent::TitleChanged);
     }
+
+    fn toggle_diagnostic_selection(
+        &mut self,
+        citation: DiagnosticCitation,
+        cx: &mut Context<Self>,
+    ) {
+        match self
+            .selected_diagnostics
+            .iter()
+            .position(|selected| same_diagnostic_row(selected, &citation))
+        {
+            Some(index) => {
+                self.selected_diagnostics.remove(index);
+            }
+            None => self.selected_diagnostics.push(citation),
+        }
+        cx.notify();
+    }
+
+    /// Rewrites the ticks of one file from its new diagnostics: a ticked row
+    /// survives a refresh and takes the current message, and a row that no
+    /// longer exists (a fixed diagnostic, a deleted file) is dropped.
+    fn refresh_selected_diagnostics(
+        &mut self,
+        path: &Path,
+        diagnostics: &[DiagnosticEntryRef<'_, text::Anchor>],
+        snapshot: &BufferSnapshot,
+    ) {
+        let mut refreshed = Vec::with_capacity(self.selected_diagnostics.len());
+        for selected in self.selected_diagnostics.drain(..) {
+            if selected.path != path {
+                refreshed.push(selected);
+                continue;
+            }
+            let current = diagnostics.iter().find(|entry| {
+                let start = entry.range.start.to_point(snapshot);
+                entry.diagnostic.is_primary
+                    && start.row + 1 == selected.line
+                    && start.column + 1 == selected.column
+                    && entry.diagnostic.code.as_ref().map(|code| code.to_string()) == selected.code
+            });
+            if let Some(entry) = current {
+                refreshed.push(diagnostic_renderer::citation_for(
+                    path,
+                    entry.range.start.to_point(snapshot),
+                    &entry.diagnostic,
+                ));
+            }
+        }
+        self.selected_diagnostics = refreshed;
+    }
+}
+
+/// Two citations name the same panel row when they point at the same file,
+/// position and rule; the message may change while the row stays.
+fn same_diagnostic_row(left: &DiagnosticCitation, right: &DiagnosticCitation) -> bool {
+    left.path == right.path
+        && left.line == right.line
+        && left.column == right.column
+        && left.code == right.code
 }
 
 impl Focusable for ProjectDiagnosticsEditor {
@@ -978,14 +1066,6 @@ impl DiagnosticsToolbarEditor for WeakEntity<ProjectDiagnosticsEditor> {
         .unwrap_or_default()
     }
 
-    fn diagnostic_path(&self, buffer_id: BufferId, cx: &App) -> Option<std::path::PathBuf> {
-        self.read_with(cx, |project_diagnostics_editor, cx| {
-            diagnostic_renderer::buffer_path(&project_diagnostics_editor.multibuffer, buffer_id, cx)
-        })
-        .ok()
-        .flatten()
-    }
-
     fn diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation> {
         self.read_with(cx, |project_diagnostics_editor, cx| {
             let max_severity = diagnostic_renderer::max_shown_severity(
@@ -1021,6 +1101,46 @@ impl DiagnosticsToolbarEditor for WeakEntity<ProjectDiagnosticsEditor> {
             citations
         })
         .unwrap_or_default()
+    }
+
+    fn supports_diagnostic_selection(&self) -> bool {
+        true
+    }
+
+    fn is_diagnostic_selected(&self, citation: &DiagnosticCitation, cx: &App) -> bool {
+        self.read_with(cx, |project_diagnostics_editor, _cx| {
+            project_diagnostics_editor
+                .selected_diagnostics
+                .iter()
+                .any(|selected| same_diagnostic_row(selected, citation))
+        })
+        .unwrap_or(false)
+    }
+
+    fn toggle_diagnostic_selection(&self, citation: DiagnosticCitation, cx: &mut App) {
+        self.update(cx, |project_diagnostics_editor, cx| {
+            project_diagnostics_editor.toggle_diagnostic_selection(citation, cx)
+        })
+        .log_err();
+    }
+
+    fn selected_diagnostic_citations(&self, cx: &App) -> Vec<DiagnosticCitation> {
+        self.read_with(cx, |project_diagnostics_editor, _cx| {
+            let mut citations = project_diagnostics_editor.selected_diagnostics.clone();
+            sort_citations(&mut citations);
+            citations
+        })
+        .unwrap_or_default()
+    }
+
+    fn clear_diagnostic_selection(&self, cx: &mut App) {
+        self.update(cx, |project_diagnostics_editor, cx| {
+            if !project_diagnostics_editor.selected_diagnostics.is_empty() {
+                project_diagnostics_editor.selected_diagnostics.clear();
+                cx.notify();
+            }
+        })
+        .log_err();
     }
 }
 

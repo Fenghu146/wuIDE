@@ -527,6 +527,40 @@ function renderSymbols(doc, requested, options) {
 const TRUNCATED_DIAGNOSTICS =
   "The snapshot was capped when the IDE wrote it, so older diagnostics are missing from this list.";
 
+// A snapshot older than this is called out instead of quietly reported, so an
+// agent can tell a fresh list from one that predates the user's last edit.
+const DIAGNOSTICS_STALE_AFTER_SECONDS = 5 * 60;
+
+function plural(count, noun) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function snapshotAgeSeconds(generatedAt, now) {
+  if (typeof generatedAt !== "string") return null;
+  const written = Date.parse(generatedAt);
+  if (!Number.isFinite(written)) return null;
+  return Math.max(0, Math.round((now - written) / 1000));
+}
+
+function formatAge(seconds) {
+  if (seconds < 90) return `${seconds}s`;
+  if (seconds < 90 * 60) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 48 * 60 * 60) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / (24 * 60 * 60))}d`;
+}
+
+// The first line of the tool output: how old the snapshot is, so the list below
+// is never mistaken for live state, plus what it covers.
+function freshnessLine(doc, matched, fileCount, now) {
+  const age = snapshotAgeSeconds(doc.generated_at, now);
+  if (age === null) return null;
+  const size = `${plural(matched.length, "diagnostic")} in ${plural(fileCount, "file")}`;
+  if (age >= DIAGNOSTICS_STALE_AFTER_SECONDS) {
+    return `Snapshot is ${formatAge(age)} old; ask the user to refresh the Problems panel · ${size}`;
+  }
+  return `Snapshot written ${formatAge(age)} ago · ${size}`;
+}
+
 function clampDiagnosticsLimit(requested) {
   return Number.isFinite(requested) && requested >= 1
     ? Math.min(Math.floor(requested), MAX_DIAGNOSTICS_LIMIT)
@@ -551,7 +585,15 @@ function renderDiagnostics(doc, options) {
       (!options.severity || item.severity === options.severity) &&
       matchesPath(item, wanted),
   );
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const item of matched) {
+    if (item.severity in counts) counts[item.severity] += 1;
+  }
+  const fileCount = new Set(matched.map((item) => item.path)).size;
+
   const head = ["## Diagnostics", ""];
+  const freshness = freshnessLine(doc, matched, fileCount, Date.now());
+  if (freshness) head.push(freshness);
   if (matched.length === 0) {
     const scope =
       (options.severity ? ` with severity \`${options.severity}\`` : "") +
@@ -561,10 +603,6 @@ function renderDiagnostics(doc, options) {
     return head.join("\n");
   }
 
-  const counts = { error: 0, warning: 0, info: 0 };
-  for (const item of matched) {
-    if (item.severity in counts) counts[item.severity] += 1;
-  }
   const shown = matched
     .slice()
     .sort(
@@ -574,13 +612,14 @@ function renderDiagnostics(doc, options) {
         Number(left.column) - Number(right.column),
     )
     .slice(0, options.limit);
-  const fileCount = new Set(matched.map((item) => item.path)).size;
-  const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
+  const showing =
+    shown.length === matched.length
+      ? `showing all ${matched.length}`
+      : `showing ${shown.length} of ${matched.length}`;
   head.push(
-    `${plural(matched.length, "diagnostic")} (${plural(counts.error, "error")}, ` +
-      `${plural(counts.warning, "warning")}, ${counts.info} info) in ` +
-      `${plural(fileCount, "file")}, showing ${shown.length}.`,
+    `${plural(counts.error, "error")}, ${plural(counts.warning, "warning")}, ` +
+      `${counts.info} info, ${showing}.`,
   );
   if (doc.truncated) head.push(TRUNCATED_DIAGNOSTICS);
 
@@ -803,4 +842,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { renderRepoMap, renderSymbols, omittedPathLimit, coverageNotes };
+module.exports = {
+  renderDiagnostics,
+  renderRepoMap,
+  renderSymbols,
+  omittedPathLimit,
+  coverageNotes,
+};

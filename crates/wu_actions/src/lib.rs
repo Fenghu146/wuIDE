@@ -107,6 +107,11 @@ pub struct DiagnosticCitation {
 #[serde(deny_unknown_fields)]
 pub struct AddDiagnosticsToChat {
     pub citations: Vec<DiagnosticCitation>,
+    /// Confirms with a toast once the references reached the chat. The
+    /// multi-select button asks for it: the composer can be scrolled out of
+    /// view, and the ticked rows disappear with the selection.
+    #[serde(default)]
+    pub announce: bool,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug, Deserialize, JsonSchema)]

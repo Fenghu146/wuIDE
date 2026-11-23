@@ -3,6 +3,7 @@
   "/{name} only works in Claude Code in the terminal.": "/{name} 只能在终端里的 Claude Code 中使用。",
   "/{name} requires an argument.": "/{name} 需要一个参数。",
   "Add to favorites": "加星标",
+  "Added {count} diagnostics to the chat": "已把 {count} 条诊断加入对话",
   "Agent Chats": "智能体对话",
   "Agent chats only work in local projects for now.": "智能体对话目前仅支持本地项目。",
   "Agent running": "智能体运行中",

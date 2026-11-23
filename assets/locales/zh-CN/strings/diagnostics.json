@@ -3,6 +3,7 @@
   "1 warning": "1 个警告",
   "Add All Diagnostics to Chat": "将全部诊断加入对话",
   "Add Diagnostic to Chat": "将诊断加入对话",
+  "Add Selected to Chat ({count})": "加入已选（{count}）",
   "Buffer Diagnostics": "缓冲区诊断",
   "Buffer Diagnostics - {path}": "缓冲区诊断 - {path}",
   "Buffer Search": "缓冲区搜索",
@@ -14,6 +15,7 @@
   "Next Diagnostic": "下一个诊断",
   "No errors in": "以下文件中没有错误：",
   "No errors in workspace": "工作区中没有错误",
+  "No errors or warnings (info excluded)": "没有错误或警告（不含 info）",
   "No problems": "没有问题",
   "No problems in": "以下文件中没有问题：",
   "No problems in workspace": "工作区中没有问题",
@@ -27,8 +29,12 @@
   "Show 1 warning": "显示 1 个警告",
   "Show {count} warnings": "显示 {count} 个警告",
   "Stop Diagnostics Update": "停止更新诊断",
+  "The agent gets one reference chip listing the ticked diagnostics.": "智能体会收到一个引用条目，列出已勾选的诊断。",
   "back": "返回",
   "hint": "提示",
   "{count} errors": "{count} 个错误",
-  "{count} warnings": "{count} 个警告"
+  "{count} warnings": "{count} 个警告",
+  "{errors} (info excluded)": "{errors}（不含 info）",
+  "{errors}, {warnings} (info excluded)": "{errors}，{warnings}（不含 info）",
+  "{warnings} (info excluded)": "{warnings}（不含 info）"
 }
