@@ -246,7 +246,7 @@ pub struct ReleaseAsset {
     pub digest: Option<String>,
 }
 
-const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/Fenghu146/wu/releases";
+const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/Fenghu146/wuIDE/releases";
 
 #[derive(Deserialize)]
 struct GitHubRelease {
@@ -1653,7 +1653,7 @@ mod tests {
                 let release_available = release_available.load(atomic::Ordering::Relaxed);
                 let dmg_rx = dmg_rx.clone();
                 async move {
-                if req.uri().path() == "/repos/Fenghu146/wu/releases/latest" {
+                if req.uri().path() == "/repos/Fenghu146/wuIDE/releases/latest" {
                     let (tag_name, download_url) = if release_available {
                         ("v0.100.1", "https://test.example/new-download")
                     } else {
