@@ -61,7 +61,8 @@ pub(crate) fn agent_icon(kind: AgentKind) -> Icon {
             Icon::new(IconName::AgentClaude).color(Color::Custom(rgb(CLAUDE_BRAND).into()))
         }
         AgentKind::Codex => Icon::new(IconName::AgentCodex),
-        AgentKind::Opencode | AgentKind::DeepSeek => Icon::new(IconName::AgentOpencode),
+        AgentKind::Opencode => Icon::new(IconName::AgentOpencode),
+        AgentKind::DeepSeek => Icon::new(IconName::AgentDeepseek),
         AgentKind::Pi => Icon::new(IconName::AgentPi),
     }
 }
@@ -70,7 +71,8 @@ fn agent_icon_name(kind: AgentKind) -> IconName {
     match kind {
         AgentKind::Claude => IconName::AgentClaude,
         AgentKind::Codex => IconName::AgentCodex,
-        AgentKind::Opencode | AgentKind::DeepSeek => IconName::AgentOpencode,
+        AgentKind::Opencode => IconName::AgentOpencode,
+        AgentKind::DeepSeek => IconName::AgentDeepseek,
         AgentKind::Pi => IconName::AgentPi,
     }
 }
@@ -1761,5 +1763,39 @@ mod tests {
         assert_eq!(full_tray_height(2, false), 71.);
         assert_eq!(full_tray_height(1, true), 32. + 24. + 36. + 2. + 7.);
         assert_eq!(full_tray_height(12, true), FULL_TRAY_MAX_HEIGHT);
+    }
+
+    #[test]
+    fn every_agent_has_its_own_packaged_harness_icon() {
+        for (index, kind) in AgentKind::ALL.iter().enumerate() {
+            for other in &AgentKind::ALL[index + 1..] {
+                assert_ne!(
+                    agent_icon_name(*kind),
+                    agent_icon_name(*other),
+                    "{kind:?} and {other:?} share a harness icon"
+                );
+            }
+        }
+
+        let path = agent_icon_name(AgentKind::DeepSeek).path();
+        assert_eq!(&*path, "icons/agent_deepseek.svg");
+        let svg = gpui::AssetSource::load(&assets::Assets, &path)
+            .expect("assets are readable")
+            .expect("the DeepSeek icon is bundled");
+
+        let tree = usvg::Tree::from_data(&svg, &usvg::Options::default())
+            .expect("the DeepSeek icon parses");
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(16, 16).expect("pixmap");
+        let scale = resvg::tiny_skia::Transform::from_scale(16. / 24., 16. / 24.);
+        resvg::render(&tree, scale, &mut pixmap.as_mut());
+        let painted = pixmap
+            .pixels()
+            .iter()
+            .filter(|pixel| pixel.alpha() > 0)
+            .count();
+        assert!(
+            (40..200).contains(&painted),
+            "the whale draws as a cut-out mark, found {painted} pixels"
+        );
     }
 }

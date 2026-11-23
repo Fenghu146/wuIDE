@@ -1498,7 +1498,8 @@ fn agent_logo(kind: AgentKind) -> IconName {
     match kind {
         AgentKind::Claude => IconName::AgentClaude,
         AgentKind::Codex => IconName::AgentCodex,
-        AgentKind::Opencode | AgentKind::DeepSeek => IconName::AgentOpencode,
+        AgentKind::Opencode => IconName::AgentOpencode,
+        AgentKind::DeepSeek => IconName::AgentDeepseek,
         AgentKind::Pi => IconName::AgentPi,
     }
 }
