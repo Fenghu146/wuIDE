@@ -2427,6 +2427,14 @@ impl Workspace {
         })
     }
 
+    /// Whether the user is looking at a chat a panel could add references to.
+    /// The agent chat crate answers this, so panels can ask without depending
+    /// on it; without that crate nothing counts as visible.
+    pub fn has_visible_agent_chat(&self, cx: &App) -> bool {
+        cx.try_global::<VisibleAgentChatProbe>()
+            .is_some_and(|probe| (probe.0)(self, cx))
+    }
+
     pub fn panel_size_state<T: Panel>(&self, cx: &App) -> Option<dock::PanelSizeState> {
         self.all_docks().into_iter().find_map(|dock| {
             let dock = dock.read(cx);
@@ -9822,6 +9830,12 @@ pub fn quit_warning(cx: &App) -> Option<String> {
     cx.try_global::<QuitWarning>()
         .and_then(|warning| (warning.0)(cx))
 }
+
+/// Answers whether the user is looking at a chat, for panels that hand the
+/// agent a reference instead of a pasted block.
+pub struct VisibleAgentChatProbe(pub fn(&Workspace, &App) -> bool);
+
+impl Global for VisibleAgentChatProbe {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentActivity {

@@ -2821,6 +2821,84 @@ async fn a_ticked_row_survives_a_refresh_and_drops_once_it_is_fixed(cx: &mut Tes
     );
 }
 
+#[gpui::test]
+async fn batch_adding_without_a_chat_keeps_the_ticks(cx: &mut TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/test"),
+        json!({ "main.rs": "fn main() {\n    let x = 1;\n}\n" }),
+    )
+    .await;
+
+    let language_server_id = LanguageServerId(0);
+    let project = Project::test(fs.clone(), [path!("/test").as_ref()], cx).await;
+    let lsp_store = project.read_with(cx, |project, _| project.lsp_store());
+    let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    let workspace = window
+        .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+        .unwrap();
+    let uri = lsp::Uri::from_file_path(path!("/test/main.rs")).unwrap();
+
+    lsp_store.update(cx, |lsp_store, cx| {
+        lsp_store
+            .update_diagnostics(
+                language_server_id,
+                lsp::PublishDiagnosticsParams {
+                    uri: uri.clone(),
+                    diagnostics: vec![lsp::Diagnostic {
+                        range: lsp::Range::new(lsp::Position::new(1, 8), lsp::Position::new(1, 9)),
+                        severity: Some(lsp::DiagnosticSeverity::WARNING),
+                        message: lsp::DiagnosticMessage::from("unused variable `x`"),
+                        ..Default::default()
+                    }],
+                    version: None,
+                },
+                None,
+                DiagnosticSourceKind::Pushed,
+                &[],
+                cx,
+            )
+            .unwrap();
+    });
+
+    let diagnostics = window.build_entity(cx, |window, cx| {
+        ProjectDiagnosticsEditor::new(true, project.clone(), workspace.downgrade(), window, cx)
+    });
+    let panel = diagnostics.downgrade();
+    cx.executor()
+        .advance_clock(DIAGNOSTICS_UPDATE_DEBOUNCE + Duration::from_millis(10));
+    cx.executor().run_until_parked();
+
+    let citations = cx.update(|_, cx| panel.diagnostic_citations(cx));
+    assert_eq!(citations.len(), 1);
+    cx.update(|_, cx| panel.toggle_diagnostic_selection(citations[0].clone(), cx));
+    assert_eq!(
+        cx.update(|_, cx| panel.selected_diagnostic_citations(cx))
+            .len(),
+        1
+    );
+
+    // No chat is open, so the click explains instead of adding, and the ticks
+    // the user placed have to survive that.
+    cx.update(|window, cx| panel.add_selected_diagnostics_to_chat(window, cx));
+    assert_eq!(
+        cx.update(|_, cx| panel.selected_diagnostic_citations(cx))
+            .len(),
+        1,
+        "a missing chat must not cost the selection"
+    );
+    workspace.read_with(cx, |workspace, _| {
+        assert_eq!(
+            workspace.notification_ids().len(),
+            1,
+            "the user is told to open a chat first"
+        );
+    });
+}
+
 fn init_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
         zlog::init_test();

@@ -121,6 +121,9 @@ pub fn init(shell_env_loaded: Option<futures::channel::oneshot::Receiver<()>>, c
         cx.set_global(session::ShellEnvLoaded(loaded.shared()));
     }
     cx.set_global(workspace::QuitWarning(session::quit_warning));
+    cx.set_global(workspace::VisibleAgentChatProbe(|workspace, cx| {
+        agent_panel::visible_chat(workspace, cx).is_some()
+    }));
     let changes = cx.new(|_| workspace::AgentActivityChanges);
     cx.set_global(workspace::ProjectAgentActivity {
         activity: session::project_agent_activity,

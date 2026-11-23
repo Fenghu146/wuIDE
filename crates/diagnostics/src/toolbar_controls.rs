@@ -59,6 +59,10 @@ pub(crate) trait DiagnosticsToolbarEditor: Send + Sync {
 
     /// Drops every tick after the selection became a chat reference.
     fn clear_diagnostic_selection(&self, _cx: &mut App) {}
+
+    /// Adds the ticked rows to the chat the user is looking at, and keeps the
+    /// ticks when there is no chat to add them to.
+    fn add_selected_diagnostics_to_chat(&self, _window: &mut Window, _cx: &mut App) {}
 }
 
 impl Render for ToolbarControls {
@@ -161,21 +165,9 @@ impl Render for ToolbarControls {
                         "The agent gets one reference chip listing the ticked diagnostics."
                     )))
                     .on_click(cx.listener(|toolbar_controls, _, window, cx| {
-                        let Some(editor) = toolbar_controls.editor() else {
-                            return;
-                        };
-                        let citations = editor.selected_diagnostic_citations(cx);
-                        if citations.is_empty() {
-                            return;
+                        if let Some(editor) = toolbar_controls.editor() {
+                            editor.add_selected_diagnostics_to_chat(window, cx);
                         }
-                        window.dispatch_action(
-                            Box::new(AddDiagnosticsToChat {
-                                citations,
-                                announce: true,
-                            }),
-                            cx,
-                        );
-                        editor.clear_diagnostic_selection(cx);
                     })),
                 )
             })

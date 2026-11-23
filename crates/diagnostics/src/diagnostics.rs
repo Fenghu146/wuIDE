@@ -47,11 +47,12 @@ pub use toolbar_controls::ToolbarControls;
 use ui::{Icon, IconName, Label, h_flex, prelude::*};
 use util::ResultExt;
 use workspace::{
-    ItemNavHistory, Workspace,
+    ItemNavHistory, Toast, Workspace,
     item::{Item, ItemEvent, ItemHandle, SaveOptions, TabContentParams},
+    notifications::NotificationId,
     searchable::SearchableItemHandle,
 };
-use wu_actions::DiagnosticCitation;
+use wu_actions::{AddDiagnosticsToChat, DiagnosticCitation};
 
 actions!(
     diagnostics,
@@ -1141,6 +1142,45 @@ impl DiagnosticsToolbarEditor for WeakEntity<ProjectDiagnosticsEditor> {
             }
         })
         .log_err();
+    }
+
+    fn add_selected_diagnostics_to_chat(&self, window: &mut Window, cx: &mut App) {
+        let Ok(citations) = self.read_with(cx, |editor, _| editor.selected_diagnostics.clone())
+        else {
+            return;
+        };
+        if citations.is_empty() {
+            return;
+        }
+        let Ok(workspace) = self.read_with(cx, |editor, _| editor.workspace.clone()) else {
+            return;
+        };
+        let Some(workspace) = workspace.upgrade() else {
+            return;
+        };
+        // Asking first keeps the ticks when the answer is "open a chat": the
+        // action cannot report back, and a prompt must not cost the selection.
+        if !workspace.read(cx).has_visible_agent_chat(cx) {
+            workspace.update(cx, |workspace, cx| {
+                workspace.show_toast(
+                    Toast::new(
+                        NotificationId::unique::<ProjectDiagnosticsEditor>(),
+                        t!("Open a chat before adding diagnostics.").to_string(),
+                    )
+                    .autohide(),
+                    cx,
+                );
+            });
+            return;
+        }
+        window.dispatch_action(
+            Box::new(AddDiagnosticsToChat {
+                citations,
+                announce: true,
+            }),
+            cx,
+        );
+        self.clear_diagnostic_selection(cx);
     }
 }
 
