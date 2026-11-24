@@ -194,7 +194,7 @@ printf 'main-checkout edit\n' >> a.txt
 git add a.txt
 expect_fail "a commit in the shared main checkout is refused" "shared main checkout" \
     git commit -qm dirty
-expect_ok "AMP_MAIN_COMMIT=1 allows a merge commit there" \
+expect_ok "AMP_MAIN_COMMIT=1 allows a commit there" \
     env AMP_MAIN_COMMIT=1 git commit -qm merge
 
 cd "$tmp/wt"

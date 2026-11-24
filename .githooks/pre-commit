@@ -3,8 +3,10 @@
 # Keeps a commit out of the shared main checkout, and keeps it out of files
 # another thread has leased.
 #
-# A merge done in the main checkout on purpose may set AMP_MAIN_COMMIT=1. That
-# also skips the lease check, because a merge brings in work that
+# Only a hand-made commit needs AMP_MAIN_COMMIT=1, and the usual case is
+# finishing a conflicted merge. A clean `git merge` runs pre-merge-commit,
+# which this repository does not provide, so it passes untouched. The variable
+# also skips the lease check, because such a commit closes out work that
 # script/pre-merge-check already cleared.
 
 set -euo pipefail
@@ -28,7 +30,8 @@ put commits on each other's branch, so work in a worktree of its own:
 
   git worktree add ..\\<name> -b <branch> origin/main
 
-A merge done here on purpose may set AMP_MAIN_COMMIT=1.
+Only a hand-made commit here needs AMP_MAIN_COMMIT=1, including the one that
+finishes a conflicted merge. A clean `git merge` does not run this hook at all.
 EOF
         exit 1
     fi

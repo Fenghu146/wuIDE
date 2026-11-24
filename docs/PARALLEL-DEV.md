@@ -121,14 +121,25 @@ script/lease build release
 script/setup-hooks      # 设置 core.hooksPath=.githooks，整个 clone 共享
 ```
 
-`core.hooksPath` 是每个 clone 的共享配置：在四条线程同时跑着的时候打开它，会立刻改变它们的提交流程；而那些从没 claim 过路径的线程，会直接撞上别人租约的误报。所以它的位置是**合并与发版窗口**——编排者在合并前跑 `script/setup-hooks`，用 `AMP_MAIN_COMMIT=1` 完成合并提交，平时不开。`./script/pre-merge-check` 的第 10 项会报出当前状态。
+`core.hooksPath` 是每个 clone 的共享配置：在四条线程同时跑着的时候打开它，会立刻改变它们的提交流程；而那些从没 claim 过路径的线程，会直接撞上别人租约的误报。所以它的位置是**合并与发版窗口**——编排者在合并前跑 `script/setup-hooks`，遇到带冲突的合并时用 `AMP_MAIN_COMMIT=1` 完成收尾提交；平时不开。`./script/pre-merge-check` 的第 10 项会报出当前状态。
 
 启用后 `.githooks/pre-commit` 挡两件事：
 
-1. **在主检出里提交**——除非设置 `AMP_MAIN_COMMIT=1`（只有合并时需要）。主检出是共享资源，随手提交是上面那个"merge commit 落到错误分支"事故的来源。
+1. **在主检出里手敲提交**——除非设置 `AMP_MAIN_COMMIT=1`。主检出是共享资源，随手提交是上面那个"merge commit 落到错误分支"事故的来源。
 2. **提交里含别人持有租约的文件**——排除你自己 token（`AMP_LEASE_TOKEN`）或线程（`AMP_THREAD_ID`）的租约。提交这些文件会把持有者正在进行的工作劈成两半。
 
-`AMP_MAIN_COMMIT=1` 同时会跳过租约检查：合并本来就该由 `pre-merge-check` 在那之前放行。
+`AMP_MAIN_COMMIT=1` 同时会跳过租约检查：这类提交是收尾动作，合并本来就该由 `pre-merge-check` 在那之前放行。
+
+### 钩子到底拦什么（临时仓库实测）
+
+| 动作 | 经过哪个钩子 | 结果 |
+| --- | --- | --- |
+| 主检出里干净的 `git merge --no-ff <branch>` | 不经过：git 合并调用 `pre-merge-commit`，本仓库没提供它 | 通过，不需要变量 |
+| 主检出里手敲 `git commit` | `pre-commit` | 拒绝 |
+| 解冲突后手敲 `git commit` 结束合并 | `pre-commit` | 拒绝 |
+| 同上，带 `AMP_MAIN_COMMIT=1` | `pre-commit` | 通过 |
+
+看起来像"合并没被拦"，实际没有漏掉防御目的：要防的是**人在主检出里编辑并提交**，合并一直是允许的；而解冲突那一步恰是人正在手改文件、最容易把别人的半成品或错误分支带进提交的时刻，它落在 `pre-commit` 上，正好被挡住。所以 `AMP_MAIN_COMMIT=1` 只在你要手工提交时才需要，干净合并根本用不上——将来有人怀疑"合并怎么没被拦"，答案在这张表里，不用再跑一次实验。
 
 **钩子是 worktree 里的文件**，不是全局安装的东西：`core.hooksPath` 只是配置，`.githooks/pre-commit` 必须在这个 worktree 的检出里存在且可执行。从一个还没有 `.githooks` 的旧分支（比如本分支合入之前的 `main`）开出来的 worktree，提交时**不会有任何拦截，也不会有任何提示**。`pre-merge-check` 的第 10 项会区分这两种情况：配置没开，还是配置开了但当前 worktree 里没有钩子。
 
