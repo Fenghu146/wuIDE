@@ -108,3 +108,15 @@ Set `WU_AGENT_DATA_DIR` to put them somewhere else.
 The runtimes are found beside the executable: `agents` next to `IDE.exe` on Windows, `libexec/agents` in the Linux bundle, and `Contents/Resources/agents` inside the macOS app. If you copy just the executable out of the bundle — for example to try a single-file build — copy the `agents` folder next to it as well, or set `WU_AGENT_BIN_DIR` to its path. A local build can use `sync-agents.ps1`, kept next to the build output, which mirrors `crates/wu/resources/agents` into that folder and does nothing when the copy is already current. Otherwise DeepSeek and Pi report that they are unavailable and list the folders they searched.
 
 Pi's isolated home is seeded from `~/.pi/agent` on every launch: `auth.json`, `models.json`, `models-store.json` and a `settings.json` with globally installed `packages` and `enabledModels` removed. That means a provider switch written by cc-switch reaches the bundled Pi without you having to clear anything, but it also means a model you pick inside WuIDE is replaced by your global Pi default the next time an agent starts.
+
+## Program output in the terminal
+
+The terminal renders UTF-8, so on Windows the step that starts a program first sets `[Console]::OutputEncoding` to UTF-8. Otherwise PowerShell decodes the program's output with the console's code page — 936 on a Chinese system — and UTF-8 text arrives as GBK mojibake (`张三` as `寮犱笁`). Running `chcp 65001` beforehand does not help, because .NET caches the encoding it started with.
+
+That leaves one thing the editor cannot decide for you: a program that writes something other than UTF-8.
+
+- **g++, Cargo, Python and Node** write UTF-8 and need nothing.
+- **MSVC with GBK source files** prints garbled Chinese, because its string literals and its output are GBK bytes. Compile with `/utf-8` so the program speaks UTF-8 too.
+- **A program that has to write GBK** — to a legacy consumer, say — is not supported in this terminal. Nothing here detects an encoding from the bytes, because guessing would corrupt the UTF-8 output that works today; write to a file or run that program in another terminal.
+
+Build steps keep the console's own code page, so compiler messages that were written for it still read correctly.

@@ -487,9 +487,12 @@ pub fn resolve_debug(
 const WINDOWS_UTF8_OUTPUT: &str =
     "try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; ";
 
-/// Puts a Windows program behind [`WINDOWS_UTF8_OUTPUT`]. Only the step that
-/// starts the program gets it, so build steps keep the console's own code page
-/// for the compiler messages that were written for it.
+/// Puts a Windows program behind [`WINDOWS_UTF8_OUTPUT`].
+///
+/// Do not add it to build steps: a compiler on a Chinese system writes its
+/// messages in GBK, so decoding those as UTF-8 would garble them. Build steps
+/// keep the console's own code page, which is what the messages were written
+/// for.
 fn with_utf8_program_output(command_line: String, is_windows: bool) -> String {
     if is_windows {
         format!("{WINDOWS_UTF8_OUTPUT}{command_line}")
