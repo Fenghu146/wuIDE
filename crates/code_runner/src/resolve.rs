@@ -19,17 +19,11 @@ pub enum CommandSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunError {
     /// The extension is not a language the runner knows or has an entry for.
-    NoCommand {
-        language: String,
-    },
+    NoCommand { language: String },
     /// A C or C++ directory where nothing defines `main`.
-    NoMain {
-        directory: PathBuf,
-    },
+    NoMain { directory: PathBuf },
     /// A tool the plan needs is not installed.
-    MissingTool {
-        tool: String,
-    },
+    MissingTool { tool: String },
     /// A `$ZED_*` variable in a configured command has no value.
     UnresolvedVariable,
     /// The editor has no local file to run, such as an untitled buffer.
@@ -141,9 +135,7 @@ impl RunPlan {
 
     /// The step that starts the program, once it is in the plan.
     pub fn run_step(&self) -> Option<&RunStep> {
-        self.steps
-            .iter()
-            .find(|step| step.kind == StepKind::Run)
+        self.steps.iter().find(|step| step.kind == StepKind::Run)
     }
 
     /// Replaces the plan with a single command the user edited. An edited line
@@ -322,10 +314,9 @@ pub fn resolve(
     request: &RunRequest<'_>,
     settings: &CodeRunnerSettings,
 ) -> Result<RunPlan, RunError> {
-    let language = language_id_for_path(request.file)
-        .ok_or_else(|| RunError::NoCommand {
-            language: "this file".to_owned(),
-        })?;
+    let language = language_id_for_path(request.file).ok_or_else(|| RunError::NoCommand {
+        language: "this file".to_owned(),
+    })?;
     let entry = settings
         .run_case(&language)
         .ok_or_else(|| RunError::NoCommand {
@@ -350,7 +341,13 @@ pub fn resolve(
                         cmake_root.to_path_buf(),
                     );
                 }
-                cmake_plan(request, &language, cmake_root, source, settings.is_windows())
+                cmake_plan(
+                    request,
+                    &language,
+                    cmake_root,
+                    source,
+                    settings.is_windows(),
+                )
             } else {
                 compile_plan(request, &language, source, settings.is_windows())
             }
@@ -388,13 +385,7 @@ pub fn resolve_debug(
                 tool: "cmake".to_owned(),
             });
         }
-        let plan = cmake_plan(
-            request,
-            &language,
-            cmake_root,
-            entry.source,
-            is_windows,
-        )?;
+        let plan = cmake_plan(request, &language, cmake_root, entry.source, is_windows)?;
         let binary = CmakeBinary {
             build_dir: cmake_build_dir(cmake_root),
             target: cmake_target(cmake_root),
@@ -411,11 +402,11 @@ pub fn resolve_debug(
     // Outside CMake the file is compiled with debug symbols, together with the
     // siblings that make up the program.
     let program = program_sources(request);
-    if entry.source == CommandSource::BuiltIn && program.is_none() && !request.current_file_defines_main()
+    if entry.source == CommandSource::BuiltIn
+        && program.is_none()
+        && !request.current_file_defines_main()
     {
-        return Err(RunError::NoMain {
-            directory: cwd,
-        });
+        return Err(RunError::NoMain { directory: cwd });
     }
 
     let (build_line, program) = match (&program, entry.source) {
@@ -535,9 +526,7 @@ fn compile_plan(
         }
         None => {
             if !request.current_file_defines_main() && source == CommandSource::BuiltIn {
-                return Err(RunError::NoMain {
-                    directory,
-                });
+                return Err(RunError::NoMain { directory });
             }
             (
                 vec![filename.clone()],
@@ -734,7 +723,9 @@ pub fn cmake_target(project_root: &Path) -> Option<String> {
         };
         let name = arguments
             .trim_start()
-            .split(|character: char| character.is_whitespace() || character == ')' || character == '(')
+            .split(|character: char| {
+                character.is_whitespace() || character == ')' || character == '('
+            })
             .next()
             .unwrap_or_default();
         if !name.is_empty() {
@@ -845,12 +836,7 @@ pub fn tool_available(name: &str) -> bool {
 pub fn find_executable(name: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     paths
         .iter()
-        .flat_map(|directory| {
-            [
-                directory.join(name),
-                directory.join(format!("{name}.exe")),
-            ]
-        })
+        .flat_map(|directory| [directory.join(name), directory.join(format!("{name}.exe"))])
         .find(|candidate| candidate.is_file())
 }
 
@@ -914,7 +900,6 @@ fn task_context(request: &RunRequest<'_>, cwd: &Path, language: &str) -> TaskCon
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -929,7 +914,11 @@ mod tests {
         CodeRunnerSettings::new(&entries, &HashMap::default(), is_windows)
     }
 
-    fn directory_sources(sources: &[&str], with_main: &[&str], directory: &Path) -> DirectorySources {
+    fn directory_sources(
+        sources: &[&str],
+        with_main: &[&str],
+        directory: &Path,
+    ) -> DirectorySources {
         DirectorySources {
             sources: sources.iter().map(|name| directory.join(name)).collect(),
             with_main: with_main.iter().map(|name| directory.join(name)).collect(),
@@ -970,11 +959,7 @@ mod tests {
             &request(
                 &file,
                 root,
-                directory_sources(
-                    &["main.cpp", "helper.cpp"],
-                    &["main.cpp"],
-                    root,
-                ),
+                directory_sources(&["main.cpp", "helper.cpp"], &["main.cpp"], root),
                 None,
                 false,
             ),
@@ -1011,11 +996,7 @@ mod tests {
             &request(
                 &file,
                 root,
-                directory_sources(
-                    &["class.cpp", "main.cpp"],
-                    &["main.cpp"],
-                    root,
-                ),
+                directory_sources(&["class.cpp", "main.cpp"], &["main.cpp"], root),
                 None,
                 false,
             ),
@@ -1093,7 +1074,13 @@ mod tests {
         let file = project.join("class.cpp");
 
         let plan = resolve(
-            &request(&file, &project, DirectorySources::default(), Some(&project), true),
+            &request(
+                &file,
+                &project,
+                DirectorySources::default(),
+                Some(&project),
+                true,
+            ),
             &settings(&[], false),
         )
         .expect("cmake projects resolve");
@@ -1123,12 +1110,21 @@ mod tests {
     fn an_existing_build_directory_skips_the_configure_step() {
         let project = temp_directory("cmake-existing");
         std::fs::create_dir_all(project.join("build")).expect("build directory");
-        std::fs::write(project.join("CMakeLists.txt"), "add_executable(app main.cpp)\n")
-            .expect("write CMakeLists.txt");
+        std::fs::write(
+            project.join("CMakeLists.txt"),
+            "add_executable(app main.cpp)\n",
+        )
+        .expect("write CMakeLists.txt");
         let file = project.join("main.cpp");
 
         let plan = resolve(
-            &request(&file, &project, DirectorySources::default(), Some(&project), true),
+            &request(
+                &file,
+                &project,
+                DirectorySources::default(),
+                Some(&project),
+                true,
+            ),
             &settings(&[], false),
         )
         .expect("cmake projects resolve");
@@ -1143,7 +1139,13 @@ mod tests {
         let project = temp_directory("cmake-missing");
         let file = project.join("main.cpp");
         let plan = resolve(
-            &request(&file, &project, DirectorySources::default(), Some(&project), false),
+            &request(
+                &file,
+                &project,
+                DirectorySources::default(),
+                Some(&project),
+                false,
+            ),
             &settings(&[], false),
         );
 
@@ -1177,10 +1179,7 @@ mod tests {
 
         assert_eq!(step.kind, StepKind::Run);
         assert_eq!(step.cwd, project);
-        assert_eq!(
-            step.command_line,
-            format!("& \"{}\"", binary.display())
-        );
+        assert_eq!(step.command_line, format!("& \"{}\"", binary.display()));
         std::fs::remove_dir_all(&project).ok();
     }
 
@@ -1266,10 +1265,7 @@ mod tests {
             ("src/main.rs", "cargo run"),
             ("tool.py", r#"python3 "tool.py""#),
             ("index.mjs", r#"node "index.mjs""#),
-            (
-                "app.tsx",
-                r#"node --experimental-strip-types "app.tsx""#,
-            ),
+            ("app.tsx", r#"node --experimental-strip-types "app.tsx""#),
         ] {
             let file = root.join(file);
             let plan = resolve(
@@ -1299,7 +1295,9 @@ mod tests {
     fn main_is_recognized_only_as_a_definition() {
         assert!(defines_main("int main() {\n  return 0;\n}\n"));
         assert!(defines_main("int main(void) { return 0; }"));
-        assert!(defines_main("int main(int argc, char **argv) noexcept { return 0; }"));
+        assert!(defines_main(
+            "int main(int argc, char **argv) noexcept { return 0; }"
+        ));
         assert!(!defines_main("int main();"));
         assert!(!defines_main("int my_main() { return 0; }"));
         assert!(!defines_main("void run() { object.main(); }"));
@@ -1352,7 +1350,10 @@ mod tests {
         )
         .expect("cpp has a default debug plan");
 
-        assert_eq!(debug.build.steps[0].command_line, r#"g++ -std=c++17 -g -O0 "my file.cpp" -o "my file.dbg.exe""#);
+        assert_eq!(
+            debug.build.steps[0].command_line,
+            r#"g++ -std=c++17 -g -O0 "my file.cpp" -o "my file.dbg.exe""#
+        );
         assert_eq!(
             debug.program,
             Program::Path(Path::new(r"C:\work\my file.dbg.exe").to_path_buf())
@@ -1362,17 +1363,29 @@ mod tests {
     #[test]
     fn debugging_a_cmake_project_builds_it_and_finds_the_target() {
         let project = temp_directory("debug-cmake");
-        std::fs::write(project.join("CMakeLists.txt"), "add_executable(union_run main.cpp)\n")
-            .expect("write CMakeLists.txt");
+        std::fs::write(
+            project.join("CMakeLists.txt"),
+            "add_executable(union_run main.cpp)\n",
+        )
+        .expect("write CMakeLists.txt");
         let file = project.join("main.cpp");
 
         let debug = resolve_debug(
-            &request(&file, &project, DirectorySources::default(), Some(&project), true),
+            &request(
+                &file,
+                &project,
+                DirectorySources::default(),
+                Some(&project),
+                true,
+            ),
             &settings(&[], false),
         )
         .expect("cmake projects can be debugged");
 
-        assert_eq!(debug.build.steps.last().map(|step| step.kind), Some(StepKind::Build));
+        assert_eq!(
+            debug.build.steps.last().map(|step| step.kind),
+            Some(StepKind::Build)
+        );
         assert_eq!(
             debug.program,
             Program::Cmake(CmakeBinary {
@@ -1407,13 +1420,13 @@ mod tests {
     #[test]
     fn a_directory_scan_finds_the_sources_and_the_one_with_main() {
         let directory = temp_directory("scan");
-        std::fs::write(directory.join("class.cpp"), "#include <vector>\nclass A {};\n")
-            .expect("class.cpp");
         std::fs::write(
-            directory.join("main.cpp"),
-            "int main() {\n  return 0;\n}\n",
+            directory.join("class.cpp"),
+            "#include <vector>\nclass A {};\n",
         )
-        .expect("main.cpp");
+        .expect("class.cpp");
+        std::fs::write(directory.join("main.cpp"), "int main() {\n  return 0;\n}\n")
+            .expect("main.cpp");
         std::fs::write(directory.join("notes.txt"), "not a source").expect("notes.txt");
 
         let scan = scan_directory(&directory, "cpp");

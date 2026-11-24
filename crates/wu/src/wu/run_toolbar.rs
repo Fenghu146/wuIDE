@@ -166,9 +166,7 @@ impl ToolbarItemView for RunToolbar {
         cx: &mut Context<Self>,
     ) -> ToolbarItemLocation {
         let location = match active_pane_item {
-            Some(item) if item.downcast::<Editor>().is_some() => {
-                ToolbarItemLocation::PrimaryRight
-            }
+            Some(item) if item.downcast::<Editor>().is_some() => ToolbarItemLocation::PrimaryRight,
             _ => ToolbarItemLocation::Hidden,
         };
         self._editor_observation = None;
@@ -220,26 +218,27 @@ impl Render for RunStatusItem {
             (t!("Run Current File"), IconName::PlayFilled)
         };
 
-        div().child(
-            IconButton::new("run-status", icon)
-                .icon_size(IconSize::Small)
-                .tooltip(Tooltip::text(label))
-                .on_click({
-                    let editor = editor.downgrade();
-                    move |_, window, cx| {
-                        editor
-                            .update(cx, |editor, cx| {
-                                if editor.code_run_is_active() {
-                                    editor.stop_current_file(&StopCurrentFile, window, cx);
-                                } else {
-                                    editor.run_current_file(&RunCurrentFile, window, cx);
-                                }
-                            })
-                            .ok();
-                    }
-                }),
-        )
-        .into_any_element()
+        div()
+            .child(
+                IconButton::new("run-status", icon)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::text(label))
+                    .on_click({
+                        let editor = editor.downgrade();
+                        move |_, window, cx| {
+                            editor
+                                .update(cx, |editor, cx| {
+                                    if editor.code_run_is_active() {
+                                        editor.stop_current_file(&StopCurrentFile, window, cx);
+                                    } else {
+                                        editor.run_current_file(&RunCurrentFile, window, cx);
+                                    }
+                                })
+                                .ok();
+                        }
+                    }),
+            )
+            .into_any_element()
     }
 }
 

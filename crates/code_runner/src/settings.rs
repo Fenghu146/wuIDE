@@ -99,10 +99,16 @@ impl CodeRunnerSettings {
                 DebugEntry {
                     build: pick(&entry.build, defaults.as_ref().map(|entry| &entry.build))
                         .unwrap_or_default(),
-                    program: pick(&entry.program, defaults.as_ref().map(|entry| &entry.program))
-                        .unwrap_or_default(),
-                    adapter: pick(&entry.adapter, defaults.as_ref().map(|entry| &entry.adapter))
-                        .unwrap_or_else(|| "GDB".to_owned()),
+                    program: pick(
+                        &entry.program,
+                        defaults.as_ref().map(|entry| &entry.program),
+                    )
+                    .unwrap_or_default(),
+                    adapter: pick(
+                        &entry.adapter,
+                        defaults.as_ref().map(|entry| &entry.adapter),
+                    )
+                    .unwrap_or_else(|| "GDB".to_owned()),
                     source: CommandSource::Settings,
                 },
             );
@@ -211,10 +217,7 @@ pub fn default_run_map(is_windows: bool) -> HashMap<String, String> {
 
     let python = if is_windows { "python" } else { "python3" };
     map.insert("rust".to_owned(), "cargo run".to_owned());
-    map.insert(
-        "python".to_owned(),
-        format!("{python} \"$ZED_FILENAME\""),
-    );
+    map.insert("python".to_owned(), format!("{python} \"$ZED_FILENAME\""));
     map.insert("javascript".to_owned(), "node \"$ZED_FILENAME\"".to_owned());
     map.insert(
         "typescript".to_owned(),
@@ -339,9 +342,7 @@ mod tests {
     #[test]
     fn an_empty_cmake_entry_does_not_remove_the_cmake_plan() {
         let settings = CodeRunnerSettings::new(
-            &[("cmake".to_owned(), String::new())]
-                .into_iter()
-                .collect(),
+            &[("cmake".to_owned(), String::new())].into_iter().collect(),
             &HashMap::default(),
             false,
         );
@@ -360,7 +361,10 @@ mod tests {
         let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
 
         let debug = settings.debug_entry("c").expect("c debug entry");
-        assert_eq!(debug.build, "gcc -g -O0 \"$ZED_FILENAME\" -o \"$ZED_STEM.dbg\"");
+        assert_eq!(
+            debug.build,
+            "gcc -g -O0 \"$ZED_FILENAME\" -o \"$ZED_STEM.dbg\""
+        );
         assert_eq!(debug.program, "$ZED_STEM.dbg");
         assert_eq!(debug.adapter, "GDB");
         assert_eq!(debug.source, CommandSource::BuiltIn);
@@ -410,7 +414,9 @@ mod tests {
             ))
         );
         assert_eq!(
-            settings.debug_entry("go").map(|entry| entry.adapter.as_str()),
+            settings
+                .debug_entry("go")
+                .map(|entry| entry.adapter.as_str()),
             Some("GDB")
         );
     }

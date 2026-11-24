@@ -152,12 +152,7 @@ impl Editor {
         cx.notify();
     }
 
-    fn start_code_plan(
-        &mut self,
-        goal: CodePlanGoal,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn start_code_plan(&mut self, goal: CodePlanGoal, window: &mut Window, cx: &mut Context<Self>) {
         let debug = matches!(goal, CodePlanGoal::Debug);
         let Some(target) = self.code_run_target(cx) else {
             self.show_code_runner_message(
@@ -426,10 +421,7 @@ impl Editor {
                 .ok()
         });
         let Some(plan) = plan else {
-            self.show_code_runner_message(
-                t!("There is no run command for this file type."),
-                cx,
-            );
+            self.show_code_runner_message(t!("There is no run command for this file type."), cx);
             return;
         };
 
@@ -490,7 +482,9 @@ impl Editor {
         let rel_path = file.path().clone();
 
         Some(CodeRunTarget {
-            cmake_root: is_local.then(|| cmake_root_for(&abs_path, &worktree_root)).flatten(),
+            cmake_root: is_local
+                .then(|| cmake_root_for(&abs_path, &worktree_root))
+                .flatten(),
             file: abs_path,
             worktree_root,
             worktree_id,
@@ -596,10 +590,13 @@ impl Editor {
             return;
         };
 
-        // `update_in` looks the window up by entity id, and an action handler
-        // already runs inside that window's update, so it would fail with
-        // "entity has no current window". The action's own window goes through
-        // instead.
+        // Do not turn this into `workspace.update_in(cx, ..)`. `update_in`
+        // resolves the window through `App::with_window`, which takes the
+        // window out of the app for the duration of its update; an action
+        // handler is already inside that update, so the take returns None,
+        // `update_in` fails with "entity has no current window", and the run
+        // vanishes without a trace. Pass the handler's own `window` into
+        // `update` instead, and handle the `Result` so a dead workspace says so.
         let scheduled = workspace.update(cx, |workspace, cx| {
             workspace.schedule_resolved_task_with_completion(
                 TaskSourceKind::UserInput,
@@ -618,11 +615,7 @@ impl Editor {
         }
     }
 
-    fn show_code_runner_message(
-        &self,
-        message: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
+    fn show_code_runner_message(&self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         let message = message.into();
         log::info!("code runner: {message}");
         let Some((workspace, _)) = self.workspace.clone() else {

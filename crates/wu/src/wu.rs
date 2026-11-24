@@ -50,7 +50,6 @@ use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
 use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
 use outline_panel::OutlinePanel;
-use repo_wiki::RepoMapPanel;
 use paths::{
     legacy_local_debug_file_relative_path, legacy_local_settings_file_relative_path,
     legacy_local_tasks_file_relative_path, local_debug_file_relative_path,
@@ -64,6 +63,7 @@ use project_panel::ProjectPanel;
 use quick_action_bar::QuickActionBar;
 use recent_projects::open_remote_project;
 use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
+use repo_wiki::RepoMapPanel;
 use rope::Rope;
 use run_toolbar::RunToolbar;
 use search::project_search::ProjectSearchBar;
