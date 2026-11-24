@@ -125,53 +125,64 @@ impl Workspace {
             });
         }
 
-        if self.terminal_provider.is_some() {
-            let task = cx.spawn_in(window, async move |workspace, cx| {
-                Self::save_for_task(&workspace, spawn_in_terminal.save, cx).await;
-
-                let spawn_task = workspace.update_in(cx, |workspace, window, cx| {
-                    workspace
-                        .terminal_provider
-                        .as_ref()
-                        .map(|terminal_provider| {
-                            terminal_provider.spawn(spawn_in_terminal, window, cx)
-                        })
-                });
-                if let Some(spawn_task) = spawn_task.ok().flatten() {
-                    let res = cx.background_spawn(spawn_task).await;
-                    let result = match res {
-                        Some(Ok(status)) => {
-                            if status.success() {
-                                log::debug!("Task spawn succeeded");
-                                ScheduledTaskResult::Success
-                            } else {
-                                log::debug!("Task spawn failed, code: {:?}", status.code());
-                                ScheduledTaskResult::Failure
-                            }
-                        }
-                        Some(Err(e)) => {
-                            log::error!("Task spawn failed: {e:#}");
-                            _ = workspace.update(cx, |w, cx| {
-                                let id = NotificationId::unique::<ResolvedTask>();
-                                let message = t!("Task spawn failed: {error}", error = e);
-                                w.show_toast(Toast::new(id, message.to_string()), cx);
-                            });
-                            ScheduledTaskResult::SpawnFailed
-                        }
-                        None => {
-                            log::debug!("Task spawn got cancelled");
-                            ScheduledTaskResult::Cancelled
-                        }
-                    };
-                    if let Some(on_complete) = on_complete {
-                        on_complete(result, cx);
-                    }
-                } else if let Some(on_complete) = on_complete {
-                    on_complete(ScheduledTaskResult::Cancelled, cx);
-                }
-            });
-            self.scheduled_tasks.push(task);
+        if self.terminal_provider.is_none() {
+            // Without a terminal panel nothing can run, and a caller waiting
+            // for a completion would wait forever. Say so instead.
+            log::warn!("Cannot schedule tasks: the workspace has no terminal provider");
+            let message = t!(
+                "No terminal is available, so this task cannot run. Open the terminal panel and try again."
+            );
+            let id = NotificationId::unique::<ResolvedTask>();
+            self.show_toast(Toast::new(id, message.to_string()), cx);
+            if let Some(on_complete) = on_complete {
+                on_complete(ScheduledTaskResult::SpawnFailed, &mut window.to_async(cx));
+            }
+            return;
         }
+
+        let task = cx.spawn_in(window, async move |workspace, cx| {
+            Self::save_for_task(&workspace, spawn_in_terminal.save, cx).await;
+
+            let spawn_task = workspace.update_in(cx, |workspace, window, cx| {
+                workspace
+                    .terminal_provider
+                    .as_ref()
+                    .map(|terminal_provider| terminal_provider.spawn(spawn_in_terminal, window, cx))
+            });
+            if let Some(spawn_task) = spawn_task.ok().flatten() {
+                let res = cx.background_spawn(spawn_task).await;
+                let result = match res {
+                    Some(Ok(status)) => {
+                        if status.success() {
+                            log::debug!("Task spawn succeeded");
+                            ScheduledTaskResult::Success
+                        } else {
+                            log::debug!("Task spawn failed, code: {:?}", status.code());
+                            ScheduledTaskResult::Failure
+                        }
+                    }
+                    Some(Err(e)) => {
+                        log::error!("Task spawn failed: {e:#}");
+                        _ = workspace.update(cx, |w, cx| {
+                            let id = NotificationId::unique::<ResolvedTask>();
+                            let message = t!("Task spawn failed: {error}", error = e);
+                            w.show_toast(Toast::new(id, message.to_string()), cx);
+                        });
+                        ScheduledTaskResult::SpawnFailed
+                    }
+                    None => {
+                        log::debug!("Task spawn got cancelled");
+                        ScheduledTaskResult::Cancelled
+                    }
+                };
+                if let Some(on_complete) = on_complete {
+                    on_complete(result, cx);
+                }
+            } else if let Some(on_complete) = on_complete {
+                on_complete(ScheduledTaskResult::Cancelled, cx);
+            }
+        });
+        self.scheduled_tasks.push(task);
     }
 
     pub async fn save_for_task(

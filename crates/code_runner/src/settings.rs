@@ -3,6 +3,20 @@ use settings::{RegisterSetting, Settings};
 
 use crate::resolve::{CommandSource, DebugEntry};
 
+/// How a language runs: either a command line from the settings, or the
+/// built-in C/C++ plan that links the sources of a directory or builds a CMake
+/// project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunCase<'a> {
+    Command {
+        template: &'a str,
+        source: CommandSource,
+    },
+    CppFamily {
+        source: CommandSource,
+    },
+}
+
 /// The run and debug plans "Run Current File" and "Debug Current File" know
 /// about, after merging the user's `code_runner` maps over the built-in
 /// defaults.
@@ -10,12 +24,18 @@ use crate::resolve::{CommandSource, DebugEntry};
 pub struct CodeRunnerSettings {
     run_entries: HashMap<String, RunEntry>,
     debug_entries: HashMap<String, DebugEntry>,
+    is_windows: bool,
 }
 
 #[derive(Debug, Clone)]
-struct RunEntry {
-    command: String,
-    source: CommandSource,
+enum RunEntry {
+    Command {
+        command: String,
+        source: CommandSource,
+    },
+    CppFamily {
+        source: CommandSource,
+    },
 }
 
 impl Default for CodeRunnerSettings {
@@ -36,13 +56,23 @@ impl CodeRunnerSettings {
             .map(|(language, command)| {
                 (
                     language,
-                    RunEntry {
+                    RunEntry::Command {
                         command,
                         source: CommandSource::BuiltIn,
                     },
                 )
             })
             .collect::<HashMap<_, _>>();
+        // C and C++ have no single command: the runner decides between one
+        // file, a directory of sources, and a CMake project.
+        for language in CPP_FAMILY {
+            run_entries.insert(
+                (*language).to_owned(),
+                RunEntry::CppFamily {
+                    source: CommandSource::BuiltIn,
+                },
+            );
+        }
         for (language, command) in user_run_map {
             if command.trim().is_empty() {
                 // An empty entry removes the default, so a language can be
@@ -52,7 +82,7 @@ impl CodeRunnerSettings {
             }
             run_entries.insert(
                 language.clone(),
-                RunEntry {
+                RunEntry::Command {
                     command: command.trim().to_owned(),
                     source: CommandSource::Settings,
                 },
@@ -69,10 +99,16 @@ impl CodeRunnerSettings {
                 DebugEntry {
                     build: pick(&entry.build, defaults.as_ref().map(|entry| &entry.build))
                         .unwrap_or_default(),
-                    program: pick(&entry.program, defaults.as_ref().map(|entry| &entry.program))
-                        .unwrap_or_default(),
-                    adapter: pick(&entry.adapter, defaults.as_ref().map(|entry| &entry.adapter))
-                        .unwrap_or_else(|| "GDB".to_owned()),
+                    program: pick(
+                        &entry.program,
+                        defaults.as_ref().map(|entry| &entry.program),
+                    )
+                    .unwrap_or_default(),
+                    adapter: pick(
+                        &entry.adapter,
+                        defaults.as_ref().map(|entry| &entry.adapter),
+                    )
+                    .unwrap_or_else(|| "GDB".to_owned()),
                     source: CommandSource::Settings,
                 },
             );
@@ -81,19 +117,38 @@ impl CodeRunnerSettings {
         Self {
             run_entries,
             debug_entries,
+            is_windows,
         }
     }
 
-    /// The command template for a language, and where it came from.
+    /// How a language runs, and where that choice came from.
+    pub fn run_case(&self, language: &str) -> Option<RunCase<'_>> {
+        self.run_entries.get(language).map(|entry| match entry {
+            RunEntry::Command { command, source } => RunCase::Command {
+                template: command,
+                source: *source,
+            },
+            RunEntry::CppFamily { source } => RunCase::CppFamily { source: *source },
+        })
+    }
+
+    /// A command line configured for a language, if the user set one.
     pub fn command(&self, language: &str) -> Option<(&str, CommandSource)> {
-        self.run_entries
-            .get(language)
-            .map(|entry| (entry.command.as_str(), entry.source))
+        match self.run_entries.get(language)? {
+            RunEntry::Command { command, source } => Some((command.as_str(), *source)),
+            RunEntry::CppFamily { .. } => None,
+        }
     }
 
     /// The debug plan for a language, and where it came from.
     pub fn debug_entry(&self, language: &str) -> Option<&DebugEntry> {
         self.debug_entries.get(language)
+    }
+
+    /// Whether plans are built for Windows, which decides how paths are
+    /// quoted and how a program is started.
+    pub fn is_windows(&self) -> bool {
+        self.is_windows
     }
 }
 
@@ -150,43 +205,23 @@ impl Settings for CodeRunnerSettings {
     }
 }
 
-/// Commands for the languages the IDE supports out of the box.
+/// The languages the built-in C/C++ plan handles.
+pub const CPP_FAMILY: [&str; 2] = ["c", "cpp"];
+
+/// Commands for the languages whose run is a single command line.
 ///
-/// The Windows entries differ in three ways: the compiler writes a `.exe`, the
-/// executable has to be run with the PowerShell call operator (`&`) because it
-/// is quoted, and `python` is the interpreter name there.
+/// The Windows entries differ in how the interpreter is named, and because
+/// C/C++ is not in here at all: those are compiled by the runner.
 pub fn default_run_map(is_windows: bool) -> HashMap<String, String> {
     let mut map = HashMap::default();
 
-    let (c, cpp, rust, python, javascript, typescript) = if is_windows {
-        (
-            "gcc \"$ZED_FILENAME\" -o \"$ZED_STEM.exe\" && & \".\\$ZED_STEM.exe\"",
-            "g++ -std=c++17 \"$ZED_FILENAME\" -o \"$ZED_STEM.exe\" && & \".\\$ZED_STEM.exe\"",
-            "cargo run",
-            "python \"$ZED_FILENAME\"",
-            "node \"$ZED_FILENAME\"",
-            "node --experimental-strip-types \"$ZED_FILENAME\"",
-        )
-    } else {
-        (
-            "gcc \"$ZED_FILENAME\" -o \"$ZED_STEM\" && \"./$ZED_STEM\"",
-            "g++ -std=c++17 \"$ZED_FILENAME\" -o \"$ZED_STEM\" && \"./$ZED_STEM\"",
-            "cargo run",
-            "python3 \"$ZED_FILENAME\"",
-            "node \"$ZED_FILENAME\"",
-            "node --experimental-strip-types \"$ZED_FILENAME\"",
-        )
-    };
-
-    map.insert("c".to_owned(), c.to_owned());
-    map.insert("cpp".to_owned(), cpp.to_owned());
-    map.insert("rust".to_owned(), rust.to_owned());
-    map.insert("python".to_owned(), python.to_owned());
-    map.insert("javascript".to_owned(), javascript.to_owned());
-    map.insert("typescript".to_owned(), typescript.to_owned());
+    let python = if is_windows { "python" } else { "python3" };
+    map.insert("rust".to_owned(), "cargo run".to_owned());
+    map.insert("python".to_owned(), format!("{python} \"$ZED_FILENAME\""));
+    map.insert("javascript".to_owned(), "node \"$ZED_FILENAME\"".to_owned());
     map.insert(
-        "cmake".to_owned(),
-        "cmake -S . -B build && cmake --build build".to_owned(),
+        "typescript".to_owned(),
+        "node --experimental-strip-types \"$ZED_FILENAME\"".to_owned(),
     );
 
     map
@@ -236,7 +271,37 @@ mod tests {
     }
 
     #[test]
-    fn user_run_entries_override_defaults_and_are_marked_as_settings() {
+    fn c_and_cpp_use_the_directory_plan_and_other_languages_a_command() {
+        let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
+
+        assert_eq!(
+            settings.run_case("cpp"),
+            Some(RunCase::CppFamily {
+                source: CommandSource::BuiltIn
+            })
+        );
+        assert_eq!(
+            settings.run_case("python"),
+            Some(RunCase::Command {
+                template: "python3 \"$ZED_FILENAME\"",
+                source: CommandSource::BuiltIn
+            })
+        );
+        assert_eq!(settings.command("cpp"), None);
+    }
+
+    #[test]
+    fn windows_names_the_python_interpreter_without_the_three() {
+        let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), true);
+
+        assert_eq!(
+            settings.command("python"),
+            Some(("python \"$ZED_FILENAME\"", CommandSource::BuiltIn))
+        );
+    }
+
+    #[test]
+    fn user_run_entries_replace_the_defaults_and_are_marked_as_settings() {
         let settings = CodeRunnerSettings::new(
             &[("cpp".to_owned(), "clang++ -O2 \"$ZED_FILE\"".to_owned())]
                 .into_iter()
@@ -246,11 +311,17 @@ mod tests {
         );
 
         assert_eq!(
-            settings.command("cpp"),
-            Some(("clang++ -O2 \"$ZED_FILE\"", CommandSource::Settings))
+            settings.run_case("cpp"),
+            Some(RunCase::Command {
+                template: "clang++ -O2 \"$ZED_FILE\"",
+                source: CommandSource::Settings
+            })
         );
         assert_eq!(
-            settings.command("rust").map(|(_, source)| source),
+            settings.run_case("rust").map(|case| match case {
+                RunCase::Command { source, .. } => source,
+                RunCase::CppFamily { source } => source,
+            }),
             Some(CommandSource::BuiltIn)
         );
     }
@@ -265,17 +336,44 @@ mod tests {
             false,
         );
 
-        assert_eq!(settings.command("python"), None);
+        assert_eq!(settings.run_case("python"), None);
     }
 
     #[test]
-    fn windows_defaults_run_the_binary_with_the_call_operator() {
+    fn an_empty_cmake_entry_does_not_remove_the_cmake_plan() {
+        let settings = CodeRunnerSettings::new(
+            &[("cmake".to_owned(), String::new())].into_iter().collect(),
+            &HashMap::default(),
+            false,
+        );
+
+        assert_eq!(settings.command("cmake"), None);
+        assert_eq!(
+            settings.run_case("cpp"),
+            Some(RunCase::CppFamily {
+                source: CommandSource::BuiltIn
+            })
+        );
+    }
+
+    #[test]
+    fn debug_binaries_are_named_apart_from_the_run_binaries() {
+        let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
+
+        let debug = settings.debug_entry("c").expect("c debug entry");
+        assert_eq!(
+            debug.build,
+            "gcc -g -O0 \"$ZED_FILENAME\" -o \"$ZED_STEM.dbg\""
+        );
+        assert_eq!(debug.program, "$ZED_STEM.dbg");
+        assert_eq!(debug.adapter, "GDB");
+        assert_eq!(debug.source, CommandSource::BuiltIn);
+    }
+
+    #[test]
+    fn windows_debug_binaries_get_an_exe_suffix() {
         let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), true);
 
-        assert_eq!(
-            settings.command("cpp").map(|(command, _)| command),
-            Some("g++ -std=c++17 \"$ZED_FILENAME\" -o \"$ZED_STEM.exe\" && & \".\\$ZED_STEM.exe\"")
-        );
         let debug = settings.debug_entry("cpp").expect("cpp debug entry");
         assert_eq!(
             debug.build,
@@ -285,25 +383,10 @@ mod tests {
     }
 
     #[test]
-    fn debug_binaries_are_named_apart_from_the_run_binaries() {
-        let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
-
-        let debug = settings.debug_entry("c").expect("c debug entry");
-        assert_eq!(debug.build, "gcc -g -O0 \"$ZED_FILENAME\" -o \"$ZED_STEM.dbg\"");
-        assert_eq!(debug.program, "$ZED_STEM.dbg");
-        assert_eq!(debug.adapter, "GDB");
-        assert_eq!(debug.source, CommandSource::BuiltIn);
-
-        let run = settings.command("c").expect("c run entry").0;
-        assert!(!run.contains(".dbg"), "the run command must not touch {run}");
-    }
-
-    #[test]
     fn languages_without_a_debug_plan_have_none() {
         let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
 
         assert_eq!(settings.debug_entry("python"), None);
-        assert!(settings.command("python").is_some());
     }
 
     #[test]
@@ -331,7 +414,9 @@ mod tests {
             ))
         );
         assert_eq!(
-            settings.debug_entry("go").map(|entry| entry.adapter.as_str()),
+            settings
+                .debug_entry("go")
+                .map(|entry| entry.adapter.as_str()),
             Some("GDB")
         );
     }

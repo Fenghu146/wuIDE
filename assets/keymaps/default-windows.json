@@ -416,10 +416,11 @@
       // "ctrl-shift-alt-o": ["projects::OpenRemote", { "from_existing_connection": true }],
       "ctrl-shift-alt-o": ["projects::OpenRemote", { "from_existing_connection": false }],
       "ctrl-alt-r": "remote_panel::ToggleFocus",
-      // The repo map opens next to the remote panel, so its `m` binding uses
-      // the same modifier family.
-      "ctrl-alt-m": "repo_map_panel::ToggleFocus",
-      "ctrl-alt-shift-m": "repo_map_panel::CopyToClipboard",
+      // The repo map opens next to the remote panel, so its binding uses the
+      // same modifier family. It moved off `m`, which the code runner takes for
+      // Stop, the way the Code Runner extension binds it.
+      "ctrl-alt-g": "repo_map_panel::ToggleFocus",
+      "ctrl-alt-shift-g": "repo_map_panel::CopyToClipboard",
       "shift-alt-b": "branches::OpenRecent",
       "shift-alt-w": "git::Worktree",
       "shift-alt-enter": "toast::RunAction",
@@ -493,12 +494,14 @@
       // "foo-bar": ["task::Spawn", { "task_name": "MyTask", "reveal_target": "dock" }]
       // or by tag:
       // "foo-bar": ["task::Spawn", { "task_tag": "MyTag" }],
-      // Runs the file in the editor with the command for its language; the
-      // first run shows the command, later runs rerun it.
+      // Debugging builds the file, then starts the configured adapter.
+      "f5": "wu::DebugCurrentFile",
+      // Runs the file in the editor without a debugger: the build first, then
+      // the program, each in its own terminal.
       "ctrl-f5": "wu::RunCurrentFile",
-      // Debugging builds with -g first, then starts the configured adapter.
-      "ctrl-shift-f5": "wu::DebugCurrentFile",
-      "f5": "debugger::Rerun",
+      // The same as ctrl-f5 for people used to the Code Runner extension.
+      "ctrl-alt-n": "wu::RunCurrentFile",
+      "ctrl-alt-m": "wu::StopCurrentFile",
       "ctrl-f4": "workspace::CloseActiveDock",
     },
   },
