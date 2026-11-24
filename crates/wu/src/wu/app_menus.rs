@@ -59,11 +59,11 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
 
     let mut menus = vec![
         Menu {
-            name: "IDE".into(),
+            name: "WuIDE".into(),
             disabled: false,
             window_menu: false,
             items: vec![
-                MenuItem::action(t!("About IDE"), wu_actions::About),
+                MenuItem::action(t!("About WuIDE"), wu_actions::About),
                 MenuItem::action(t!("Check for Updates"), auto_update::Check),
                 MenuItem::separator(),
                 MenuItem::submenu(Menu::new(t!("Settings")).items([
@@ -101,13 +101,13 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(t!("Install CLI"), install_cli::InstallCliBinary),
                 MenuItem::separator(),
                 #[cfg(target_os = "macos")]
-                MenuItem::action(t!("Hide IDE"), super::Hide),
+                MenuItem::action(t!("Hide WuIDE"), super::Hide),
                 #[cfg(target_os = "macos")]
                 MenuItem::action(t!("Hide Others"), super::HideOthers),
                 #[cfg(target_os = "macos")]
                 MenuItem::action(t!("Show All"), super::ShowAll),
                 MenuItem::separator(),
-                MenuItem::action(t!("Quit IDE"), Quit),
+                MenuItem::action(t!("Quit WuIDE"), Quit),
             ],
         },
         Menu {
@@ -348,11 +348,11 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     t!("Documentation"),
                     super::OpenBrowser {
-                        url: "https://wu.dstrml.org/docs".into(),
+                        url: super::DOCS_URL.into(),
                     },
                 ),
                 MenuItem::action(
-                    t!("IDE Repository"),
+                    t!("WuIDE Repository"),
                     super::OpenBrowser {
                         url: "https://github.com/Fenghu146/wuIDE".into(),
                     },

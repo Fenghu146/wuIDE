@@ -1,8 +1,8 @@
 <p align="center"><a href="README.md">English</a> | 中文</p>
 
 <div align="center">
-  <img src="crates/wu/resources/app-icon.png" alt="IDE" width="128">
-  <h1>IDE</h1>
+  <img src="crates/wu/resources/app-icon.png" alt="WuIDE" width="128">
+  <h1>WuIDE</h1>
   <p>快速的原生代码编辑器，内置编程智能体。</p>
   <p>用 Rust 编写，开箱即用。</p>
   <p><a href="#下载"><strong>下载</strong></a> · <a href="./FORK.md">相对上游改了什么</a></p>
@@ -10,9 +10,9 @@
 
 ---
 
-> **这是个人分叉。** 基于 [dstrml/wu](https://github.com/dstrml/wu) 构建，而后者又是 [Zed](https://github.com/zed-industries/zed) 的分叉。本仓库做了修改：产品改名为 **IDE**，内置智能体列表有增减，并自带打包好的智能体运行时。完整改动见 [FORK.md](./FORK.md)。这里的发行版由本仓库 CI 从打了 tag 的提交构建，对应源码就是本仓库。
+> **这是个人分叉。** 基于 [dstrml/wu](https://github.com/dstrml/wu) 构建，而后者又是 [Zed](https://github.com/zed-industries/zed) 的分叉。本仓库做了修改：产品改名为 **WuIDE**，内置智能体列表有增减，并自带打包好的智能体运行时。完整改动见 [FORK.md](./FORK.md)。这里的发行版由本仓库 CI 从打了 tag 的提交构建，对应源码就是本仓库。
 
-IDE 是一款用 Rust 编写的快速原生代码编辑器，界面简洁现代，并内置了编程智能体。它是 Zed 的分叉，但已经和它有了很大的不同。
+WuIDE 是一款用 Rust 编写的快速原生代码编辑器，界面简洁现代，并内置了编程智能体。它是 Zed 的分叉，但已经和它有了很大的不同。
 
 ## 功能
 
@@ -71,7 +71,7 @@ sha256sum IDE-x86_64.exe             # Linux
 
 ## 网络访问
 
-IDE 不做统计上报、不发崩溃报告、不采集使用遥测。它确实会发起下面这些出站请求，都可以在源码里查证：
+WuIDE 不做统计上报、不发崩溃报告、不采集使用遥测。它确实会发起下面这些出站请求，都可以在源码里查证：
 
 | 用途 | 目标 | 时机 |
 | --- | --- | --- |
@@ -84,11 +84,11 @@ IDE 不做统计上报、不发崩溃报告、不采集使用遥测。它确实�
 
 ## 构建
 
-IDE 的构建方式和 Zed 一样。请看 [Zed 开发文档](https://zed.dev/docs/development)、[FORK.md](./FORK.md) 里分叉相关的打包说明（内置智能体运行时、图标与打包脚本），以及 [SYNC.md](./SYNC.md) 里跟进上游的方式。
+WuIDE 的构建方式和 Zed 一样。请看 [Zed 开发文档](https://zed.dev/docs/development)、[FORK.md](./FORK.md) 里分叉相关的打包说明（内置智能体运行时、图标与打包脚本），以及 [SYNC.md](./SYNC.md) 里跟进上游的方式。
 
 ## 许可证
 
-IDE 以 **GPL-3.0-or-later** 分发，标注的部分采用 Apache-2.0。请看 [LICENSE-GPL](./LICENSE-GPL)、[LICENSE-APACHE](./LICENSE-APACHE)，以及 [NOTICE](./NOTICE) 里本分叉保留的上游署名。
+WuIDE 以 **GPL-3.0-or-later** 分发，标注的部分采用 Apache-2.0。请看 [LICENSE-GPL](./LICENSE-GPL)、[LICENSE-APACHE](./LICENSE-APACHE)，以及 [NOTICE](./NOTICE) 里本分叉保留的上游署名。
 
 随包分发的第三方运行时各有自己的许可证，会一起附带：
 

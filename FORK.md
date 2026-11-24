@@ -42,7 +42,7 @@
 - 自动检查只发通知、不直接装：状态进 `AutoUpdateStatus::Available`，标题栏出现“有可用更新”按钮，同时弹一张带“下载并安装” / “跳过这个版本”的通知卡。点了才下载（有 digest 时校验 SHA-256）、覆盖当前安装，下次启动提示已更新。菜单里的“检查更新”算手动检查，一路装到底。
 - “跳过这个版本”写进 kvp 的 `auto-updater-skipped-version`，只有出现更高版本才会再提示；同一版本在一次会话里也不会重复弹卡。
 - 资产名与打包脚本对齐：`IDE-{arch}.dmg`、`ide-linux-{arch}.tar.gz`、`IDE-{arch}.exe`（`github_asset_name`）。改名后对不上会让 `release_asset` 直接报 “has no asset named …”。资产是在版本比对**之后**才找的，所以一个不比当前版本新的 release 即使没有对应资产，也不会让检查失败。
-- macOS 的挂载点改为解析 `hdiutil attach` 的输出，不再写死卷名：卷名取自 bundle 名，重命名成 IDE 之后写死的 `Wu` 会让 `rsync` 指向不存在的路径。Linux 同理，包内目录是 `ide.app` + `libexec/ide`。
+- macOS 的挂载点改为解析 `hdiutil attach` 的输出，不再写死卷名：卷名取自 bundle 名，重命名成 WuIDE 之后写死的 `Wu` 会让 `rsync` 指向不存在的路径。Linux 同理，包内目录是 `ide.app` + `libexec/ide`。
 
 ## 6. 打包
 
@@ -55,29 +55,27 @@
 - **单独拷 exe 使用时，必须把 `agents/` 一起拷到 exe 旁边（或设置 `WU_AGENT_BIN_DIR`）**，否则 DeepSeek 与 Pi 不可用。查找顺序：`WU_AGENT_BIN_DIR` → exe 旁的发版位置（同上）→ 从 exe 目录、进程 cwd 与当前会话的项目根目录向上找 `crates/wu/resources/agents` 或 `agents/` → `PATH`。成功解析一次后在同一进程内记住，后续轮次不再依赖 cwd；解析失败时错误信息会列出尝试过的目录。
 - 许可证随包分发（GPL 要求）：三个平台的脚本都把 `LICENSE-GPL`、`LICENSE-APACHE`、`NOTICE` 放进包里（macOS `Contents/Resources/`、Linux `share/licenses/`、Windows 安装目录），Windows 安装器还用拼好的 `LICENSE.txt` 作为 `LicenseFile` 在安装前展示。内置运行时的许可证在 `crates/wu/resources/agents/licenses/`，版本与校验方式记在 `agents/VERSIONS.md`，缺文件时打包直接失败。
 
-## 7. 产品名称改为 IDE
+## 7. 产品名称统一为 WuIDE
 
-- 窗口标题、菜单、关于窗口、设置页、对话框、CLI 帮助、`user_agent`/系统信息里的产品名从 Wu 改为 **IDE**（macOS bundle 名为 `IDE` / `IDE Dev`）。
-- Windows 上真正落盘的可执行文件也叫 `IDE.exe`：`crates/wu/Cargo.toml` 的 `[[bin]] name` / `default-run` 改为 `IDE`，Windows 版本资源（ProductName / FileDescription）改为 IDE / IDE Dev。
-- `paths::APP_NAME` 改为 `WuIDE`（显示名仍是 IDE）。用唯一内部名而不是产品名，是为了避免和别的也叫 IDE 的软件撞数据目录。所以用户档案目录是 `%LOCALAPPDATA%\WuIDE`、`~/Library/Application Support/WuIDE`、`~/.config/wuide`。
-- 改名不会丢档案：`crates/paths/src/paths.rs` 的 `migrate_legacy_data_dir` / `migrate_legacy_config_dir` 会在新目录还空的时候，把旧目录（`LEGACY_DATA_DIR_NAMES`，依次试 `IDE` / `ide` / `Wu` / `wu`）的内容**复制**过来（源目录保留，方便回退），由 `crates/wu/src/main.rs` 的 `init_paths()` 在启动时调用一次。只复制，不移动；新目录已有文件时不覆盖。
-- 刻意保留的标识符：`wu://` URL scheme、`wu` CLI 名（Linux 上是 `ide` 的软链，Windows 上是 `ide.exe` 的副本）、crate 名、bundle id / AppId、单实例互斥体、动作与设置 ID（`wu::*`，命令面板里因此仍显示 `wu:` 前缀）、Windows 安装目录 `{autopf}\IDE`（仅升级时沿用旧的 `{autopf}\Wu`）。`base_keymap` 的显示名已改为 IDE，但存储值仍是 `Zed`，不影响旧设置。主题名不再是保留项，见下文。
-- 界面标识统一：欢迎页/引导页 logo 用的是 `assets/images/wu_icon.png`，它与 `crates/wu/resources/app-icon.png` 是同一张图（逐字节相同），所以界面 logo 与安装包图标始终一致；欢迎页 tagline 统一为“不打扰你的编辑器”；DAP `client_name`、更新助手窗口标题、Appx COM surrogate 的 `DisplayName` 也改为 IDE。
-- 安装器侧跟进：`bundle-windows.ps1` 打包 `IDE.exe`，`zed.iss` 的 `AppExeName` 为 IDE；显示名（Add/Remove Programs、开始菜单、右键菜单）与 Linux `.desktop` 的 `Name` 也改为 IDE，但只改标签、不改 ID 与路径。
-- 打包链路全部跟着改名对齐：`bundle-mac` / `bundle-linux` / `check-translations` 用 `--bin IDE` 与 `release/IDE`，macOS 可执行文件为 `Contents/MacOS/IDE`（dSYM 也改名为 `IDE.dSYM`），`explorer_command_injector` 的 Appx 清单与右键菜单指向 `IDE.exe`，`uninstall.sh` 清 `IDE.app` 与 `~/.config/ide`、`~/.local/share/ide`。
-- `wu` CLI 会先找 `IDE.exe`，再回退到 `Wu.exe`，所以改名之前安装的机器也能用。
-- 智能体的运行期目录也跟着 `paths::APP_NAME` 走（`acp.rs` 的 `agent_data_root` 用 `paths::APP_NAME` / `APP_NAME_LOWERCASE`，不再写死 `Wu`/`wu`），所以改名后 Pi 和 DeepSeek 的凭据与插件目录跟主档案保持一致，不会一个改了另一个没改。
-- 仍然叫 Wu 的还有：命令行里的 `wu`（安装目录里的 `bin/wu.exe` / `bin/wu` 是 `ide` 的兼容副本）、`wu://` URL scheme、crate 名、AppId 与单实例互斥体、数据目录里的 `wu-<channel>.sock` 与 `.wu_server` / `.wu_wsl_server`。发版文件名（`IDE-*.dmg`、`ide-linux-*.tar.gz`、`IDE-x86_64.exe`）与 Linux bundle 内的 `libexec/ide` 已经是 IDE；安装目录也只在升级时沿用旧的 `{autopf}\Wu`。
-- 主题与图标主题名已随 IDE 改名：`assets/themes/wu/wu.json` 里是 `IDE Dark` / `IDE Light` / `IDE Dark Translucent`，用户设置中的旧名由 `crates/theme_settings/src/settings.rs` 的 `migrate_theme_name` 和 `crates/theme/src/registry.rs` 的 `ThemeRegistry::get` 兜底迁移；图标主题是 `Symbols Dark` / `Symbols Light`（`assets/icon_themes/symbols/icon_theme.json`，`assets/settings/default.json` 默认用它们），代码内置的兜底图标主题名是 `IDE Classic`（`crates/theme/src/icon_theme.rs` 的 `DEFAULT_ICON_THEME_NAME`），`Wu Classic` / `Wu (Default)` 只作为 legacy 常量存在，由 `ThemeRegistry::get_icon_theme` 映射过来。
+- 显示名为 **WuIDE**（stable）/ **WuIDE Dev**（dev），来自 `ReleaseChannel::display_name()`：窗口标题、macOS 菜单栏与应用菜单、关于窗口、通知、设置页、命令面板、CLI 帮助、`--system-specs` 与扩展提示都用它。`Wu` 是更早一代显示名，`IDE` 是中间一代。
+- 所有中英文界面字符串同步改过（`assets/locales/zh-CN` 里的键与译文都按新英文原文更新），`cargo test -p i18n` 校验“每个字符串都有中文、每个中文都有出处”。
+- Windows：可执行文件仍叫 `IDE.exe`，`crates/wu/Cargo.toml` 的 `[[bin]] name` / `default-run` 仍是 `IDE`；改的是用户能看到的版本资源（`crates/windows_resources` 的 ProductName / FileDescription = WuIDE / WuIDE Dev）与安装器显示名（Add/Remove Programs、开始菜单与桌面快捷方式、右键菜单、向导里的 “Installing…”）。
+- 安装目录仍是 `{autopf}\IDE`：`bundle-windows.ps1` 新增 `$appDirName`，`zed.iss` 的 `AppName` 用显示名、`DefaultDirName` 用 `{autopf}\{#AppDirName}`，所以安装器文案是 WuIDE，落盘路径不变，升级时继续沿用已有目录。
+- macOS：bundle 目录仍是 `IDE.app`，`Contents/MacOS/IDE` 不变；`script/bundle-mac` 在 `cargo bundle` 之后用 `PlistBuddy` 把 `CFBundleDisplayName` / `CFBundleName` 写成 `WuIDE` / `WuIDE Dev`，Finder、Dock、菜单栏与“关于”面板显示新名字。
+- Linux：`.desktop` 的 `Name=` 是 WuIDE / WuIDE Dev，`APP_ID`（`me.farshed.Wu` / `-Dev`，同时也是 .desktop 文件名）、`Icon=ide`、`Exec=ide` 与 `Categories=…;IDE;` 都不动——桌面环境靠它们记住固定项与默认应用。
+- `paths::APP_NAME` 早已是 `WuIDE`，所以用户档案目录是 `%LOCALAPPDATA%\WuIDE`、`~/Library/Application Support/WuIDE`、`~/.config/wuide`；`migrate_legacy_data_dir` / `migrate_legacy_config_dir` 会把 `IDE` / `ide` / `Wu` / `wu` 旧目录**复制**过来（源目录保留）。
+- 刻意不跟随显示名改的标识符：`IDE.exe` 与 macOS `Contents/MacOS/IDE`、发版资产名 `IDE-{arch}.dmg` / `IDE-{arch}.exe` / `ide-linux-{arch}.tar.gz`（`github_asset_name` 硬编码，老客户端靠它找资产）、安装目录 `{autopf}\IDE`、crate 名 `wu`、`wu`/`ide` CLI、`wu://` 与 `ide` URL scheme、bundle id / AppId（`me.farshed.Wu*`、Inno 的 AppId）、单实例互斥体、AppUserModelID、动作与设置 ID（`wu::*`）、`base_keymap` 的存储值 `Zed`、`user_agent` 与 ACP/DAP 的 client 标识。
+- 主题名保留 `IDE Dark` / `IDE Light` / `IDE Dark Translucent`（图标主题 `IDE Classic`）：它们是写进用户 `settings.json` 的值，改名要再加一层别名迁移，收益只是措辞，故本轮不动。
+- 界面标识统一：欢迎页/引导页 logo 用的是 `assets/images/wu_icon.png`，它与 `crates/wu/resources/app-icon.png` 是同一张图（逐字节相同），所以界面 logo 与安装包图标始终一致；欢迎页 tagline 统一为“不打扰你的编辑器”；DAP `client_name`、更新助手窗口标题、Appx COM surrogate 的 `DisplayName` 也改为 WuIDE。
 - 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它和 `assets/icons/wu.svg` 内容一致，都是 `viewBox="0 0 24 24"` 的单个 `currentColor` 路径（所以 `LOGO_ASPECT` 是 1:1），只保留鲍伯短发、刘海转角、圆脸和肩线这些能认出人像的轮廓，眼睛高光、衬衫纽扣、小花等在遮罩里会糊成一团的细节都去掉了。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。
-- `README.md` / `README.zh-CN.md` / `docs/INSTALL.md` 已改成本分叉的文案：正确的下载资产名、未签名构建的处理方式与 SHA-256 核对步骤、更新机制、出站请求清单、许可证与源码获取方式，并链接回本文件。
+- `README.md` / `README.zh-CN.md` / `docs/INSTALL.md` / `NOTICE` / `.github/release/body.md` 里的产品名与文案同步为 WuIDE；下载链接和资产名保持原样。
 
 ## 已知限制
 
 - **Pi 的 Node 运行时**：Windows 使用入库的 `node.exe`；macOS / Linux 由 `script/fetch-node` 在打包时下载对应架构的官方 Node（`crates/wu/resources/agents/node` 被 `.gitignore` 忽略）并校验 SHA256，因此打包机需要能访问 `nodejs.org`。打包脚本在缺少 `node`、`dsh-acp` 或 `node_modules` 时都会失败，不再发出缺少智能体的包。
 - 仓库直接提交了 `crates/wu/resources/agents/` 下的运行时（`node_modules` 约 16k 个文件、`node.exe` 约 90MB）。这样做是因为打包脚本不做 `npm install`；如果要瘦身，需要先把“构建时下载/安装运行时”接进 `bundle-*` 与 CI，并重写 git 历史。
 - **DeepSeek** 需要 `DEEPSEEK_API_KEY`（或 `dsh-acp --api-key`）；当前通过环境变量传入，后续可在设置页补充输入框。
-- Pi 每次启动都会从 `~/.pi/agent` 镜像模型、凭据和设置；若本机没有 Pi 配置，则需要在终端执行一次 `pi` 登录/配置，或用 cc-switch 写入一份。因为每次都会重新镜像，在 IDE 里换的模型会被全局 Pi 默认值覆盖回去。
+- Pi 每次启动都会从 `~/.pi/agent` 镜像模型、凭据和设置；若本机没有 Pi 配置，则需要在终端执行一次 `pi` 登录/配置，或用 cc-switch 写入一份。因为每次都会重新镜像，在 WuIDE 里换的模型会被全局 Pi 默认值覆盖回去。
 - Pi 的隔离 `$HOME`（`Wu/agents/pi-home`）里存着 API 凭据和完整会话记录，现在目录是 `0700`、文件是 `0600`（`acp.rs` 的 `restrict_to_owner`）。在修复之前它跟 umask 走，默认是 `0755`/`0644`，同机其他用户可读。
 - **自动更新只校验完整性，不校验身份**：客户端比对的是 GitHub 为资产发布的 SHA-256 digest，能发现传输损坏，但不能证明文件是谁构建的。任何能向本仓库发 release 的人（token 泄露、CI 被投毒）都能把代码推到所有安装上。
 

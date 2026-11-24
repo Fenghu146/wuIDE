@@ -7,7 +7,9 @@ use std::{env, str::FromStr, sync::LazyLock};
 use gpui::{App, Global};
 use semver::Version;
 
-const ZED_DOCS_URL: &str = "https://zed.dev/docs";
+/// Where this fork keeps its documentation: the repository's `docs`
+/// directory, next to `README.md`.
+const DOCS_URL: &str = "https://github.com/Fenghu146/wuIDE/tree/main/docs";
 
 /// stable | dev
 pub static RELEASE_CHANNEL_NAME: LazyLock<String> = LazyLock::new(|| {
@@ -161,12 +163,11 @@ pub fn init_test(app_version: Version, release_channel: ReleaseChannel, cx: &mut
     cx.set_global(GlobalReleaseChannel(release_channel))
 }
 
-/// Returns the Zed docs URL for the current release channel for the given
-/// `slug`.
-pub fn docs_url(slug: &str, cx: &App) -> String {
+/// Returns the documentation URL for the current release channel.
+pub fn docs_url(cx: &App) -> String {
     ReleaseChannel::try_global(cx)
         .unwrap_or(*RELEASE_CHANNEL)
-        .docs_url(slug)
+        .docs_url()
 }
 
 impl ReleaseChannel {
@@ -192,8 +193,8 @@ impl ReleaseChannel {
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "IDE Dev",
-            ReleaseChannel::Stable => "IDE",
+            ReleaseChannel::Dev => "WuIDE Dev",
+            ReleaseChannel::Stable => "WuIDE",
         }
     }
 
@@ -216,14 +217,12 @@ impl ReleaseChannel {
     }
 
 
-    /// Returns the Zed docs URL for this [`ReleaseChannel`] for the given
-    /// `slug`.
-    pub fn docs_url(&self, slug: &str) -> String {
-        if slug.is_empty() {
-            ZED_DOCS_URL.to_string()
-        } else {
-            format!("{ZED_DOCS_URL}/{slug}")
-        }
+    /// Returns the documentation URL for this [`ReleaseChannel`].
+    ///
+    /// Both channels share the one documentation directory in this
+    /// repository, which has no per-topic pages to link to yet.
+    pub fn docs_url(&self) -> String {
+        DOCS_URL.to_string()
     }
 }
 
@@ -250,13 +249,9 @@ mod tests {
     #[test]
     fn test_docs_url_for_release_channel() {
         assert_eq!(
-            ReleaseChannel::Dev.docs_url("settings"),
-            "https://zed.dev/docs/settings"
+            ReleaseChannel::Dev.docs_url(),
+            "https://github.com/Fenghu146/wuIDE/tree/main/docs"
         );
-        assert_eq!(
-            ReleaseChannel::Stable.docs_url("settings"),
-            "https://zed.dev/docs/settings"
-        );
-        assert_eq!(ReleaseChannel::Stable.docs_url(""), "https://zed.dev/docs");
+        assert_eq!(ReleaseChannel::Stable.docs_url(), ReleaseChannel::Dev.docs_url());
     }
 }

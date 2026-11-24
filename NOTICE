@@ -1,5 +1,5 @@
-IDE
-===
+WuIDE
+=====
 
 This product is a modified fork. It is not the original work of the projects it
 derives from, and none of them endorse it.
@@ -17,7 +17,7 @@ Upstream chain
                  A memory-focused fork of Zed, licensed under
                  GPL-3.0-or-later with Apache-2.0 components.
 
-  IDE (this fork)
+  WuIDE (this fork)
                  Modifications made on top of Wu: the product is renamed, the
                  built-in agent list changed, a generic ACP driver and bundled
                  DeepSeek and Pi agent runtimes were added, agent processes are

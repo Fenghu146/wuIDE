@@ -395,9 +395,9 @@ impl Render for WelcomePage {
         };
 
         let welcome_label = if self.fallback_to_recent_projects {
-            t!("Welcome back to IDE")
+            t!("Welcome back to WuIDE")
         } else {
-            t!("Welcome to IDE")
+            t!("Welcome to WuIDE")
         };
 
         h_flex()

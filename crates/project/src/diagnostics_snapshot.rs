@@ -1,7 +1,7 @@
 //! JSON snapshot of one worktree's LSP diagnostics.
 //!
-//! The diagnostics live in the LSP store, which only the IDE can read. Pi runs
-//! its MCP server inside the project, so the IDE writes one file per project
+//! The diagnostics live in the LSP store, which only WuIDE can read. Pi runs
+//! its MCP server inside the project, so WuIDE writes one file per project
 //! root and the server derives the same name from its working directory, exactly
 //! like the repository map snapshot.
 //!

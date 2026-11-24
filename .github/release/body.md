@@ -1,1 +1,3 @@
+**WuIDE** is a fast, native code editor with built-in coding agents.
+
 See the [ReadMe](https://github.com/Fenghu146/wuIDE#download) for installation instructions, including how to handle the unsigned macOS and Windows builds. This is a modified fork of [dstrml/wu](https://github.com/dstrml/wu); what changed is in [FORK.md](https://github.com/Fenghu146/wuIDE/blob/main/FORK.md).

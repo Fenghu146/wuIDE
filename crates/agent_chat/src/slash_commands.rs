@@ -124,16 +124,16 @@ impl AppCommand {
 
     fn description(self) -> SharedString {
         match self {
-            AppCommand::Model => t!("IDE: choose model and reasoning"),
-            AppCommand::New => t!("IDE: start a new chat"),
-            AppCommand::Resume => t!("IDE: open chat history"),
-            AppCommand::Settings => t!("IDE: open settings"),
-            AppCommand::Diff => t!("IDE: open changes"),
-            AppCommand::Files => t!("IDE: open project files"),
-            AppCommand::Terminal => t!("IDE: open a terminal"),
-            AppCommand::Stop => t!("IDE: stop the agent"),
-            AppCommand::Conventions => t!("IDE: attach the project conventions (AGENTS.md)"),
-            AppCommand::RepoMap => t!("IDE: attach the ranked repository map"),
+            AppCommand::Model => t!("WuIDE: choose model and reasoning"),
+            AppCommand::New => t!("WuIDE: start a new chat"),
+            AppCommand::Resume => t!("WuIDE: open chat history"),
+            AppCommand::Settings => t!("WuIDE: open settings"),
+            AppCommand::Diff => t!("WuIDE: open changes"),
+            AppCommand::Files => t!("WuIDE: open project files"),
+            AppCommand::Terminal => t!("WuIDE: open a terminal"),
+            AppCommand::Stop => t!("WuIDE: stop the agent"),
+            AppCommand::Conventions => t!("WuIDE: attach the project conventions (AGENTS.md)"),
+            AppCommand::RepoMap => t!("WuIDE: attach the ranked repository map"),
         }
     }
 
@@ -336,7 +336,7 @@ pub(crate) fn app_command_for_text(text: &str, items: &[CommandItem]) -> Option<
     })
 }
 
-/// Context injectors that expand a chat message in place: the IDE replaces
+/// Context injectors that expand a chat message in place: WuIDE replaces
 /// the command line with the generated content, so the user reviews what will
 /// be sent instead of trusting an invisible side channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

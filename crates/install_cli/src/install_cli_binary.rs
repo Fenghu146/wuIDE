@@ -13,7 +13,7 @@ use workspace::{Toast, Workspace};
 actions!(
     cli,
     [
-        /// Installs the IDE CLI tool to the system PATH.
+        /// Installs the WuIDE CLI tool to the system PATH.
         InstallCliBinary,
     ]
 );
@@ -96,7 +96,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                 PromptLevel::Warning,
                 &t!("CLI should already be installed"),
                 Some(&t!(
-                    "If you installed IDE from our official release add ~/.local/bin to your PATH.\n\nIf you installed IDE from a different source like your package manager, then you may need to create an alias/symlink manually.\n\nDepending on your package manager, the CLI might be named zeditor, zedit, zed-editor or something else."
+                    "If you installed WuIDE from our official release add ~/.local/bin to your PATH.\n\nIf you installed WuIDE from a different source like your package manager, then you may need to create an alias/symlink manually.\n\nDepending on your package manager, the CLI might be named zeditor, zedit, zed-editor or something else."
                 )),
                 &[PromptButton::ok(t!("OK"))],
             );
@@ -108,7 +108,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
             // The user dismissed the administrator prompt; nothing to do.
             Ok(None) => return Ok(()),
             Err(error) => {
-                log::error!("failed to install IDE CLI: {error:#}");
+                log::error!("failed to install WuIDE CLI: {error:#}");
                 workspace.update(cx, |workspace, cx| {
                     struct CliInstallFailed;
 
@@ -121,7 +121,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                                     t!("You can add `ide` to your PATH manually."),
                                     cx,
                                 )
-                                .with_title(t!("Couldn't install the IDE CLI"))
+                                .with_title(t!("Couldn't install the WuIDE CLI"))
                                 .more_info_message(t!("Show me how"))
                                 .more_info_url(CANT_INSTALL_DOCS_URL)
                             })
@@ -151,5 +151,5 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
         register_wu_scheme(cx).await.log_err();
         Ok(())
     })
-    .detach_and_prompt_err(&t!("Cannot install the IDE CLI"), window, cx, |_, _, _| None);
+    .detach_and_prompt_err(&t!("Cannot install the WuIDE CLI"), window, cx, |_, _, _| None);
 }

@@ -129,6 +129,19 @@ mv Cargo.toml.backup Cargo.toml
 popd
 echo "Bundled ${app_path}"
 
+# Finder, the Dock, the menu bar and the About panel read the name from the
+# bundle, while `IDE.app` and `Contents/MacOS/IDE` keep their names so updates
+# and existing installs find the same files.
+if [[ "$channel" == "dev" ]]; then
+    display_name="WuIDE Dev"
+else
+    display_name="WuIDE"
+fi
+/usr/libexec/PlistBuddy \
+    -c "Set :CFBundleDisplayName ${display_name}" \
+    -c "Set :CFBundleName ${display_name}" \
+    "${app_path}/Contents/Info.plist"
+
 # Ship the bundled DeepSeek ACP agent alongside the app so the DeepSeek
 # harness works out of the box without a global npm install.
 agents_src="crates/wu/resources/agents/dsh-acp-darwin-${arch_suffix}"

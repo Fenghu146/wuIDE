@@ -1611,11 +1611,11 @@ fn remote_upgrade_required_message(error: &anyhow::Error) -> Option<String> {
     }
     let message = match error.error_tag("required") {
         Some(version) => t!(
-            "The remote instance of IDE does not support this yet. It must be upgraded to {version}",
+            "The remote instance of WuIDE does not support this yet. It must be upgraded to {version}",
             version = version
         ),
         None => t!(
-            "The remote instance of IDE does not support this yet. It must be upgraded to the latest version"
+            "The remote instance of WuIDE does not support this yet. It must be upgraded to the latest version"
         ),
     };
     Some(message.to_string())

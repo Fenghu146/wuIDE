@@ -1013,59 +1013,59 @@ impl ExtensionsPage {
         for feature in &self.upsells {
             let banner = match feature {
                 Feature::ExtensionBasedpyright => self.render_feature_upsell_banner(
-                    t!("Basedpyright (Python language server) support is built-in to IDE!"),
+                    t!("Basedpyright (Python language server) support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/python#basedpyright".into(),
                 ),
                 Feature::ExtensionRuff => self.render_feature_upsell_banner(
-                    t!("Ruff (linter for Python) support is built-in to IDE!"),
+                    t!("Ruff (linter for Python) support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/python#code-formatting--linting".into(),
                 ),
                 Feature::ExtensionTailwind => self.render_feature_upsell_banner(
-                    t!("Tailwind CSS support is built-in to IDE!"),
+                    t!("Tailwind CSS support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/tailwindcss".into(),
                 ),
                 Feature::ExtensionTy => self.render_feature_upsell_banner(
-                    t!("Ty (Python language server) support is built-in to IDE!"),
+                    t!("Ty (Python language server) support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/python".into(),
                 ),
                 Feature::Git => self.render_feature_upsell_banner(
-                    t!("IDE comes with basic Git support—more features are coming in the future."),
+                    t!("WuIDE comes with basic Git support—more features are coming in the future."),
                     "https://zed.dev/docs/git".into(),
                 ),
                 Feature::LanguageBash => self.render_feature_upsell_banner(
-                    t!("Shell support is built-in to IDE!"),
+                    t!("Shell support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/bash".into(),
                 ),
                 Feature::LanguageC => self.render_feature_upsell_banner(
-                    t!("C support is built-in to IDE!"),
+                    t!("C support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/c".into(),
                 ),
                 Feature::LanguageCpp => self.render_feature_upsell_banner(
-                    t!("C++ support is built-in to IDE!"),
+                    t!("C++ support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/cpp".into(),
                 ),
                 Feature::LanguageGo => self.render_feature_upsell_banner(
-                    t!("Go support is built-in to IDE!"),
+                    t!("Go support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/go".into(),
                 ),
                 Feature::LanguagePython => self.render_feature_upsell_banner(
-                    t!("Python support is built-in to IDE!"),
+                    t!("Python support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/python".into(),
                 ),
                 Feature::LanguageReact => self.render_feature_upsell_banner(
-                    t!("React support is built-in to IDE!"),
+                    t!("React support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/typescript".into(),
                 ),
                 Feature::LanguageRust => self.render_feature_upsell_banner(
-                    t!("Rust support is built-in to IDE!"),
+                    t!("Rust support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/rust".into(),
                 ),
                 Feature::LanguageTypescript => self.render_feature_upsell_banner(
-                    t!("Typescript support is built-in to IDE!"),
+                    t!("Typescript support is built-in to WuIDE!"),
                     "https://zed.dev/docs/languages/typescript".into(),
                 ),
                 Feature::OpenIn => self.render_feature_upsell_banner(
-                    t!("IDE supports linking to a source line on GitHub and others."),
+                    t!("WuIDE supports linking to a source line on GitHub and others."),
                     "https://zed.dev/docs/git#git-integrations".into(),
                 ),
             };

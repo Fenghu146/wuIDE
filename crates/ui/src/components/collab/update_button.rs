@@ -101,19 +101,19 @@ impl UpdateButton {
     }
 
     pub fn checking() -> Self {
-        Self::new(IconName::LoadCircle, t!("Checking for IDE Updates…"))
+        Self::new(IconName::LoadCircle, t!("Checking for WuIDE Updates…"))
             .icon_animate(true)
             .disabled(true)
     }
 
     pub fn downloading(progress: Option<f32>) -> Self {
-        Self::new(IconName::Download, t!("Downloading IDE Update…"))
+        Self::new(IconName::Download, t!("Downloading WuIDE Update…"))
             .progress(progress)
             .disabled(true)
     }
 
     pub fn installing(version: impl Into<SharedString>) -> Self {
-        Self::new(IconName::LoadCircle, t!("Installing IDE Update…"))
+        Self::new(IconName::LoadCircle, t!("Installing WuIDE Update…"))
             .icon_animate(true)
             .tooltip(version)
             .disabled(true)

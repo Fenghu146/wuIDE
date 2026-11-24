@@ -41,7 +41,7 @@ fn missing_agent_message(agent: HarnessId, searched: &str) -> i18n::SharedString
             "The DeepSeek agent (dsh-acp) isn't available. Bundle it or install it and try again."
         ),
         HarnessId::Pi => i18n::t!(
-            "The Pi agent (pi-acp) isn't available. Put the bundled `agents` folder beside the IDE executable, or set WU_AGENT_BIN_DIR."
+            "The Pi agent (pi-acp) isn't available. Put the bundled `agents` folder beside the WuIDE executable, or set WU_AGENT_BIN_DIR."
         ),
     };
     if searched.trim().is_empty() {

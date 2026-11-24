@@ -10,7 +10,7 @@ shasum -a 256 IDE-aarch64.dmg
 
 ### macOS (Apple Silicon and Intel)
 
-1. Download the disk image for your Mac, open it, and drag IDE into your Applications folder.
+1. Download the disk image for your Mac, open it, and drag WuIDE into your Applications folder.
     - [**Apple Silicon**](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-aarch64.dmg) (M1 and later)
     - [**Intel**](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.dmg)
 
@@ -21,13 +21,13 @@ shasum -a 256 IDE-aarch64.dmg
    xattr -d com.apple.quarantine /Applications/IDE.app
    ```
 
-> If you'd rather not use Terminal: open IDE once (you'll see an "IDE can't be opened" or "Apple could not verify" message), then go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to IDE. Confirm with your password.
+> If you'd rather not use Terminal: open WuIDE once (you'll see a "WuIDE can't be opened" or "Apple could not verify" message), then go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to WuIDE. Confirm with your password.
 
-3. Open IDE normally.
+3. Open WuIDE normally.
 
 #### Command line
 
-To open files and folders from Terminal with `ide`, choose **IDE → Install CLI** from the menu bar. It adds `ide` to `/usr/local/bin` and may ask for your password.
+To open files and folders from Terminal with `ide`, choose **WuIDE → Install CLI** from the menu bar. It adds `ide` to `/usr/local/bin` and may ask for your password.
 
 If that fails, for example because your account isn't an admin, add it yourself without a password:
 
@@ -50,7 +50,7 @@ Run this in a terminal:
 curl -fsSL https://raw.githubusercontent.com/Fenghu146/wuIDE/main/script/install.sh | sh
 ```
 
-It installs IDE into `~/.local`, adds the `ide` command, and adds IDE to your app menu with its icon. Run it again any time to reinstall. IDE keeps itself up to date after that, as long as this repository stays public.
+It installs WuIDE into `~/.local`, adds the `ide` command, and adds WuIDE to your app menu with its icon. Run it again any time to reinstall. WuIDE keeps itself up to date after that, as long as this repository stays public.
 
 The script reads `WU_VERSION=1.2.3` to install a specific release and `WU_BUNDLE_PATH` to install a local tarball instead of downloading one.
 
@@ -67,11 +67,11 @@ tar -xzf ide-linux-$(uname -m).tar.gz -C ~/.local
 ln -sf ~/.local/ide.app/bin/ide ~/.local/bin/ide
 ```
 
-Make sure `~/.local/bin` is on your `PATH`, then run `ide`. This doesn't add IDE to your app menu; the install command above does.
+Make sure `~/.local/bin` is on your `PATH`, then run `ide`. This doesn't add WuIDE to your app menu; the install command above does.
 
 #### WSL2
 
-On WSL2, IDE draws with the CPU by default because the WSL GPU driver isn't fully standards-compliant. To try the GPU instead, start IDE with:
+On WSL2, WuIDE draws with the CPU by default because the WSL GPU driver isn't fully standards-compliant. To try the GPU instead, start WuIDE with:
 
 ```sh
 WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER=1 ide
@@ -81,15 +81,15 @@ WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER=1 ide
 
 Download the [installer](https://github.com/Fenghu146/wuIDE/releases/latest/download/IDE-x86_64.exe) and click to run. The installer isn't code-signed, so Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
 
-The installer registers the app as IDE but keeps the identifier the earlier Wu builds used, so upgrading in place works and your settings carry over.
+The installer registers the app as WuIDE but keeps the identifier the earlier Wu builds used, so upgrading in place works and your settings carry over.
 
 ### Uninstalling
 
-`script/uninstall.sh` in this repository removes the app, the `ide` and `wu` command shims, and — after asking — your preferences. It handles both the current IDE install and older Wu installs.
+`script/uninstall.sh` in this repository removes the app, the `ide` and `wu` command shims, and — after asking — your preferences. It handles both the current WuIDE install and older Wu installs.
 
 ## Bundled agent runtimes
 
-IDE ships the runtimes its built-in agents need, so none of them require Node or a global npm install:
+WuIDE ships the runtimes its built-in agents need, so none of them require Node or a global npm install:
 
 | Agent | Runtime | Data directory |
 | --- | --- | --- |
@@ -107,4 +107,4 @@ Set `WU_AGENT_DATA_DIR` to put them somewhere else.
 
 The runtimes are found beside the executable: `agents` next to `IDE.exe` on Windows, `libexec/agents` in the Linux bundle, and `Contents/Resources/agents` inside the macOS app. If you copy just the executable out of the bundle — for example to try a single-file build — copy the `agents` folder next to it as well, or set `WU_AGENT_BIN_DIR` to its path. A local build can use `sync-agents.ps1`, kept next to the build output, which mirrors `crates/wu/resources/agents` into that folder and does nothing when the copy is already current. Otherwise DeepSeek and Pi report that they are unavailable and list the folders they searched.
 
-Pi's isolated home is seeded from `~/.pi/agent` on every launch: `auth.json`, `models.json`, `models-store.json` and a `settings.json` with globally installed `packages` and `enabledModels` removed. That means a provider switch written by cc-switch reaches the bundled Pi without you having to clear anything, but it also means a model you pick inside IDE is replaced by your global Pi default the next time an agent starts.
+Pi's isolated home is seeded from `~/.pi/agent` on every launch: `auth.json`, `models.json`, `models-store.json` and a `settings.json` with globally installed `packages` and `enabledModels` removed. That means a provider switch written by cc-switch reaches the bundled Pi without you having to clear anything, but it also means a model you pick inside WuIDE is replaced by your global Pi default the next time an agent starts.

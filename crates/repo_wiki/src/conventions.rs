@@ -1,7 +1,7 @@
 //! Project conventions (AGENTS.md): the shared human/agent contract.
 //!
 //! Claude Code, Codex and OpenCode read a worktree-root AGENTS.md natively
-//! when they run there, so the IDE does not inject it again for those
+//! when they run there, so WuIDE does not inject it again for those
 //! harnesses. The `/conventions` chat command and the repo map panel make the
 //! same files reachable for every other harness and for the user, and the
 //! user-global AGENTS.md (`paths::agents_file`) finally gets a consumer.

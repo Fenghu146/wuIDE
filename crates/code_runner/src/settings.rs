@@ -208,7 +208,7 @@ impl Settings for CodeRunnerSettings {
 /// The languages the built-in C/C++ plan handles.
 pub const CPP_FAMILY: [&str; 2] = ["c", "cpp"];
 
-/// Commands for the languages whose run is a single command line.
+/// Commands for the languages WuIDE supports out of the box.
 ///
 /// The Windows entries differ in how the interpreter is named, and because
 /// C/C++ is not in here at all: those are compiled by the runner.
@@ -227,7 +227,7 @@ pub fn default_run_map(is_windows: bool) -> HashMap<String, String> {
     map
 }
 
-/// Build commands with debug symbols for the languages the IDE debugs out of
+/// Build commands with debug symbols for the languages WuIDE debugs out of
 /// the box. The binary is named after the run one plus `.dbg`, so the two never
 /// overwrite each other.
 pub fn default_debug_map(is_windows: bool) -> HashMap<String, DebugEntry> {

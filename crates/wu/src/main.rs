@@ -74,7 +74,7 @@ fn build_application() -> Application {
 }
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
-    let message = "IDE failed to launch";
+    let message = "WuIDE failed to launch";
     let error_details = errors
         .into_iter()
         .flat_map(|(kind, paths)| {
@@ -156,7 +156,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("IDE failed to launch")
+                    Notification::new("WuIDE failed to launch")
                         .body(Some(
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
@@ -324,7 +324,7 @@ fn main() {
             client::os_info::os_name(),
             client::os_info::os_version(),
         );
-        println!("IDE System Specs (from CLI):\n{}", system_specs);
+        println!("WuIDE System Specs (from CLI):\n{}", system_specs);
         return;
     }
 
@@ -1442,7 +1442,7 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "IDE", disable_version_flag = true, max_term_width = 100)]
+#[command(name = "WuIDE", disable_version_flag = true, max_term_width = 100)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///

@@ -13,7 +13,7 @@
   "Please install rsync using your package manager": "请使用包管理器安装 rsync",
   "Skip This Version": "跳过这个版本",
   "Update available": "有可用更新",
-  "IDE was installed via a package manager.": "IDE 是通过包管理器安装的。",
+  "WuIDE was installed via a package manager.": "WuIDE 是通过包管理器安装的。",
   "rsync is required for auto-updates but is not installed. {install_hint}": "自动更新需要 rsync，但尚未安装。{install_hint}",
   "{app_name} {version} is available. Download and install it now?": "{app_name} {version} 已发布，现在下载并安装吗？"
 }
