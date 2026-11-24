@@ -77,8 +77,8 @@ cargo check                        # 让 Cargo 重新解析
 
 行号以 1.4.6/1.4.7 为准，同步上游后会漂，改的时候按函数名找。
 
-也就是说它能说明「是被 `update` / `as_mut` 借走的」，不能说明「是谁」。事故形态都是「在 `update` 里 `read`」，
-而 `read` 报的正是外层 lease 的位置，缺的这半条信息只能靠 backtrace 补。
+也就是说它能说明「是被 `update` / `as_mut` 借走的」，不能说明「是谁」。真正 abort 的那次（`stop_current_file`）
+是「在 `update` 里又 `read` 同一个实体」，而 `read` 报的正是外层 lease 的位置，缺的这半条信息只能靠 backtrace 补。
 
 **为什么停在内部行**：`#[track_caller]` 只在函数调用之间传播，**穿过闭包就断**
 （闭包没有隐藏的 caller 参数，`closure_track_caller` 至今未稳定）。`App::update_entity` 的形态是
