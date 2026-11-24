@@ -5868,10 +5868,18 @@ mod tests {
 
         assert_content_eventually(&terminal, "done", cx).await;
 
-        // Now try to kill - should be a no-op since task already completed
+        // Now try to kill - should be a no-op since task already completed,
+        // and stopping twice must stay a no-op.
         terminal.update(cx, |term, _cx| {
             term.kill_active_task();
+            term.kill_active_task();
         });
+
+        assert_eq!(
+            terminal.read_with(cx, |term, _| term.task().map(|task| task.status)),
+            Some(TaskStatus::Completed { success: true }),
+            "killing a finished task should not change its status"
+        );
 
         // Content should still be there
         let content = terminal.update(cx, |term, _| term.get_content());

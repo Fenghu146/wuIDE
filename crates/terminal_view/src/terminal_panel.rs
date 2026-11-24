@@ -653,7 +653,9 @@ impl TerminalPanel {
             return self.spawn_in_new_terminal(task, window, cx);
         }
 
-        let mut terminals_for_task = self.terminals_for_task(&task.full_label, cx);
+        let workspace_panes = workspace.read(cx).panes().to_vec();
+        let mut terminals_for_task =
+            self.terminals_for_task(&task.full_label, &workspace_panes, cx);
         let Some(existing) = terminals_for_task.pop() else {
             return self.spawn_in_new_terminal(task, window, cx);
         };
@@ -765,20 +767,23 @@ impl TerminalPanel {
             .detach_and_log_err(cx);
     }
 
+    /// Terminals running the task with this label, from this panel and from the
+    /// workspace's own panes. The panes are passed in rather than read from a
+    /// workspace handle, because callers may already hold the workspace loaned.
     fn terminals_for_task(
         &self,
         label: &str,
+        workspace_panes: &[Entity<Pane>],
         cx: &mut App,
     ) -> Vec<(usize, Entity<Pane>, Entity<TerminalView>)> {
-        let Some(workspace) = self.workspace.upgrade() else {
-            return Vec::new();
-        };
-
         let pane_terminal_views = |pane: Entity<Pane>| {
             pane.read(cx)
                 .items()
                 .enumerate()
-                .filter_map(|(index, item)| Some((index, item.act_as::<TerminalView>(cx)?)))
+                // `downcast` only looks at the entity's type; `act_as` would read
+                // the item, and the editor that asked for the stop is being
+                // updated right now.
+                .filter_map(|(index, item)| Some((index, item.downcast::<TerminalView>()?)))
                 .filter_map(|(index, terminal_view)| {
                     let task_state = terminal_view.read(cx).terminal().read(cx).task()?;
                     if &task_state.spawned_task.full_label == label {
@@ -796,9 +801,7 @@ impl TerminalPanel {
             .cloned()
             .flat_map(pane_terminal_views)
             .chain(
-                workspace
-                    .read(cx)
-                    .panes()
+                workspace_panes
                     .iter()
                     .cloned()
                     .flat_map(pane_terminal_views),
@@ -1804,10 +1807,10 @@ impl Panel for TerminalPanel {
 struct TerminalProvider(Entity<TerminalPanel>);
 
 impl workspace::TerminalProvider for TerminalProvider {
-    fn kill_task(&self, label: &str, cx: &mut App) -> bool {
+    fn kill_task(&self, label: &str, workspace: &Workspace, cx: &mut App) -> bool {
         let terminal_panel = self.0.clone();
         terminal_panel.update(cx, |terminal_panel, cx| {
-            let terminals = terminal_panel.terminals_for_task(label, cx);
+            let terminals = terminal_panel.terminals_for_task(label, workspace.panes(), cx);
             let killed = !terminals.is_empty();
             for (_, _, terminal_view) in terminals {
                 let terminal = terminal_view.read(cx).terminal().clone();
@@ -1855,7 +1858,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use project::FakeFs;
     use settings::SettingsStore;
-    use workspace::{MultiWorkspace, WorkspaceId};
+    use workspace::{MultiWorkspace, WorkspaceId, item::test::TestItem};
 
     #[test]
     fn test_prepare_empty_task() {
@@ -3280,6 +3283,48 @@ mod tests {
             center_items_after, center_items_before,
             "Center pane should not gain a new terminal when panel is focused"
         );
+    }
+
+    /// The code runner stops a task from inside the editor's update: the editor
+    /// that asked for the stop is loaned, and so is the workspace it reaches
+    /// through. Reading either one again from the provider panicked with
+    /// "cannot read ... while it is already being updated", and that panic
+    /// crosses the window procedure and aborts the whole editor.
+    #[gpui::test]
+    async fn test_kill_task_runs_while_the_caller_is_loaned(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        init_test(cx);
+
+        let (window_handle, terminal_panel) = init_workspace_with_panel(cx).await;
+        let (workspace, item) = window_handle
+            .update(cx, |multi_workspace, window, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                let item = workspace.update(cx, |workspace, cx| {
+                    workspace.set_terminal_provider(TerminalProvider(terminal_panel.clone()));
+                    // An item in the workspace's own pane, like the editor that
+                    // carries the stop button.
+                    let item = cx.new(|cx| TestItem::new(cx));
+                    workspace.active_pane().update(cx, |pane, cx| {
+                        pane.add_item(Box::new(item.clone()), true, false, None, window, cx);
+                    });
+                    item
+                });
+                (workspace, item)
+            })
+            .expect("Failed to set up the workspace");
+
+        cx.update(|cx| {
+            item.update(cx, |_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    assert!(
+                        !workspace.kill_task_terminal("no such task", cx),
+                        "a label no terminal carries should report that nothing was killed"
+                    );
+                    // Stopping twice in a row is what a double click does.
+                    assert!(!workspace.kill_task_terminal("no such task", cx));
+                });
+            });
+        });
     }
 
     fn set_max_tabs(cx: &mut TestAppContext, value: Option<usize>) {
