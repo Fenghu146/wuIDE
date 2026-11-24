@@ -135,17 +135,20 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 - Use `./script/clippy` instead of `cargo clippy`
 
-# 多线程与工作区
+# Threads and workspaces
 
-这个仓库经常同时跑多个执行线程（多个 agent 会话、多个 worktree），它们共用主检出和同一个 `.git`。下面每条都附理由：不知道代价的规则不会被遵守。
+Several agent threads and people work in this repository at once, sharing one main checkout and one `.git`. Every rule below carries its reason, because a rule whose cost is invisible is a rule that gets dropped.
 
-* **执行线程一律使用独立 worktree**：`git worktree add ..\<name> -b <branch> origin/main`。主检出 `D:\wuIDE-main\wuIDE-main` 只用于合并、发版、打 tag，任何线程都不得在其中编辑文件。主检出是共享资源：两个线程在同一个检出里切分支，commit 就会落到对方的分支上（已发生过：一个 merge commit 落进了错误的 feature 分支，后来靠"main 快进到它"才没出事）。
-* **构建使用独立 target dir**：`CARGO_TARGET_DIR=D:\cargo-target\<线程名>` 或 `cargo --target-dir`，结束前删掉。共享 target dir 在并发构建下会互相覆盖中间产物，症状是"源码里明明存在的字段报缺失"，很容易被误当成代码问题排查半天。
-* **提交前 `git status --short` 只应出现你自己改的文件**。若出现别人的文件，停下报告，不要 `checkout` / `stash` / `revert`——那是别人尚未提交的工作，清掉就没了。`git add -A` 是误带的常见来源，按路径 `git add <file>`。
-* **新增或修改用户可见文案必须中英双语**。`script/check-translations` 是发版门禁，`.github/workflows/mac-dmg.yml` 和 `release.yml` 都会执行它，缺中文会让 mac 打包直接失败。
-* **新增枚举类设置的取值必须同时改三处**：`crates/settings_ui/src/components/dropdown.rs` 的 `translated_setting_value` match 分支、`assets/locales/zh-CN/strings/settings_ui.json` 的 `"setting value|<下拉显示值>"`、以及该设置的 schema 描述；故意保留英文的取值写进 `UNTRANSLATED_SETTING_VALUES` 白名单。`settings_ui` 的翻译测试会枚举每个下拉取值逐个查中文，漏一处就红。
-* **不要顺手 rustfmt 别人的文件**。整文件格式化会把无关行卷进你的 diff，扩大冲突面，也让 review 分不清哪一行是真正的逻辑改动。
-* **合并、打 tag、发版之前先跑 `./script/pre-merge-check`**。它逐条检查主检出是否干净、有没有残留的已合并 worktree、本地 `main` 是否等于 `origin/main`、磁盘余量是否够、有没有正在跑的 `cargo`/`rustc`，任一 FAIL 退出码非 0。完整约定见 `docs/PARALLEL-DEV.md`。
+* **Give every thread its own worktree**: `git worktree add ..\<name> -b <branch> origin/main`. The main checkout (`D:\wuIDE-main\wuIDE-main`) is only for merging, releasing, and tagging; no thread may edit files in it. It is a shared resource: when two threads switch branches in the same checkout, a commit lands on the other thread's branch. This has happened: a merge commit ended up on the wrong feature branch and only turned out harmless because `main` was fast-forwarded to it.
+* **Build with your own target dir**: `CARGO_TARGET_DIR=D:\cargo-target\<thread>` or `cargo --target-dir`, and delete it when you are done. Concurrent builds sharing one target dir overwrite each other's intermediate artifacts, and the result reads like a code error: a field that exists in the source is reported missing, which costs a long detour to diagnose.
+* **Before committing, `git status --short` must list only files you changed.** If someone else's files appear, stop and report them; do not `checkout`, `stash`, or `revert` them, because that is work they have not committed yet and it is gone once you clean it. `git add -A` is the usual way other people's work gets carried into a commit; add paths explicitly.
+* **New or changed user-visible text must be in both English and Simplified Chinese.** `script/check-translations` gates releases: `.github/workflows/mac-dmg.yml` and `release.yml` both run it, and a missing Chinese string fails the macOS build.
+* **A new enum setting value needs three edits at once**: the arm in `translated_setting_value` (`crates/settings_ui/src/components/dropdown.rs`), a `"setting value|<displayed value>"` entry in `assets/locales/zh-CN/strings/settings_ui.json`, and the setting's schema description. Values that deliberately stay English go into `UNTRANSLATED_SETTING_VALUES` instead. The `settings_ui` translation test walks every dropdown value and looks up its Chinese text, so missing any one of the three turns it red.
+* **Do not rustfmt a file you only touched incidentally.** A whole-file reformat drags unrelated lines into your diff, widens the conflict surface, and hides the real change from review.
+* **Take a lease before you start and release it when you finish**: `script/lease claim <path|glob>... --note "..."`, then `script/lease release --all-mine`; a long task should `script/lease heartbeat <token>` rather than claim a huge ttl. A claim that overlaps another thread's active lease is refused with the holder, its note and the time left, which is the only moment where a collision is cheap to discover. Leases live in `.git/amp-leases` and expire (two hours by default), so a dead thread does not block the repository forever.
+* **A `release-fast` build or packaging takes the build lock**: `script/lease build claim` before it, `script/lease build release` after. Two heavy builds sharing target dirs reproduce the stale-artifact failures above, and the lock is what `script/pre-merge-check --release` waits for.
+* **Enable the commit hooks once per clone** with `script/setup-hooks`. They refuse a commit made in the main checkout (a merge there needs `AMP_MAIN_COMMIT=1`) and a commit that stages files another thread has leased, because each one splits work that is still in progress. Everything else in this section is still yours to remember without them.
+* **Run `./script/pre-merge-check` before merging, tagging, or releasing.** It prints PASS, FAIL, or WARN per check. A dirty main checkout, a `main` that differs from `origin/main`, and a lease on files the branch changes block; leftover worktrees, stale worktree records, a branch that does not contain `origin/main`, a running `cargo`/`rustc`, low disk, a held build lock and missing commit hooks only warn. `--release` also blocks on the 60 GB disk requirement and on a held build lock, because a release build genuinely needs the room and must not share target dirs. See `docs/PARALLEL-DEV.md`.
 
 # Pull request hygiene
 

@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+
+# Exercises script/lease and .githooks/pre-commit in a throwaway repository.
+# Usage: script/lease-test
+#
+# Every case prints PASS or FAIL; the exit code is non-zero if any failed.
+
+set -uo pipefail
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd -P)
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/lease-test.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+passed=0
+failed=0
+
+ok() {
+    passed=$((passed + 1))
+    printf 'PASS  %s\n' "$1"
+}
+
+no() {
+    failed=$((failed + 1))
+    printf 'FAIL  %s\n' "$1"
+    if [[ -n "${2:-}" ]]; then
+        printf '%s\n' "$2" | sed 's/^/      /'
+    fi
+}
+
+expect_ok() { # <description> <command...>
+    local desc=$1 out
+    shift
+    if out=$("$@" 2>&1); then
+        ok "$desc"
+    else
+        no "$desc" "$out"
+    fi
+}
+
+expect_fail() { # <description> <needle> <command...>
+    local desc=$1 needle=$2 out
+    shift 2
+    if out=$("$@" 2>&1); then
+        no "$desc (command unexpectedly succeeded)" "$out"
+        return
+    fi
+    if [[ "$out" != *"$needle"* ]]; then
+        no "$desc (output did not mention '$needle')" "$out"
+        return
+    fi
+    ok "$desc"
+}
+
+expect_contains() { # <description> <needle> <command...>
+    local desc=$1 needle=$2 out
+    shift 2
+    if ! out=$("$@" 2>&1); then
+        no "$desc (command failed)" "$out"
+        return
+    fi
+    if [[ "$out" == *"$needle"* ]]; then
+        ok "$desc"
+    else
+        no "$desc (output did not mention '$needle')" "$out"
+    fi
+}
+
+expect_not_contains() { # <description> <needle> <command...>
+    local desc=$1 needle=$2 out
+    shift 2
+    if ! out=$("$@" 2>&1); then
+        no "$desc (command failed)" "$out"
+        return
+    fi
+    if [[ "$out" == *"$needle"* ]]; then
+        no "$desc (output still mentions '$needle')" "$out"
+    else
+        ok "$desc"
+    fi
+}
+
+# --- throwaway repository ---------------------------------------------------
+
+git init -q "$tmp/repo"
+cd "$tmp/repo"
+git config user.email lease@example.com
+git config user.name lease-test
+mkdir -p script .githooks
+cp "$repo_root/script/lease" "$repo_root/script/setup-hooks" script/
+cp "$repo_root/.githooks/pre-commit" .githooks/
+chmod +x script/lease script/setup-hooks .githooks/pre-commit
+printf 'a\n' > a.txt
+git add -A
+AMP_MAIN_COMMIT=1 git commit -qm init
+git worktree add -q "$tmp/wt" -b feat
+lease="$tmp/wt/script/lease"
+
+expect_contains "setup-hooks points core.hooksPath at .githooks" \
+    ".githooks" "$tmp/wt/script/setup-hooks"
+
+# --- claiming ---------------------------------------------------------------
+
+token_crates=$(env AMP_THREAD_ID=thread-a "$lease" claim 'crates/a/**' --note "settings work" \
+    | sed -n 's/^token=//p')
+[[ -n "$token_crates" ]] && ok "claim prints a token" || no "claim prints a token"
+
+expect_ok "a non-overlapping claim succeeds" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'docs/**'
+
+expect_fail "an overlapping file claim is refused and names the holder" "thread-a" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/src/x.rs'
+
+expect_contains "status shows the holder's note" "settings work" \
+    "$lease" status
+
+expect_fail "a claim inside someone's glob is refused" "l-" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/deep/nested/y.rs'
+
+expect_contains "claim --json emits a parseable result" '"ok":true' \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'tools/**' --json
+
+# --- releasing --------------------------------------------------------------
+
+expect_ok "release frees the paths" "$lease" release "$token_crates"
+expect_ok "the same path can be claimed after release" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/src/x.rs'
+expect_ok "release --all-mine drops that thread's leases" \
+    env AMP_THREAD_ID=thread-b "$lease" release --all-mine
+expect_ok "the dropped paths are free again" \
+    env AMP_THREAD_ID=thread-c "$lease" claim 'crates/a/src/x.rs'
+
+# --- expiry and heartbeat ---------------------------------------------------
+
+env AMP_THREAD_ID=thread-a "$lease" claim 'packages/**' --ttl 1s >/dev/null
+sleep 2
+expect_ok "an expired lease no longer blocks a claim" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'packages/p/x.rs'
+expect_not_contains "status drops the expired lease" "thread-a" "$lease" status
+
+token_vendor=$(env AMP_THREAD_ID=thread-a "$lease" claim 'vendor/**' --ttl 1s \
+    | sed -n 's/^token=//p')
+expect_ok "heartbeat extends a lease" "$lease" heartbeat "$token_vendor" --ttl 1h
+sleep 2
+expect_fail "a heartbeated lease still blocks after its original ttl" "thread-a" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'vendor/v.rs'
+
+# --- build lock -------------------------------------------------------------
+
+expect_ok "the build lock can be taken" "$lease" build claim
+expect_fail "a second build claim is refused and says how long it has been held" \
+    "the build lock is already held" "$lease" build claim
+expect_contains "the build lock does not block path claims" "Claimed" \
+    env AMP_THREAD_ID=thread-b "$lease" claim 'elsewhere/**'
+expect_ok "the build lock is released" "$lease" build release
+expect_ok "the build lock can be taken again" "$lease" build claim
+"$lease" build release >/dev/null
+
+# --- pre-commit -------------------------------------------------------------
+
+printf 'main-checkout edit\n' >> a.txt
+git add a.txt
+expect_fail "a commit in the shared main checkout is refused" "shared main checkout" \
+    git commit -qm dirty
+expect_ok "AMP_MAIN_COMMIT=1 allows a merge commit there" \
+    env AMP_MAIN_COMMIT=1 git commit -qm merge
+
+cd "$tmp/wt"
+mkdir -p src
+printf 'work\n' > src/x.txt
+token_src=$(env AMP_THREAD_ID=thread-x "$lease" claim 'src/**' --note "still editing" \
+    | sed -n 's/^token=//p')
+git add src/x.txt
+expect_fail "a commit touching another thread's lease is refused" \
+    "another thread holds a lease" env AMP_THREAD_ID=thread-me git commit -qm leased
+expect_fail "the refusal points at script/lease status" "script/lease status" \
+    env AMP_THREAD_ID=thread-me git commit -qm leased
+"$lease" release "$token_src" >/dev/null
+expect_ok "the commit goes through after the lease is released" \
+    env AMP_THREAD_ID=thread-me git commit -qm leased
+
+# --- summary ----------------------------------------------------------------
+
+printf '\n%d passed, %d failed\n' "$passed" "$failed"
+((failed == 0))

@@ -1,51 +1,93 @@
 #!/usr/bin/env bash
 
 # Checks the shared checkout is safe to merge into or release from.
-# Usage: script/pre-merge-check
+# Usage: script/pre-merge-check [--release]
 #
-# Prints PASS or FAIL for each check and exits non-zero if any of them failed.
-# Run it before merging, tagging, or cutting a release. Nothing is deleted or
-# fixed automatically. See docs/PARALLEL-DEV.md.
+# PASS means the check holds, FAIL means a blocking problem, WARN means
+# something worth cleaning up that does not make the current operation wrong.
+# Only FAIL affects the exit code, so a routine run does not stay red over
+# cleanup debt that nobody has gotten to yet. --release also makes the disk
+# check blocking, because a release build genuinely needs the room.
+#
+# Nothing is deleted or fixed automatically. See docs/PARALLEL-DEV.md.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+release=false
+case "${1:-}" in
+    "") ;;
+    --release) release=true ;;
+    -h | --help)
+        echo "Usage: script/pre-merge-check [--release]"
+        exit 0
+        ;;
+    *)
+        echo "Usage: script/pre-merge-check [--release]" >&2
+        exit 2
+        ;;
+esac
+
 min_free_gb=${PRE_MERGE_MIN_FREE_GB:-60}
-failed=0
+blocked=0
+warned=0
 
 pass() { printf 'PASS  %s\n' "$*"; }
-fail() { printf 'FAIL  %s\n' "$*"; failed=1; }
+blocked_by() { printf 'FAIL  %s\n' "$*"; blocked=1; }
+warn() { printf 'WARN  %s\n' "$*"; warned=$((warned + 1)); }
 note() { printf '      %s\n' "$*"; }
 section() { printf '\n== %s. %s ==\n' "$1" "$2"; }
 
 # git worktree list puts the primary worktree first; it is the shared one that
 # merges, releases, and tags are done from.
 main_worktree=$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)
+current=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$current_branch" == "HEAD" ]]; then
+    current_branch="detached HEAD"
+fi
+
+if [[ "$release" == true ]]; then
+    echo "Release mode: the disk check blocks as well."
+fi
 
 section 1 "main checkout has no uncommitted changes"
+# Blocking: the main checkout is shared, so anything in it is either some other
+# thread's unfinished work that a merge would sweep in, or a branch switch that
+# moves the commit a tag would point at.
 dirty=$(git -C "$main_worktree" status --short)
 if [[ -z "$dirty" ]]; then
     pass "clean: $main_worktree"
 else
-    fail "uncommitted changes in $main_worktree"
+    blocked_by "uncommitted changes in $main_worktree"
     while IFS= read -r line; do note "$line"; done <<< "$dirty"
     note "Hand them back to the thread that made them."
     note "Never clean up someone else's work with checkout, stash, revert, or reset."
 fi
 
-section 2 "no worktree is left on a branch already merged into main"
-# Compare against local main rather than origin/main so this check does not need
-# the network; check 3 reports when local main is stale.
+section 2 "current branch is based on origin/main"
+# Advisory: a branch started from someone's unmerged work still compiles and
+# still merges, but its diff silently carries that other branch's commits.
+if ! git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null; then
+    note "origin/main is unknown here; fetch it to run this check"
+elif git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+    pass "$current_branch contains origin/main"
+else
+    warn "$current_branch does not contain origin/main"
+    note "Either it was branched from work that is not in origin/main yet, or it is"
+    note "simply behind it; merge origin/main into it before merging back."
+fi
+
+section 3 "no worktree is left on a branch already merged into main"
+# Advisory: leftover worktrees cost disk and invite someone to resume work on a
+# branch that has already landed, but they do not make this merge wrong.
 base=main
 git rev-parse --quiet --verify "refs/heads/$base" >/dev/null || base=origin/main
 base_tip=$(git rev-parse "$base")
 
-# The worktree this script runs from is in use by definition; do not tell its
-# own thread to delete it.
-current=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
-
 residue=""
+commands=""
 detached=""
 path=""
 index=0
@@ -68,6 +110,7 @@ while IFS= read -r line; do
                 [[ "$(git rev-parse "$branch" 2>/dev/null)" != "$base_tip" ]] &&
                 git merge-base --is-ancestor "$branch" "$base" 2>/dev/null; then
                 residue+="$path ($name)"$'\n'
+                commands+="git worktree remove \"$path\"  # $name"$'\n'
             fi
             path=""
             ;;
@@ -86,9 +129,13 @@ if [[ -z "$residue" ]]; then
     pass "every worktree is on work that is not in $base yet"
 else
     count=$(printf '%s' "$residue" | grep -c .)
-    fail "$count worktree(s) sit on branches already merged into $base"
-    while IFS= read -r line; do note "$line"; done <<< "${residue%$'\n'}"
-    note "Remove them once their owner is done: git worktree remove <path>"
+    warn "$count worktree(s) sit on branches already merged into $base"
+    if [[ "$release" == true ]]; then
+        while IFS= read -r line; do note "$line"; done <<< "${commands%$'\n'}"
+    else
+        while IFS= read -r line; do note "$line"; done <<< "${residue%$'\n'}"
+    fi
+    note "Remove them once their owner is done."
 fi
 while IFS= read -r line; do
     if [[ -n "$line" ]]; then
@@ -96,26 +143,43 @@ while IFS= read -r line; do
     fi
 done <<< "$detached"
 
-section 3 "local main matches origin/main"
+section 4 "no stale worktree metadata"
+# Advisory: an entry whose directory was deleted by hand leaves a pruneable
+# record behind, but git keeps working around it.
+prunable=$(git worktree prune --dry-run 2>/dev/null)
+if [[ -z "$prunable" ]]; then
+    pass "none"
+else
+    count=$(printf '%s' "$prunable" | grep -c .)
+    warn "$count stale worktree record(s); their directories are gone"
+    while IFS= read -r line; do note "$line"; done <<< "$prunable"
+    note "Clear them with: git worktree prune"
+fi
+
+section 5 "local main matches origin/main"
+# Blocking: a merge or a tag made from a stale or unpushed main puts work on a
+# base nobody else sees, and the release workflow builds whatever the tag says.
 if ! git fetch --quiet origin; then
-    fail "git fetch origin failed; cannot compare main with origin/main"
+    blocked_by "git fetch origin failed; cannot compare main with origin/main"
 elif ! git rev-parse --quiet --verify "refs/remotes/origin/main" >/dev/null; then
-    fail "origin/main does not exist"
+    blocked_by "origin/main does not exist"
 elif [[ "$(git rev-parse main)" == "$(git rev-parse origin/main)" ]]; then
     pass "main and origin/main are both $(git rev-parse --short=9 main)"
 else
     read -r ahead behind < <(git rev-list --left-right --count main...origin/main)
     if [[ "$ahead" != 0 && "$behind" != 0 ]]; then
-        fail "main is $ahead commit(s) ahead of and $behind behind origin/main"
+        blocked_by "main is $ahead commit(s) ahead of and $behind behind origin/main"
     elif [[ "$ahead" != 0 ]]; then
-        fail "main is $ahead commit(s) ahead of origin/main; push it"
+        blocked_by "main is $ahead commit(s) ahead of origin/main; push it"
     else
-        fail "main is $behind commit(s) behind origin/main; fast-forward it"
+        blocked_by "main is $behind commit(s) behind origin/main; fast-forward it"
     fi
     note "Fix this before merging, tagging, or releasing."
 fi
 
-section 4 "at least $min_free_gb GB free where the repo lives"
+section 6 "at least $min_free_gb GB free where the repo lives"
+# Advisory normally, blocking with --release: a release-fast build needs
+# 25-30 GB and can grow while linking, but an edit and a merge need no room.
 volume=""
 avail_kb=""
 while read -r fs _ _ available _; do
@@ -124,19 +188,28 @@ while read -r fs _ _ available _; do
 done < <(df -Pk . | tail -n +2)
 
 if [[ -z "$avail_kb" ]]; then
-    fail "could not read free disk space with df"
+    if [[ "$release" == true ]]; then
+        blocked_by "could not read free disk space with df"
+    else
+        warn "could not read free disk space with df"
+    fi
 else
     free_gb=$(awk -v kb="$avail_kb" 'BEGIN { printf "%.1f", kb / 1048576 }')
     if ((avail_kb >= min_free_gb * 1024 * 1024)); then
         pass "$free_gb GB free on $volume"
-    else
-        fail "only $free_gb GB free on $volume, need $min_free_gb GB"
+    elif [[ "$release" == true ]]; then
+        blocked_by "only $free_gb GB free on $volume, need $min_free_gb GB"
         note "A release-fast build needs 25-30 GB and can grow while linking."
         note "Large shared target dirs are the usual cause; clear the ones you own."
+    else
+        warn "only $free_gb GB free on $volume; a release build needs $min_free_gb GB"
+        note "Fine for editing and merging; run with --release before cutting one."
     fi
 fi
 
-section 5 "no cargo or rustc process is running"
+section 7 "no cargo or rustc process is running"
+# Advisory: another thread's build does not corrupt this merge, but it shares
+# the machine's target dirs and timings, so a release should wait for it.
 builders=""
 listed=true
 case "$(uname -s)" in
@@ -145,7 +218,7 @@ case "$(uname -s)" in
         powershell=$(command -v powershell.exe || command -v powershell || true)
         if [[ -z "$powershell" ]]; then
             listed=false
-            fail "cannot list processes: PowerShell is not on PATH"
+            warn "cannot list processes: PowerShell is not on PATH"
         else
             builders=$(
                 "$powershell" -NoProfile -NonInteractive -Command \
@@ -165,15 +238,67 @@ if [[ "$listed" == true ]]; then
     if [[ -z "$builders" ]]; then
         pass "none running"
     else
-        fail "a build is running; wait for it or you will share its target dir"
+        warn "a build is running; someone else's target dir is in use"
         while IFS= read -r line; do note "$line"; done <<< "$builders"
     fi
 fi
 
-printf '\n'
-if ((failed == 0)); then
-    echo "All checks passed."
+section 8 "no lease covers the files this branch changes"
+# Blocking: a lease says its holder is still editing those paths, so merging
+# them now splits their work in two.
+lease="$current/script/lease"
+if [[ ! -x "$lease" ]]; then
+    note "script/lease is missing; cannot check leases"
+elif ! git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null; then
+    note "origin/main is unknown here; nothing to compare against"
 else
-    echo "Some checks failed. Resolve them before merging, tagging, or releasing." >&2
+    changed=$(git diff --name-only origin/main...HEAD)
+    if [[ -z "$changed" ]]; then
+        pass "this branch changes nothing relative to origin/main"
+    elif conflicts=$("$lease" check --range "origin/main...HEAD" 2>&1); then
+        pass "no other thread leases its $(printf '%s\n' "$changed" | grep -c .) changed file(s)"
+    else
+        blocked_by "another thread leases files this branch changes"
+        while IFS= read -r line; do note "$line"; done <<< "$conflicts"
+        note "Merge once they release it: script/lease status"
+    fi
 fi
-exit "$failed"
+
+section 9 "the build lock is free"
+# Blocking with --release: a release build must not share target dirs with a
+# run someone started. Advisory otherwise, where no build is being made here.
+build_state=""
+if [[ ! -x "$lease" ]]; then
+    note "script/lease is missing; cannot check the build lock"
+elif build_state=$("$lease" check --build 2>&1); then
+    pass "nobody holds it"
+elif [[ "$release" == true ]]; then
+    blocked_by "the build lock is held"
+    while IFS= read -r line; do note "$line"; done <<< "$build_state"
+else
+    warn "the build lock is held"
+    while IFS= read -r line; do note "$line"; done <<< "$build_state"
+fi
+
+section 10 "commit hooks are enabled"
+# Advisory: without them the main-checkout guard and the lease check only run
+# when someone remembers to run them.
+hooks_path=$(git config --get core.hooksPath 2>/dev/null || true)
+if [[ "$hooks_path" == ".githooks" ]]; then
+    pass "core.hooksPath=.githooks"
+else
+    warn "core.hooksPath is ${hooks_path:-unset}, so the commit guards do not run"
+    note "Enable them once per clone: script/setup-hooks"
+fi
+
+printf '\n'
+if ((blocked)); then
+    echo "Blocking problems above; do not merge, tag, or release until they are fixed." >&2
+    exit 1
+fi
+if ((warned)); then
+    echo "Nothing blocking; $warned warning(s) above are cleanup debt."
+else
+    echo "All checks passed."
+fi
+exit 0
