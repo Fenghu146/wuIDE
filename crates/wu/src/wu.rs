@@ -103,7 +103,8 @@ use wu_actions::{
     OpenProjectTasks, OpenServerSettings, OpenSettingsFile, OpenWuUrl, Quit,
 };
 
-const DOCS_URL: &str = "https://wu.dstrml.org/docs";
+/// Where the fork keeps its documentation: the repository's `docs` directory.
+pub(crate) const DOCS_URL: &str = "https://github.com/Fenghu146/wuIDE/tree/main/docs";
 
 actions!(
     wu,

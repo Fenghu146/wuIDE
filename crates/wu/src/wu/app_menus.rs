@@ -344,7 +344,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     t!("Documentation"),
                     super::OpenBrowser {
-                        url: "https://wu.dstrml.org/docs".into(),
+                        url: super::DOCS_URL.into(),
                     },
                 ),
                 MenuItem::action(
