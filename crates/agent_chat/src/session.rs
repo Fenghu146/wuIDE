@@ -4967,6 +4967,49 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
+    async fn loading_a_long_saved_list_archives_the_old_chats(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let now = now();
+        let write = |id: &str, age_days: i64, pinned: bool| {
+            let mut metadata = SessionMetadata::new(
+                AgentKind::Claude,
+                directory.path().to_path_buf(),
+                RunSettings::default(),
+            );
+            metadata.id = id.to_string();
+            metadata.title = format!("chat {id}");
+            metadata.updated_at = now - age_days * DAY;
+            metadata.pinned = pinned;
+            std::fs::write(
+                metadata_path(directory.path(), id),
+                serde_json::to_vec(&metadata).expect("metadata serializes"),
+            )
+            .expect("metadata is written");
+        };
+        for index in 0..30 {
+            write(&format!("old-{index}"), 31 + index, false);
+        }
+        write("fresh", 0, false);
+        write("pinned", 60, true);
+
+        let store = new_store(directory.path(), cx);
+        cx.run_until_parked();
+
+        store.read_with(cx, |store, cx| {
+            let archived = store.last_auto_archive();
+            assert_eq!(archived.len(), 30, "the 30 stale chats are archived");
+            assert!(!archived.iter().any(|id| id == "fresh" || id == "pinned"));
+            let saved: Vec<_> = store
+                .sessions_in(&[directory.path().to_path_buf()], cx)
+                .into_iter()
+                .filter(|session| session.archived_at.is_some())
+                .collect();
+            assert_eq!(saved.len(), 30);
+            assert!(saved.iter().all(|session| session.auto_archived));
+        });
+    }
+
+    #[gpui::test]
     async fn compacting_label_follows_the_agent(cx: &mut TestAppContext) {
         let directory = tempfile::tempdir().expect("temporary directory");
         let store = new_store(directory.path(), cx);
