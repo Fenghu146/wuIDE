@@ -1120,5 +1120,12 @@
   "setting value|Warning": "警告",
   "setting value|With Arguments": "带参数",
   "setting value|Wrapped": "按换行",
-  "setting value|X-High": "超高"
+  "setting value|X-High": "超高",
+  "Chat List": "对话列表",
+  "Auto-Archive": "自动归档",
+  "Move chats you haven't used for a while to Archived, where they stay one click away. Pinned chats are never archived.": "很久没用的对话会移到「已归档」，随时可以点开。置顶的对话不会被归档。",
+  "Auto-Archive After": "自动归档时间",
+  "Days without a new message before a chat is archived. Between 7 and 365.": "对话有多少天没有新消息后会被归档。取值 7 到 365。",
+  "Smart Titles": "智能标题",
+  "Name each new chat with your agent after its first reply. This sends one request through your agent and counts against your plan; it usually takes 2–10 seconds, and if it fails the title from your first message stays. Right-click a chat to rename it with your agent once.": "对话第一轮回复结束后，用你的智能体给它起个名字。这会通过你的智能体发起一次请求，计入你的套餐额度；通常需要 2–10 秒，失败时保留首条消息生成的标题。也可以右键某条对话，单次让智能体重命名。"
 }

@@ -20,10 +20,22 @@ use std::{
 };
 use util::ResultExt as _;
 
-use crate::{AgentChatSettings, AgentKind};
+use crate::{AgentChatSettings, AgentKind, commit_message};
 
 const FIRST_MESSAGE_TITLE_CHARS: usize = 20;
 const AGENT_TITLE_CHARS: usize = 60;
+/// The words of a first message that a title keeps.
+const TITLE_LABEL_CHARS: usize = 24;
+/// The file hint a title puts before the words, such as `src/order.rs`.
+const TITLE_FILE_CHARS: usize = 18;
+/// A title never grows past this, file hint and words together.
+const TITLE_CHARS: usize = 36;
+const SMART_TITLE_TIMEOUT: Duration = Duration::from_secs(20);
+const SMART_TITLE_CONTEXT_CHARS: usize = 1_200;
+/// Below this many visible chats, archiving would hide more than it tidies.
+const AUTO_ARCHIVE_MIN_TOTAL: usize = 30;
+const AUTO_ARCHIVE_MAX_BATCH: usize = 50;
+const AUTO_ARCHIVE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const TOOL_OUTPUT_MAX_CHARS: usize = 200_000;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -145,6 +157,160 @@ fn agent_title(text: &str) -> String {
     shortened_title(text, AGENT_TITLE_CHARS)
 }
 
+/// Where a chat's title came from. A title keeps its source so that a name the
+/// user typed is never replaced, and so that an upgrade can tell the titles it
+/// made itself from the ones it inherits from saved chats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleSource {
+    /// Shortened from the first message; free to replace.
+    Auto,
+    /// Written by the agent or by a model the user asked for.
+    Agent,
+    /// Typed by the user; never replaced.
+    User,
+}
+
+/// A chat's first title: the files it points at, then the words the user typed.
+///
+/// The words come from the composer before its chips expand, so a chat that
+/// starts with the project digest or a code selection is named after what the
+/// user asked, not after the context that went with it.
+fn title_for_prompt(prompt: &Prompt) -> String {
+    let source = prompt.title_hint.as_deref().unwrap_or(prompt.text.as_str());
+    let (words, mut files) = split_references(source);
+    if files.is_empty() {
+        files.extend(prompt.attachments.iter().filter_map(|path| file_hint(path)));
+    }
+    let label = shortened_title(&words, TITLE_LABEL_CHARS);
+    let file = files.first().cloned().unwrap_or_default();
+    let title = match (file.is_empty(), label.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => label,
+        (false, true) => file,
+        (false, false) => format!("{file} · {label}"),
+    };
+    shortened_title(&title, TITLE_CHARS)
+}
+
+/// Splits a composer message into the words worth naming a chat after and the
+/// files it points at. Chips in a composer message are `@` tokens, such as
+/// `@crates/store/src/order.rs L1-L20`, `@diag path:12:4 -`, `@digest 20` or
+/// `@diagnostics 3 #7`; everything else is the user's own text.
+fn split_references(text: &str) -> (String, Vec<String>) {
+    let mut words = Vec::new();
+    let mut files: Vec<String> = Vec::new();
+    let mut parts = text.split_whitespace().peekable();
+    while let Some(part) = parts.next() {
+        let Some(token) = part.strip_prefix('@') else {
+            words.push(part);
+            continue;
+        };
+        let file = match token {
+            "digest" | "diagnostics" => {
+                parts.next();
+                None
+            }
+            "diag" => {
+                let path = parts.next().unwrap_or_default();
+                let path = path.split(':').next().unwrap_or(path);
+                parts.next();
+                path_hint(path)
+            }
+            _ if token.contains('.') || token.contains('/') || token.contains('\\') => {
+                // A selection chip carries its line range as the next word.
+                if parts.peek().is_some_and(|next| is_line_range(next)) {
+                    parts.next();
+                }
+                path_hint(token)
+            }
+            _ => {
+                words.push(part);
+                continue;
+            }
+        };
+        if let Some(file) = file
+            && !files.contains(&file)
+        {
+            files.push(file);
+        }
+    }
+    (words.join(" "), files)
+}
+
+fn is_line_range(word: &str) -> bool {
+    let Some((start, end)) = word.strip_prefix('L').and_then(|rest| rest.split_once("-L"))
+    else {
+        return false;
+    };
+    start.parse::<u32>().is_ok_and(|start| start > 0) && end.parse::<u32>().is_ok_and(|end| end > 0)
+}
+
+/// The last two segments of a path, such as `src/order.rs`, which is long enough
+/// to mean something and short enough to lead a title.
+fn file_hint(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    let parent = path
+        .parent()
+        .and_then(Path::file_name)
+        .map(|parent| parent.to_string_lossy());
+    let hint = match parent {
+        Some(parent) if name.chars().count() < TITLE_FILE_CHARS => {
+            format!("{parent}/{name}")
+        }
+        _ => name.into_owned(),
+    };
+    let hint = shortened_title(&hint, TITLE_FILE_CHARS);
+    (!hint.is_empty()).then_some(hint)
+}
+
+fn path_hint(path: &str) -> Option<String> {
+    file_hint(Path::new(path))
+}
+
+/// The request a smart title sends: the first question, the first reply and the
+/// files the chat already names, each clipped so the call stays small.
+fn smart_title_prompt(question: &str, reply: &str) -> String {
+    let question = clip_chars(&agent_harness::view::single_line(question), SMART_TITLE_CONTEXT_CHARS);
+    let reply = clip_chars(&agent_harness::view::single_line(reply), SMART_TITLE_CONTEXT_CHARS);
+    format!(
+        "Name this chat. Reply with the title only: one line, at most 24 characters, \
+         no quotes and no closing period. Name what the user is trying to do, not the files.\n\n\
+         User: {question}\n\nAssistant: {reply}"
+    )
+}
+
+/// The first non-empty line of a model's reply, without the quoting models like
+/// to wrap a title in.
+fn clean_title(reply: &str) -> String {
+    let line = reply
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let line = line
+        .strip_prefix("Title:")
+        .or_else(|| line.strip_prefix("标题："))
+        .unwrap_or(line);
+    line.trim_matches(|character: char| {
+        matches!(
+            character,
+            '#' | '*' | '"' | '\'' | '`' | '「' | '」' | '。' | ':' | '：'
+        )
+    })
+    .trim()
+    .to_string()
+}
+
+fn clip_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut clipped: String = text.chars().take(max_chars).collect();
+    clipped.push('…');
+    clipped
+}
+
 fn shortened_title(text: &str, max_chars: usize) -> String {
     let line = agent_harness::view::single_line(text);
     if line.chars().count() <= max_chars {
@@ -215,6 +381,10 @@ pub struct SessionMetadata {
     pub id: String,
     pub kind: AgentKind,
     pub title: String,
+    /// Who wrote `title`. `None` marks a chat saved before titles had a source,
+    /// which no automatic rule may rename.
+    #[serde(default)]
+    pub title_source: Option<TitleSource>,
     pub cwd: PathBuf,
     pub created_at: i64,
     pub updated_at: i64,
@@ -239,6 +409,12 @@ pub struct SessionMetadata {
     pub outcome: Option<ChatOutcome>,
     #[serde(default)]
     pub unseen: bool,
+    /// When the chat was archived; `None` while it shows in the list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<i64>,
+    /// Archived by the time rule rather than by hand, so it can be undone as a batch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_archived: bool,
     #[serde(default)]
     pub project_root: Option<PathBuf>,
     #[serde(default)]
@@ -255,6 +431,7 @@ impl SessionMetadata {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
             title: String::new(),
+            title_source: Some(TitleSource::Auto),
             cwd,
             created_at,
             updated_at: created_at,
@@ -268,6 +445,8 @@ impl SessionMetadata {
             fork_source: None,
             outcome: None,
             unseen: false,
+            archived_at: None,
+            auto_archived: false,
             project_root: None,
             branch: None,
             dropped_prompt: None,
@@ -295,6 +474,9 @@ pub struct Prompt {
     pub text: String,
     pub attachments: Vec<PathBuf>,
     pub skills: Vec<SkillRef>,
+    /// What the user typed before the composer's chips expanded into `text`, so
+    /// a chat can be named after the question instead of its context.
+    pub title_hint: Option<String>,
 }
 
 impl Prompt {
@@ -315,6 +497,9 @@ impl Prompt {
                 self.text.push_str("\n\n");
             }
             self.text.push_str(&other.text);
+        }
+        if self.title_hint.is_none() {
+            self.title_hint = other.title_hint;
         }
         self.attachments.extend(other.attachments);
         self.skills.extend(other.skills);
@@ -438,6 +623,7 @@ impl From<SavedPrompt> for Prompt {
             text: saved.text,
             attachments: saved.attachments,
             skills: saved.skills,
+            title_hint: None,
         }
     }
 }
@@ -1251,11 +1437,14 @@ impl AgentSession {
             text: text.to_string(),
             attachments: attachments.clone(),
             skills: skills.clone(),
+            title_hint: None,
         };
         self.transcript.entries.truncate(index);
         self.transcript.text_block_open = false;
         self.metadata.dropped_prompt = self.editable_prompt.take();
-        if self.last_user_index().is_none() && self.metadata.title == title_from(&prompt.text) {
+        // The first message is on its way back to the composer, so its title goes with it.
+        if self.last_user_index().is_none() && self.metadata.title_source == Some(TitleSource::Auto)
+        {
             self.metadata.title.clear();
         }
         self.save_metadata(cx);
@@ -1286,6 +1475,7 @@ impl AgentSession {
             text: text.to_string(),
             attachments: attachments.clone(),
             skills: skills.clone(),
+            title_hint: None,
         };
         let notices = self.transcript.entries[index + 1..]
             .iter()
@@ -1329,7 +1519,12 @@ impl AgentSession {
             self.restart_on_next_send = false;
         }
         if self.metadata.title.is_empty() {
-            self.metadata.title = title_from(&prompt.text);
+            self.metadata.title = if prompt.title_hint.is_some() {
+                title_for_prompt(&prompt)
+            } else {
+                title_from(&prompt.text)
+            };
+            self.metadata.title_source = Some(TitleSource::Auto);
         }
         self.transcript.push_user(
             prompt.text.clone(),
@@ -1860,6 +2055,9 @@ impl AgentSession {
                     }
                 }
                 self.touch(cx);
+                if status == DoneStatus::Completed {
+                    self.request_smart_title(false, cx);
+                }
                 if status != DoneStatus::Interrupted {
                     self.send_next_queued(cx);
                 }
@@ -2100,15 +2298,7 @@ impl AgentSession {
 
     /// Replaces the title taken from the first message, but never one the user typed.
     fn adopt_agent_title(&mut self, title: &str, cx: &mut Context<Self>) {
-        let first_prompt = self
-            .transcript
-            .entries
-            .iter()
-            .find_map(|entry| match entry {
-                Entry::User { text, .. } => Some(text),
-                _ => None,
-            });
-        if !first_prompt.is_some_and(|text| self.metadata.title == title_from(text)) {
+        if self.metadata.title_source != Some(TitleSource::Auto) {
             return;
         }
         let title = agent_title(title);
@@ -2116,7 +2306,88 @@ impl AgentSession {
             return;
         }
         self.metadata.title = title;
+        self.metadata.title_source = Some(TitleSource::Agent);
         self.save_metadata(cx);
+    }
+
+    /// Asks the agent for a title once a chat's first turn ends, when the user
+    /// turned smart titles on. A failure leaves the title from the first message.
+    /// The menu can ask for one rename at a time, whatever the setting says.
+    pub(crate) fn request_smart_title(&mut self, manual: bool, cx: &mut Context<Self>) {
+        let replaceable = match self.metadata.title_source {
+            Some(TitleSource::User) => false,
+            Some(TitleSource::Auto) => true,
+            // A name the agent wrote, or one saved before titles had a source,
+            // changes only when the user asks for it.
+            Some(TitleSource::Agent) | None => manual,
+        };
+        if !replaceable || (!manual && !AgentChatSettings::get_global(cx).smart_titles) {
+            return;
+        }
+        let mut prompts = self.transcript.entries.iter().filter_map(|entry| match entry {
+            Entry::User { text, .. } => Some(text),
+            _ => None,
+        });
+        let Some(question) = prompts.next() else {
+            return;
+        };
+        if !manual && prompts.next().is_some() {
+            return;
+        }
+        let reply = self
+            .transcript
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                Entry::Assistant { markdown, .. } => Some(markdown.read(cx).source().to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let prompt = smart_title_prompt(question, &reply);
+        let kind = self.metadata.kind;
+        let harness = self.harness.clone();
+        let cwd = self.metadata.cwd.clone();
+        let model = self.metadata.settings.model.clone();
+        let work = spawn_agent_work(cx, async move {
+            commit_message::run_once(kind, harness, model, prompt, cwd).await
+        });
+        cx.spawn(async move |this, cx| {
+            let timer = cx.background_executor().timer(SMART_TITLE_TIMEOUT);
+            let reply = match futures::future::select(Box::pin(work), Box::pin(timer)).await {
+                futures::future::Either::Left((Ok(Ok(reply)), _)) => Some(reply),
+                futures::future::Either::Left((Ok(Err(error)), _)) => {
+                    log::info!("smart title unavailable: {error}");
+                    None
+                }
+                futures::future::Either::Left((Err(error), _)) => {
+                    log::info!("smart title unavailable: {error}");
+                    None
+                }
+                futures::future::Either::Right(_) => {
+                    log::info!("smart title timed out");
+                    None
+                }
+            };
+            let Some(reply) = reply else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                let title = agent_title(&clean_title(&reply));
+                let replaceable = match this.metadata.title_source {
+                    Some(TitleSource::User) => false,
+                    Some(TitleSource::Auto) => true,
+                    Some(TitleSource::Agent) | None => manual,
+                };
+                if title.is_empty() || !replaceable {
+                    return;
+                }
+                this.metadata.title = title;
+                this.metadata.title_source = Some(TitleSource::Agent);
+                this.save_metadata(cx);
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     fn set_native_session_id(&mut self, session_id: String, cx: &mut Context<Self>) {
@@ -2216,6 +2487,8 @@ pub struct SessionSummary {
     pub side_chat: bool,
     pub outcome: Option<ChatOutcome>,
     pub unseen: bool,
+    pub archived_at: Option<i64>,
+    pub auto_archived: bool,
     pub project_root: PathBuf,
     pub branch: Option<String>,
     pub native_session_id: Option<String>,
@@ -2268,6 +2541,9 @@ impl ChatListPrefs {
 pub enum StoreEvent {
     SessionFinished { id: String, errored: bool },
     SessionNeedsInput { id: String },
+    /// The time rule archived these chats; the list offers to undo them.
+    AutoArchived { ids: Vec<String> },
+    AutoArchiveUndone,
 }
 
 fn chat_list_path(directory: &Path) -> PathBuf {
@@ -2436,6 +2712,41 @@ impl Global for GlobalAgentStore {}
 
 impl EventEmitter<StoreEvent> for AgentStore {}
 
+/// The chats the time rule archives: nothing written in for `days`, not pinned,
+/// named, or in use, and only while the list is long enough to need tidying.
+///
+/// This reads metadata alone, so a sweep never opens a chat's transcript.
+fn auto_archive_candidates(
+    sessions: &[SessionMetadata],
+    now: i64,
+    days: u32,
+    busy: &HashSet<String>,
+) -> Vec<String> {
+    let cutoff = now - i64::from(days) * 86_400;
+    let mut old: Vec<&SessionMetadata> = sessions
+        .iter()
+        .filter(|metadata| {
+            metadata.archived_at.is_none()
+                && !metadata.pinned
+                && !metadata.title.is_empty()
+                && !busy.contains(&metadata.id)
+                && metadata.updated_at <= cutoff
+        })
+        .collect();
+    let visible = sessions
+        .iter()
+        .filter(|metadata| metadata.archived_at.is_none())
+        .count();
+    if visible < AUTO_ARCHIVE_MIN_TOTAL {
+        return Vec::new();
+    }
+    old.sort_by_key(|metadata| metadata.updated_at);
+    old.into_iter()
+        .take(AUTO_ARCHIVE_MAX_BATCH)
+        .map(|metadata| metadata.id.clone())
+        .collect()
+}
+
 /// Owns every live chat, so an agent keeps running after its tab is closed.
 pub struct AgentStore {
     directory: Arc<Path>,
@@ -2459,6 +2770,10 @@ pub struct AgentStore {
     load_task: Option<Shared<Task<()>>>,
     agent_updates: HashMap<AgentKind, AgentUpdate>,
     idle_sleep_guard: Option<Task<()>>,
+    /// The chats the time rule archived since the app started, so the list can
+    /// offer to undo them.
+    last_auto_archive: Vec<String>,
+    auto_archive_task: Option<Task<()>>,
 }
 
 #[derive(Clone)]
@@ -2729,16 +3044,33 @@ impl AgentStore {
             load_task: None,
             agent_updates: HashMap::default(),
             idle_sleep_guard: None,
+            last_auto_archive: Vec::new(),
+            auto_archive_task: None,
         };
         cx.observe_self(|store, cx| store.update_idle_sleep_guard(cx)).detach();
         cx.observe_global::<settings::SettingsStore>(|store, cx| {
-            store.update_idle_sleep_guard(cx)
+            store.update_idle_sleep_guard(cx);
+            // Turning the rule on, or shortening its window, should take effect now.
+            store.auto_archive_sweep(cx);
         })
         .detach();
         if AgentChatSettings::get_global(cx).enabled {
             store.load_saved_chats(cx);
         }
+        store.watch_auto_archive(cx);
         store
+    }
+
+    /// Runs the time rule every few hours, so chats age out whether or not the
+    /// panel is open. The first run happens when the saved chats finish loading.
+    fn watch_auto_archive(&mut self, cx: &mut Context<Self>) {
+        self.auto_archive_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(AUTO_ARCHIVE_INTERVAL).await;
+                this.update(cx, |this, cx| this.auto_archive_sweep(cx))
+                    .log_err();
+            }
+        }));
     }
 
     fn has_agent_working_unattended(&self, cx: &App) -> bool {
@@ -2814,6 +3146,7 @@ impl AgentStore {
                         }
                     }
                     this.sort();
+                    this.auto_archive_sweep(cx);
                     cx.notify();
                 })
                 .log_err();
@@ -3406,6 +3739,8 @@ impl AgentStore {
                     side_chat: metadata.side_chat,
                     outcome: metadata.outcome,
                     unseen: metadata.unseen,
+                    archived_at: metadata.archived_at,
+                    auto_archived: metadata.auto_archived,
                     project_root: metadata.project_root().to_path_buf(),
                     branch: metadata.branch.clone(),
                     native_session_id: metadata.native_session_id.clone(),
@@ -3535,7 +3870,71 @@ impl AgentStore {
         if title.is_empty() {
             return;
         }
-        self.update_session_metadata(id, |metadata| metadata.title = title, cx);
+        self.update_session_metadata(
+            id,
+            |metadata| {
+                metadata.title = title;
+                metadata.title_source = Some(TitleSource::User);
+            },
+            cx,
+        );
+    }
+
+    /// Hides a chat from the list without deleting it. `auto` marks a chat the
+    /// time rule archived, which the list offers to undo as one batch.
+    pub fn set_archived(&mut self, id: &str, archived: bool, auto: bool, cx: &mut Context<Self>) {
+        let at = archived.then(now);
+        self.update_session_metadata(
+            id,
+            |metadata| {
+                metadata.archived_at = at;
+                metadata.auto_archived = archived && auto;
+            },
+            cx,
+        );
+    }
+
+    /// The chats the time rule archived since the app started, newest batch only.
+    pub fn last_auto_archive(&self) -> &[String] {
+        &self.last_auto_archive
+    }
+
+    pub fn undo_auto_archive(&mut self, cx: &mut Context<Self>) {
+        let ids = std::mem::take(&mut self.last_auto_archive);
+        for id in ids {
+            self.set_archived(&id, false, false, cx);
+        }
+        cx.emit(StoreEvent::AutoArchiveUndone);
+        cx.notify();
+    }
+
+    /// Archives chats nobody has written in for a while, so a long list stays
+    /// readable without hiding anything the user pinned, named or is using.
+    pub fn auto_archive_sweep(&mut self, cx: &mut Context<Self>) {
+        let settings = AgentChatSettings::get_global(cx);
+        if !settings.auto_archive {
+            return;
+        }
+        let days = settings.auto_archive_days;
+        let busy: HashSet<String> = self
+            .live
+            .iter()
+            .filter(|(_, session)| {
+                let session = session.read(cx);
+                session.is_working() || !session.pending_questions.is_empty()
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        let ids = auto_archive_candidates(&self.sessions, now(), days, &busy);
+        if ids.is_empty() {
+            return;
+        }
+        for id in &ids {
+            self.set_archived(id, true, true, cx);
+        }
+        self.last_auto_archive = ids.clone();
+        cx.emit(StoreEvent::AutoArchived { ids });
+        cx.notify();
     }
 
     pub fn set_pinned(&mut self, id: &str, pinned: bool, cx: &mut Context<Self>) {
@@ -3588,6 +3987,7 @@ impl AgentStore {
                     SIDE_CHAT_NOTICE
                 } else {
                     metadata.title = fork_title(&parent_metadata.title, &this.sessions);
+                    metadata.title_source = Some(TitleSource::Agent);
                     FORKED_NOTICE
                 };
                 let notice = i18n::format(
@@ -3669,6 +4069,7 @@ impl AgentStore {
                 let mut metadata =
                     SessionMetadata::new(kind, cwd, this.new_chat_settings(kind, cx));
                 metadata.title = agent_title(&external.title);
+                metadata.title_source = Some(TitleSource::Agent);
                 metadata.fork_source = Some(external.id);
                 let session =
                     this.insert_session(metadata, SavedTranscript::EntriesOnly(Vec::new()), cx);
@@ -4434,11 +4835,14 @@ pub(crate) mod tests {
                 .transcript
                 .push_user(prompt.into(), Vec::new(), Vec::new());
             session.metadata.title = title_from(prompt);
+            session.metadata.title_source = Some(TitleSource::Auto);
             session.apply_event(title_changed("Fix double login redirect"), cx);
             assert_eq!(session.metadata.title, "Fix double login redirect");
+            assert_eq!(session.metadata.title_source, Some(TitleSource::Agent));
             session.apply_event(title_changed("Something else"), cx);
             assert_eq!(session.metadata.title, "Fix double login redirect");
             session.metadata.title = title_from(prompt);
+            session.metadata.title_source = Some(TitleSource::Auto);
             session.metadata.id.clone()
         });
         store.update(cx, |store, cx| {
@@ -4448,6 +4852,118 @@ pub(crate) mod tests {
             session.apply_event(title_changed("Fix double login redirect"), cx);
             assert_eq!(session.metadata.title, "Login bug");
         });
+    }
+
+    #[test]
+    fn a_first_message_names_a_chat_after_its_files_and_words() {
+        let prompt = Prompt {
+            text: "选中代码：`crates/store/src/order.rs` L1-L20（共 20 行）\n\nfn main() {}".into(),
+            title_hint: Some("@crates/store/src/order.rs L1-L20 解释这段代码".into()),
+            ..Default::default()
+        };
+        assert_eq!(title_for_prompt(&prompt), "src/order.rs · 解释这段代码");
+    }
+
+    #[test]
+    fn a_project_digest_on_its_own_names_nothing() {
+        let prompt = Prompt {
+            text: "项目摘要 · 20 文件\n\ncrates/store/src/order.rs\ncrates/store/src/cart.rs".into(),
+            title_hint: Some("@digest 20".into()),
+            ..Default::default()
+        };
+        assert_eq!(title_for_prompt(&prompt), "");
+    }
+
+    #[test]
+    fn an_attachment_names_a_chat_that_has_no_file_chip() {
+        let prompt = Prompt {
+            text: "看看这个".into(),
+            attachments: vec![PathBuf::from("/w/src/store/order.rs")],
+            title_hint: Some("看看这个".into()),
+            ..Default::default()
+        };
+        assert_eq!(title_for_prompt(&prompt), "store/order.rs · 看看这个");
+    }
+
+    fn auto_archive_metadata(id: &str, title: &str, updated_at: i64) -> SessionMetadata {
+        let mut metadata =
+            SessionMetadata::new(AgentKind::Claude, PathBuf::from("/w"), RunSettings::default());
+        metadata.id = id.to_string();
+        metadata.title = title.to_string();
+        metadata.updated_at = updated_at;
+        metadata
+    }
+
+    const DAY: i64 = 86_400;
+
+    #[test]
+    fn the_time_rule_archives_old_chats_but_never_pinned_empty_or_busy_ones() {
+        let now = 1_700_000_000;
+        let mut sessions = Vec::new();
+        for index in 0..31 {
+            sessions.push(auto_archive_metadata(
+                &format!("old-{index}"),
+                "chat",
+                now - 31 * DAY,
+            ));
+        }
+        let mut pinned = auto_archive_metadata("pinned", "chat", now - 400 * DAY);
+        pinned.pinned = true;
+        sessions.push(pinned);
+        sessions.push(auto_archive_metadata("empty", "", now - 400 * DAY));
+        sessions.push(auto_archive_metadata("fresh", "chat", now - 5 * DAY));
+        sessions.push(auto_archive_metadata("working", "chat", now - 400 * DAY));
+        let mut archived = auto_archive_metadata("already", "chat", now - 400 * DAY);
+        archived.archived_at = Some(now - DAY);
+        sessions.push(archived);
+
+        let busy: HashSet<String> = ["working".to_string()].into_iter().collect();
+        let ids = auto_archive_candidates(&sessions, now, 30, &busy);
+
+        assert_eq!(ids.len(), 31);
+        for skipped in ["pinned", "empty", "fresh", "working", "already"] {
+            assert!(
+                !ids.iter().any(|id| id.as_str() == skipped),
+                "{skipped} was archived"
+            );
+        }
+        assert!(ids.iter().any(|id| id == "old-0"));
+    }
+
+    #[test]
+    fn the_time_rule_waits_until_the_list_is_long_enough() {
+        let now = 1_700_000_000;
+        let sessions: Vec<SessionMetadata> = (0..29)
+            .map(|index| {
+                auto_archive_metadata(&format!("chat-{index}"), "chat", now - 90 * DAY)
+            })
+            .collect();
+        assert!(auto_archive_candidates(&sessions, now, 30, &HashSet::default()).is_empty());
+
+        let mut sessions = sessions;
+        sessions.push(auto_archive_metadata("fresh", "chat", now - DAY));
+        assert_eq!(
+            auto_archive_candidates(&sessions, now, 30, &HashSet::default()).len(),
+            29
+        );
+    }
+
+    #[test]
+    fn the_time_rule_archives_the_oldest_chats_first() {
+        let now = 1_700_000_000;
+        let sessions: Vec<SessionMetadata> = (0..60)
+            .map(|index| {
+                auto_archive_metadata(
+                    &format!("chat-{index:02}"),
+                    "chat",
+                    now - (40 + i64::from(index)) * DAY,
+                )
+            })
+            .collect();
+        let ids = auto_archive_candidates(&sessions, now, 30, &HashSet::default());
+        assert_eq!(ids.len(), AUTO_ARCHIVE_MAX_BATCH);
+        assert_eq!(ids.first().map(String::as_str), Some("chat-59"));
+        assert!(!ids.iter().any(|id| id == "chat-00"));
     }
 
     #[gpui::test]

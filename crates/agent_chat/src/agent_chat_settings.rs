@@ -31,6 +31,11 @@ pub struct AgentChatSettings {
     pub confirm_quit_while_working: bool,
     pub prevent_idle_sleep: bool,
     pub claude_in_chrome: bool,
+    /// Move chats nobody has written in for `auto_archive_days` to Archived.
+    pub auto_archive: bool,
+    pub auto_archive_days: u32,
+    /// Ask the agent to name a chat after its first reply, which costs a request.
+    pub smart_titles: bool,
     pub commit_message: CommitMessageSettings,
 }
 
@@ -122,6 +127,9 @@ impl Settings for AgentChatSettings {
             confirm_quit_while_working: content.confirm_quit_while_working.unwrap_or(true),
             prevent_idle_sleep: content.prevent_idle_sleep.unwrap_or(true),
             claude_in_chrome: content.claude_in_chrome.unwrap_or(true),
+            auto_archive: content.auto_archive.unwrap_or(true),
+            auto_archive_days: content.auto_archive_days.unwrap_or(30).clamp(7, 365),
+            smart_titles: content.smart_titles.unwrap_or(false),
             commit_message: {
                 let commit_message = content.commit_message.unwrap_or_default();
                 CommitMessageSettings {

@@ -107,6 +107,7 @@ pub(crate) fn watch(store: &Entity<AgentStore>, cx: &mut App) {
             StoreEvent::SessionNeedsInput { id } => {
                 (id.clone(), Sound::Input, t!("Waiting on your input"))
             }
+            StoreEvent::AutoArchived { .. } | StoreEvent::AutoArchiveUndone => return,
         };
         let Some(metadata) = store
             .read(cx)

@@ -67,6 +67,7 @@ impl ChatView {
                 text: self.composer.read(cx).text(cx),
                 attachments: std::mem::take(&mut self.attachments),
                 skills: std::mem::take(&mut self.composer_skills),
+                title_hint: None,
             },
         };
         let Some(prompt) = self
@@ -130,6 +131,7 @@ impl ChatView {
             text: self.composer.read(cx).text(cx),
             attachments: std::mem::take(&mut self.attachments),
             skills: std::mem::take(&mut self.composer_skills),
+            title_hint: None,
         });
         self.set_composer_prompt(prompt, window, cx);
         window.focus(&self.composer.focus_handle(cx), cx);

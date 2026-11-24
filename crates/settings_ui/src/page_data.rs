@@ -8464,6 +8464,70 @@ fn agent_chat_page() -> SettingsPage {
         ]
     }
 
+    fn chat_list_section() -> [SettingsPageItem; 4] {
+        [
+            SettingsPageItem::SectionHeader(n!("Chat List")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Auto-Archive"),
+                description: n!(
+                    "Move chats you haven't used for a while to Archived, where they stay one click away. Pinned chats are never archived."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("agent_chat.auto_archive"),
+                    pick: |settings_content| {
+                        settings_content.agent_chat.as_ref()?.auto_archive.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.agent_chat.get_or_insert_default().auto_archive = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Auto-Archive After"),
+                description: n!(
+                    "Days without a new message before a chat is archived. Between 7 and 365."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("agent_chat.auto_archive_days"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent_chat
+                            .as_ref()?
+                            .auto_archive_days
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .agent_chat
+                            .get_or_insert_default()
+                            .auto_archive_days = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Smart Titles"),
+                description: n!(
+                    "Name each new chat with your agent after its first reply. This sends one request through your agent and counts against your plan; it usually takes 2–10 seconds, and if it fails the title from your first message stays. Right-click a chat to rename it with your agent once."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("agent_chat.smart_titles"),
+                    pick: |settings_content| {
+                        settings_content.agent_chat.as_ref()?.smart_titles.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.agent_chat.get_or_insert_default().smart_titles = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     SettingsPage {
         title: AGENT_CHAT_PAGE,
         items: concat_sections![
@@ -8474,7 +8538,8 @@ fn agent_chat_page() -> SettingsPage {
             context_section(),
             session_snapshots_section(),
             commit_message_section(),
-            notifications_section()
+            notifications_section(),
+            chat_list_section()
         ],
     }
 }

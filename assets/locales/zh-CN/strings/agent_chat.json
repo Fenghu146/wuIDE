@@ -257,5 +257,14 @@
   "{path} is larger than 24 MB": "{path} 超过 24 MB",
   "{seconds}s": "{seconds} 秒",
   "{used} / {total} tokens": "{used} / {total} 个 token",
-  "… {count} more lines": "… 还有 {count} 行"
+  "… {count} more lines": "… 还有 {count} 行",
+  "Archived": "已归档",
+  "Archive": "归档",
+  "Unarchive": "取消归档",
+  "Chat list options": "对话列表选项",
+  "Compact Rows": "紧凑行",
+  "Group by Project": "按项目分组",
+  "Rename with AI": "智能命名",
+  "Show All Projects": "显示所有项目",
+  "{count} chats were archived automatically": "{count} 条对话已自动归档"
 }

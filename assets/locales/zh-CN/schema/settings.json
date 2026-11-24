@@ -930,5 +930,8 @@
   "Width scales automatically with the buffer font size.": "宽度随缓冲区字号自动缩放。",
   "Window title template.\n\nAvailable variables are `${projectName}`, `${fileName}`,\n`${filePath}`, `${relativePath}`, `${fileStem}`, `${remoteName}`,\n`${remoteHost}`, `${appName}`, `${branch}`,\nand `${separator}`.\n`${separator}` is omitted when adjacent variables are empty,\nbut literal text is preserved.\nIf the template renders to nothing, the default template is used instead.\n\nDefault: `${projectName}${separator}${fileName}`": "窗口标题模板。\n\n可用变量有 `${projectName}`、`${fileName}`、\n`${filePath}`、`${relativePath}`、`${fileStem}`、`${remoteName}`、\n`${remoteHost}`、`${appName}`、`${branch}`\n和 `${separator}`。\n相邻变量为空时会省略 `${separator}`，\n但会保留普通文字。\n如果模板渲染结果为空，则使用默认模板。\n\n默认值：`${projectName}${separator}${fileName}`",
   "Year, month, day and time, like 2026-11-04 16:14:00.": "年、月、日和时间，例如 2026-11-04 16:14:00。",
-  "Yellow ANSI terminal color.": "ANSI 终端黄色。"
+  "Yellow ANSI terminal color.": "ANSI 终端黄色。",
+  "Move chats you haven't sent a message in for `auto_archive_days` days to Archived, where they stay one click away. Pinned chats are never archived.\n\nDefault: true": "超过 `auto_archive_days` 天没有新消息的对话会移到「已归档」，随时可以点开。置顶的对话不会被归档。\n\n默认值：true",
+  "How many days without a new message before a chat is archived. Between 7 and 365.\n\nDefault: 30": "对话有多少天没有新消息后会被归档。取值 7 到 365。\n\n默认值：30",
+  "Write each chat's title with your agent after its first reply. This sends one request through your agent and counts against your plan. If it fails, the title from your first message stays.\n\nDefault: false": "对话第一轮回复结束后，用你的智能体生成标题。这会通过你的智能体发起一次请求，计入你的套餐额度。失败时保留首条消息生成的标题。\n\n默认值：false"
 }

@@ -95,7 +95,9 @@ async fn small_model(candidate: &Candidate) -> Option<String> {
     }
 }
 
-async fn run_once(
+/// Runs one throwaway turn and returns the agent's last reply, which is how a
+/// commit message and a smart chat title are written.
+pub(crate) async fn run_once(
     kind: AgentKind,
     harness: Arc<dyn Harness>,
     model: Option<String>,
