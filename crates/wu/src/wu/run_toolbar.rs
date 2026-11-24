@@ -7,7 +7,7 @@
 
 use editor::Editor;
 use gpui::{
-    App, Context, Entity, EventEmitter, Focusable, Render, Subscription, WeakEntity, Window,
+    App, Context, EventEmitter, Focusable, Render, Subscription, WeakEntity, Window,
     prelude::*,
 };
 use i18n::t;
@@ -181,7 +181,9 @@ impl ToolbarItemView for RunToolbar {
 /// The run entry point in the status bar, so the run state stays visible even
 /// when the toolbar is scrolled out of the way.
 pub struct RunStatusItem {
-    active_editor: Option<Entity<Editor>>,
+    /// Weak, because the entry outlives the editor it was pointed at: a closed
+    /// file must not stay alive just because the status bar remembers it.
+    active_editor: Option<WeakEntity<Editor>>,
     _observation: Option<Subscription>,
 }
 
@@ -202,7 +204,11 @@ impl RunStatusItem {
 
 impl Render for RunStatusItem {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(editor) = self.active_editor.clone() else {
+        let Some(editor) = self
+            .active_editor
+            .as_ref()
+            .and_then(|editor| editor.upgrade())
+        else {
             return div().into_any_element();
         };
         let (can_run, is_running) = editor.update(cx, |editor, cx| {
@@ -255,11 +261,15 @@ impl workspace::StatusItemView for RunStatusItem {
         let Some(editor) = active_pane_item.and_then(|item| item.act_as::<Editor>(cx)) else {
             return;
         };
-        if self.active_editor.as_ref() == Some(&editor) {
+        if self
+            .active_editor
+            .as_ref()
+            .is_some_and(|active| active.entity_id() == editor.entity_id())
+        {
             return;
         }
         self._observation = Some(cx.observe_in(&editor, window, |_, _, _, cx| cx.notify()));
-        self.active_editor = Some(editor);
+        self.active_editor = Some(editor.downgrade());
         cx.notify();
     }
 
