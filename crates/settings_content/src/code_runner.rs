@@ -6,6 +6,12 @@ use settings_macros::{MergeFrom, with_fallible_options};
 /// Configuration for running and debugging the file in the editor with a
 /// single click, via the "Run Current File" and "Debug Current File" actions
 /// and the buttons on the editor tab.
+///
+/// On Windows the run step decodes the program's output as UTF-8, because the
+/// terminal only renders UTF-8. A program that writes something else — typically
+/// an MSVC build of GBK source files without `/utf-8` — shows garbled Chinese;
+/// give the compiler `/utf-8` instead. Build steps keep the console's own code
+/// page, so compiler messages that were written for it still read correctly.
 #[with_fallible_options]
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct CodeRunnerSettingsContent {

@@ -2,6 +2,11 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## Unreleased
+
+- Running a file on Windows no longer shows its Chinese output as GBK mojibake: the run step sets `[Console]::OutputEncoding` to UTF-8 before it starts the program, because PowerShell otherwise decodes the program's output with the console's code page; `chcp 65001` beforehand cannot fix it since .NET caches the encoding it started with.
+- A run step now expects UTF-8 output, so a program that writes GBK — typically MSVC built from GBK source files — shows garbled Chinese; compile it with `/utf-8`. Build steps keep the console's own code page, so compiler messages still read correctly.
+
 ## 1.4.6 - 2026-11-24
 
 - Run, Debug and Stop are now separate buttons in the editor's top-right toolbar, in the **Run** menu and in the status bar, instead of sitting on the file tab; `F5` debugs, `Ctrl-F5` or `Ctrl-Alt-N` runs the current file, and `Ctrl-Alt-M` stops it.
