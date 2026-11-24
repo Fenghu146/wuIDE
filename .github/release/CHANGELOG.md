@@ -2,6 +2,19 @@
 
 All notable user-facing changes to Wu are listed here, newest first.
 
+## 1.4.6 - 2026-11-24
+
+- Run, Debug and Stop are now separate buttons in the editor's top-right toolbar, in the **Run** menu and in the status bar, instead of sitting on the file tab; `F5` debugs, `Ctrl-F5` or `Ctrl-Alt-N` runs the current file, and `Ctrl-Alt-M` stops it.
+- Fix Run doing nothing at all: the task was scheduled through a window lookup that can never succeed from inside the window's own update, and the error was dropped; every run and debug entry point now uses the window the action already has.
+- C and C++ files without `main` compile their whole directory into a binary named after the directory, and a directory where nothing defines `main` says so instead of handing you a linker error; a CMake project configures, builds and then runs the binary the build produced.
+- Build and run are two separate executions now, so the step that fails carries its own exit code and a `file:line:col` you can click; a missing `gdb` greys out Debug and explains itself in its tooltip instead of covering the editor with a toast.
+- The product is **WuIDE** wherever you can see it: window title, About, menus, notifications, the installer and uninstaller display names, the macOS bundle name and the Linux `.desktop` entry.
+- A new app icon ships as a Windows `.ico` with seven sizes, is generated when macOS is packaged, and matches the Linux and website artwork, with a simplified drawing for 16–32 px; the agent's thinking animation and the component preview draw the same figure as one monochrome silhouette.
+- The Windows installer drops from 84.19 MiB to 69.71 MiB (−17.2%), and an install from 430.2 MiB to 347.8 MiB by unpacking 5,804 files instead of 16,214.
+- The installer now ships one `dsh-acp` per architecture, leaves type declarations, docs and source maps out of `node_modules`, compresses with `lzma2/ultra64`, and hard-links the CLI to the main binary so both share one copy.
+- **Keep Session Snapshots** in settings showed as off while snapshots were still being taken, because the default settings file had no entry for it.
+- DeepSeek no longer borrows OpenCode's icon, and Help → Documentation opens this repository's docs directory instead of the upstream site.
+
 ## 1.4.5 - 2026-11-23
 
 - Repository map: an edge now needs an API another file can name in the same language, so test modules, the icon enum and the `settings_content` files no longer crowd the top of the map.
