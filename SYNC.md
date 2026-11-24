@@ -55,6 +55,7 @@ git tag -a sync/upstream-$(git rev-parse --short upstream/main) -m 'Merged upstr
 | `script/bundle-linux` | 两边都在改打包流程 |
 | `Cargo.lock` | 必然冲突；冲突时删掉自己的那半，合并后跑 `cargo check` 让 Cargo 重算 |
 | `.github/release/CHANGELOG.md` | 两边都在顶部加条目 |
+| `crates/gpui/src/app/entity_map.rs` | 本分叉加了「首次租借位置」诊断（`EntityMap` 字段 + `lease`/`read`/`end_lease` 函数体 + panic 文案），上游同时在改这段；见下面「诊断手术单」 |
 
 `Cargo.lock` 冲突的处理：
 
@@ -62,6 +63,56 @@ git tag -a sync/upstream-$(git rev-parse --short upstream/main) -m 'Merged upstr
 git checkout --theirs Cargo.lock   # 或手工删掉冲突标记
 cargo check                        # 让 Cargo 重新解析
 ```
+
+## 诊断手术单：让 `first leased at` 指到调用点（暂不做）
+
+`fix/gpui-lease-diagnostics`（1.4.7）让双重租借的 panic 打印 `first leased at <file>:<line>`，
+但这一行现在总是 gpui 内部：
+
+| 调用 | 报出的位置 | 是什么 |
+| --- | --- | --- |
+| `entity.update(cx, ..)` | `crates/gpui/src/app.rs:2844` | `App::update_entity` 里的 `cx.entities.lease(handle)` |
+| `entity.update_in(cx, ..)` | `crates/gpui/src/app.rs:2844` | 同上：`VisualContext::update_window_entity` 最终仍走 `view.update(app, ..)` |
+| `entity.as_mut(cx)` | `crates/gpui/src/app.rs:3080` | `GpuiBorrow::new` 里的 `app.entities.lease(&inner)` |
+
+行号以 1.4.6/1.4.7 为准，同步上游后会漂，改的时候按函数名找。
+
+也就是说它能说明「是被 `update` / `as_mut` 借走的」，不能说明「是谁」。真正 abort 的那次（`stop_current_file`）
+是「在 `update` 里又 `read` 同一个实体」，而 `read` 报的正是外层 lease 的位置，缺的这半条信息只能靠 backtrace 补。
+
+**为什么停在内部行**：`#[track_caller]` 只在函数调用之间传播，**穿过闭包就断**
+（闭包没有隐藏的 caller 参数，`closure_track_caller` 至今未稳定）。`App::update_entity` 的形态是
+`self.update(|cx| { cx.entities.lease(handle) })`，所以 `Location::caller()` 取到的是闭包体那一行。
+2026-11-24 用 rustc 1.97.1 实测：同一调用链直接调报调用方行号，放进闭包调就报闭包体行号；
+只给 trait 方法声明加 `#[track_caller]`、impl 不加时，泛型转发也能拿到调用方行号。
+
+**处方**（做完后 `first leased at` 指向用户写 `entity.update(cx, ..)` 的那一行）：
+
+1. `crates/gpui/src/app/entity_map.rs`：给 `Entity::update`（:541）、`Entity::as_mut`（:551）、
+   `WeakEntity::update`（:852）加 `#[track_caller]`（做第 4 条时再加上 `Entity::update_in`:572、
+   `WeakEntity::update_in`:872）；给 `EntityMap` 加
+   `lease_at(pointer, location: &'static Location<'static>)`，`lease` 改成
+   `lease_at(pointer, Location::caller())`，`lease_locations` 存传进来的 location。
+2. `crates/gpui/src/gpui.rs`：给 trait 声明 `AppContext::update_entity`（:194）、`AppContext::as_mut`（:203）
+   加 `#[track_caller]`。impl 不用加（见上），除非 impl 里套了闭包。
+3. `crates/gpui/src/app.rs`：`App::update_entity`（:2838）和 `GpuiBorrow::new`（:3078）在进闭包**之前**
+   `let location = Location::caller();`，闭包内改用 `lease_at(handle, location)`。这是关键一步：
+   闭包拿不到 caller，只能在进闭包前取下来。
+4. `update_in` 要同样精确，得让每个 `VisualContext::update_window_entity` 的 impl 也照第 3 条办
+   （它们都在 `with_window(|window, app| view.update(app, ..))` 的闭包里转发）：
+   手写 impl 有 `async_context.rs:504`、`bench_context.rs:1078`、`test_context.rs:1112`；
+   另有宏生成的 `derive_visual_context.rs:37`（`#[derive(VisualContext)]`）和
+   `derive_app_context.rs:43`（`#[derive(AppContext)]`，当前只有 editor 的 `block_map.rs:320` 用）——改宏即可，不用改使用点。
+   只做 1-3 条就能覆盖 `update`，而真正让我们 abort 的那次（`stop_current_file`）走的就是 `update`，
+   所以 `update_in` 可以先不做。
+5. `crates/gpui/src/app/test_app.rs:135` 的 `TestApp::update_entity` 也套了闭包，测试里会报 `test_app.rs:135`；
+   测试辅助，不值得为它加管子，知道就行。
+
+**改完多拿到什么**：`first leased at` 直接指向发起 `update` / `as_mut` 的源码行，
+「`workspace.update` 里又 `read` workspace」这类 panic 一眼就能看出是谁先借走的，不必再符号化 backtrace。
+
+**代价**：`gpui.rs`、`app.rs`、`entity_map.rs` 都是上游高频改动的文件，每次 `script/sync-upstream` 都要重解一遍。
+只有第三次被「不知道是谁借走的」坑到、且 backtrace 不够用时再做。
 
 ## 上游的 Zed 同步 PR（不要合）
 

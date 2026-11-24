@@ -613,10 +613,21 @@ pub trait WeakItemHandle: Send + Sync {
 }
 
 impl dyn ItemHandle {
+    /// Returns the entity behind this handle if it is a `V`.
+    ///
+    /// Unlike `act_as`, this only inspects the handle: it does not read the
+    /// entity, so it stays valid while that item is being updated.
     pub fn downcast<V: 'static>(&self) -> Option<Entity<V>> {
         self.to_any_view().downcast().ok()
     }
 
+    /// Returns the entity behind this handle if it is a `V`.
+    ///
+    /// # Panics
+    ///
+    /// Reads the item to ask it, so it panics on an item that is currently
+    /// being updated. When only the type matters, use `downcast`, which does not
+    /// read the entity.
     pub fn act_as<V: 'static>(&self, cx: &App) -> Option<Entity<V>> {
         self.act_as_type(TypeId::of::<V>(), cx)
             .and_then(|t| t.downcast().ok())
@@ -1043,6 +1054,12 @@ impl<T: Item> ItemHandle for Entity<T> {
         self.update(cx, |item, cx| item.reload(project, window, cx))
     }
 
+    /// Asks the item whether it is `type_id` by reading it, so this cannot be
+    /// used on an item that is currently being updated: iterating a pane's items
+    /// from inside that pane's `update` and calling `act_as` on them is how the
+    /// "stop" button hit its second panic (the editor it read was already
+    /// leased by the workspace update). When only the type matters, use
+    /// `downcast` on the handle, which does not read the entity.
     fn act_as_type<'a>(&'a self, type_id: TypeId, cx: &'a App) -> Option<AnyEntity> {
         self.read(cx).act_as_type(type_id, self, cx)
     }
