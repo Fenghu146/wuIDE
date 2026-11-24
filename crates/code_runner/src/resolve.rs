@@ -326,7 +326,14 @@ pub fn resolve(
     match entry {
         RunCase::Command { template, source } => {
             let cwd = file_directory(request);
-            single_command_plan(request, &language, template, source, cwd)
+            single_command_plan(
+                request,
+                &language,
+                template,
+                source,
+                cwd,
+                settings.is_windows(),
+            )
         }
         RunCase::CppFamily { source } => {
             if let Some(cmake_root) = request.cmake_root {
@@ -339,6 +346,7 @@ pub fn resolve(
                         template,
                         template_source,
                         cmake_root.to_path_buf(),
+                        settings.is_windows(),
                     );
                 }
                 cmake_plan(
@@ -469,6 +477,27 @@ pub fn resolve_debug(
     })
 }
 
+/// What a Windows run step does before it starts the program: PowerShell decodes
+/// a child process's stdout with `[Console]::OutputEncoding`, and .NET takes that
+/// from the console's code page the first time it needs it, which is 936 on a
+/// Chinese Windows. A program that writes UTF-8 then reaches the terminal as GBK
+/// mojibake — `张三` arrives as `寮犱笁` — because the terminal only renders
+/// UTF-8. Assigning the property is the only fix that lands in time: running
+/// `chcp 65001` first does not, since .NET caches the encoding it started with.
+const WINDOWS_UTF8_OUTPUT: &str =
+    "try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; ";
+
+/// Puts a Windows program behind [`WINDOWS_UTF8_OUTPUT`]. Only the step that
+/// starts the program gets it, so build steps keep the console's own code page
+/// for the compiler messages that were written for it.
+fn with_utf8_program_output(command_line: String, is_windows: bool) -> String {
+    if is_windows {
+        format!("{WINDOWS_UTF8_OUTPUT}{command_line}")
+    } else {
+        command_line
+    }
+}
+
 /// A plan that is one command line the user configured, such as `python "$ZED_FILENAME"`.
 fn single_command_plan(
     request: &RunRequest<'_>,
@@ -476,6 +505,7 @@ fn single_command_plan(
     template: &str,
     source: CommandSource,
     cwd: PathBuf,
+    is_windows: bool,
 ) -> Result<RunPlan, RunError> {
     let context = task_context(request, &cwd, language);
     let command_line =
@@ -488,7 +518,7 @@ fn single_command_plan(
         steps: vec![RunStep {
             kind: StepKind::Run,
             label: format!("run {filename}"),
-            command_line,
+            command_line: with_utf8_program_output(command_line, is_windows),
             cwd,
         }],
         filename,
@@ -562,7 +592,7 @@ fn compile_plan(
             RunStep {
                 kind: StepKind::Run,
                 label: format!("run {filename}"),
-                command_line: run_line,
+                command_line: with_utf8_program_output(run_line, is_windows),
                 cwd: directory,
             },
         ],
@@ -640,7 +670,7 @@ pub fn cmake_run_step(
     Ok(RunStep {
         kind: StepKind::Run,
         label: format!("run {}", project_name(project_root)),
-        command_line: run_program_line(&program, is_windows),
+        command_line: with_utf8_program_output(run_program_line(&program, is_windows), is_windows),
         cwd: project_root.to_path_buf(),
     })
 }
@@ -951,6 +981,13 @@ mod tests {
         directory
     }
 
+    /// A Windows run line as the plan must build it: the UTF-8 setting, then the
+    /// command. A step that stops asking for UTF-8 output fails the comparisons
+    /// that use this.
+    fn windows_run_line(command: &str) -> String {
+        format!("{WINDOWS_UTF8_OUTPUT}{command}")
+    }
+
     #[test]
     fn a_file_with_main_is_compiled_alone_and_then_run() {
         let root = Path::new(r"C:\work");
@@ -979,13 +1016,47 @@ mod tests {
                 RunStep {
                     kind: StepKind::Run,
                     label: "run main.cpp".to_owned(),
-                    command_line: r#"& ".\main.exe""#.to_owned(),
+                    command_line: windows_run_line(r#"& ".\main.exe""#),
                     cwd: root.to_path_buf(),
                 },
             ]
         );
         assert_eq!(plan.pending_binary, None);
         assert_eq!(plan.note, None);
+    }
+
+    #[test]
+    fn a_windows_run_step_asks_for_utf8_output_before_it_starts_the_program() {
+        // PowerShell decodes a child's stdout with the console code page (936 on
+        // a Chinese Windows), so a UTF-8 program would reach the terminal as GBK
+        // mojibake unless the run step sets the encoding itself first.
+        let root = Path::new(r"C:\work");
+        let file = root.join("main.cpp");
+        let plan = resolve(
+            &request(
+                &file,
+                root,
+                directory_sources(&["main.cpp"], &["main.cpp"], root),
+                None,
+                false,
+            ),
+            &settings(&[], true),
+        )
+        .expect("cpp always has a plan");
+
+        assert_eq!(
+            plan.run_step()
+                .expect("the plan runs the program")
+                .command_line,
+            r#"try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; & ".\main.exe""#
+        );
+        assert!(
+            !plan.steps[0]
+                .command_line
+                .contains("[Console]::OutputEncoding"),
+            "the build step keeps the console's own code page: {}",
+            plan.steps[0].command_line
+        );
     }
 
     #[test]
@@ -1179,7 +1250,10 @@ mod tests {
 
         assert_eq!(step.kind, StepKind::Run);
         assert_eq!(step.cwd, project);
-        assert_eq!(step.command_line, format!("& \"{}\"", binary.display()));
+        assert_eq!(
+            step.command_line,
+            windows_run_line(&format!(r#"& "{}""#, binary.display()))
+        );
         std::fs::remove_dir_all(&project).ok();
     }
 
