@@ -122,6 +122,8 @@ script/setup-hooks      # 每个 clone 一次：git config core.hooksPath .githo
 
 `AMP_MAIN_COMMIT=1` 同时会跳过租约检查：合并本来就该由 `pre-merge-check` 在那之前放行。
 
+**钩子是 worktree 里的文件**，不是全局安装的东西：`core.hooksPath` 只是配置，`.githooks/pre-commit` 必须在这个 worktree 的检出里存在且可执行。从一个还没有 `.githooks` 的旧分支（比如本分支合入之前的 `main`）开出来的 worktree，提交时**不会有任何拦截，也不会有任何提示**。`pre-merge-check` 的第 10 项会区分这两种情况：配置没开，还是配置开了但当前 worktree 里没有钩子。
+
 ## 提交前
 
 ```sh

@@ -82,9 +82,16 @@ fi
 section 3 "no worktree is left on a branch already merged into main"
 # Advisory: leftover worktrees cost disk and invite someone to resume work on a
 # branch that has already landed, but they do not make this merge wrong.
-base=main
-git rev-parse --quiet --verify "refs/heads/$base" >/dev/null || base=origin/main
-base_tip=$(git rev-parse "$base")
+base=""
+if git rev-parse --quiet --verify refs/heads/main >/dev/null; then
+    base=main
+elif git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null; then
+    base=origin/main
+fi
+base_tip=""
+if [[ -n "$base" ]]; then
+    base_tip=$(git rev-parse "$base")
+fi
 
 residue=""
 commands=""
@@ -125,7 +132,9 @@ while IFS= read -r line; do
     esac
 done < <(git worktree list --porcelain)
 
-if [[ -z "$residue" ]]; then
+if [[ -z "$base" ]]; then
+    note "neither main nor origin/main exists here; nothing to compare worktrees against"
+elif [[ -z "$residue" ]]; then
     pass "every worktree is on work that is not in $base yet"
 else
     count=$(printf '%s' "$residue" | grep -c .)
@@ -282,13 +291,23 @@ fi
 
 section 10 "commit hooks are enabled"
 # Advisory: without them the main-checkout guard and the lease check only run
-# when someone remembers to run them.
+# when someone remembers to run them. The hook is a file inside the worktree,
+# so a branch that predates .githooks has no guard at all, even when the config
+# says otherwise.
 hooks_path=$(git config --get core.hooksPath 2>/dev/null || true)
-if [[ "$hooks_path" == ".githooks" ]]; then
-    pass "core.hooksPath=.githooks"
-else
+case "$hooks_path" in
+    /* | [A-Za-z]:*) hook_file="$hooks_path/pre-commit" ;;
+    "") hook_file="$current/.git/hooks/pre-commit" ;;
+    *) hook_file="$current/$hooks_path/pre-commit" ;;
+esac
+if [[ "$hooks_path" == ".githooks" && -x "$hook_file" ]]; then
+    pass "core.hooksPath=.githooks with an executable pre-commit"
+elif [[ "$hooks_path" != ".githooks" ]]; then
     warn "core.hooksPath is ${hooks_path:-unset}, so the commit guards do not run"
     note "Enable them once per clone: script/setup-hooks"
+else
+    warn "core.hooksPath is .githooks, but $hook_file is missing or not executable"
+    note "This branch predates the hooks; nothing guards commits made in this worktree."
 fi
 
 printf '\n'
