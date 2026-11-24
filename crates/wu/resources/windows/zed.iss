@@ -12,7 +12,9 @@ DisableReadyPage=yes
 AllowNoIcons=yes
 OutputDir={#OutputDir}
 OutputBaseFilename={#AppSetupName}
-Compression=lzma
+; lzma2/ultra64 is a smaller download than plain lzma at the cost of ~750 MB of
+; compression memory during the ISCC run.
+Compression=lzma2/ultra64
 SolidCompression=yes
 AppMutex={code:GetAppMutex}
 SetupMutex={#AppMutex}Setup
@@ -50,6 +52,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl,{#ResourcesDir}\messages\en
 Name: "simplifiedChinese"; MessagesFile: "{#ResourcesDir}\messages\Default.zh-cn.isl,{#ResourcesDir}\messages\zh-cn.isl"
 
 [UninstallDelete]
+; bin\wu.exe is a hard link created at install time, so the uninstaller has no record of it.
+Type: files; Name: "{app}\bin\wu.exe"
 ; Delete logs
 Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\updates"
@@ -1434,10 +1438,43 @@ begin
     DelTree(OldDir, True, True, True);
 end;
 
+function GetInstallDir(Param: string): string;
+begin
+  if IsUpdating() then
+    Result := ExpandConstant('{app}\install')
+  else
+    Result := ExpandConstant('{app}');
+end;
+
+// bin\ide.exe and bin\wu.exe are the same CLI binary. The bundle ships one copy and the
+// installer links the second name, so the editor's bin/wu.exe lookup still resolves.
+function CreateHardLinkW(lpFileName, lpExistingFileName: String; lpSecurityAttributes: Cardinal): Boolean;
+  external 'CreateHardLinkW@kernel32.dll stdcall';
+
+procedure CreateWuCliLink();
+var
+  BinDir: String;
+  LinkPath: String;
+  TargetPath: String;
+begin
+  BinDir := GetInstallDir('');
+  LinkPath := BinDir + '\bin\wu.exe';
+  TargetPath := BinDir + '\bin\ide.exe';
+  // An install from a previous version shipped a second copy; link again every time so
+  // upgrades of bin\ide.exe do not leave bin\wu.exe behind as an independent file.
+  if FileExists(LinkPath) then
+    DeleteFile(LinkPath);
+  // Hard links need both names on one NTFS volume; a custom install dir on another
+  // filesystem falls back to a second copy.
+  if not CreateHardLinkW(LinkPath, TargetPath, 0) then
+    CopyFile(TargetPath, LinkPath, False);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    CreateWuCliLink();
     RemoveOldUninstallEntry();
     RemoveOldInstallDir('Wu');
     RemoveOldInstallDir('Wu Dev');
@@ -1454,12 +1491,4 @@ begin
     Result := ''
   else
     Result := '{#AppMutex}';
-end;
-
-function GetInstallDir(Param: string): string;
-begin
-  if IsUpdating() then
-    Result := ExpandConstant('{app}\install')
-  else
-    Result := ExpandConstant('{app}');
 end;

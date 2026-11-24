@@ -78,9 +78,27 @@ function PrepareForBundle {
     New-Item -Path "$innoDir" -ItemType Directory -Force
     Copy-Item -Path "$workspace\crates\wu\resources\windows\*" -Destination "$innoDir" -Recurse -Force
     New-Item -Path "$innoDir\agents" -ItemType Directory -Force
-    Copy-Item -Path "$workspace\crates\wu\resources\agents\*.exe" -Destination "$innoDir\agents" -Force
+    # node.exe plus the dsh-acp build for this architecture; copying agents\*.exe shipped both
+    # dsh-acp.exe and dsh-acp-windows-aarch64.exe in every installer.
+    Copy-Item -Path "$workspace\crates\wu\resources\agents\node.exe" -Destination "$innoDir\agents\node.exe" -Force
+    $dshAcp = if ($Architecture -eq "aarch64") { "dsh-acp-windows-aarch64.exe" } else { "dsh-acp.exe" }
+    Copy-Item -Path "$workspace\crates\wu\resources\agents\$dshAcp" -Destination "$innoDir\agents\dsh-acp.exe" -Force
     if (Test-Path "$workspace\crates\wu\resources\agents\node_modules") {
         Copy-Item -Path "$workspace\crates\wu\resources\agents\node_modules" -Destination "$innoDir\agents" -Recurse -Force
+        # Ship only what node loads at runtime: source maps, TypeScript sources and type
+        # declarations, markdown docs and test/example trees are about half of node_modules.
+        # The copy above is disposable, so pruning it leaves crates\wu\resources\agents intact.
+        $bundledNodeModules = "$innoDir\agents\node_modules"
+        $prunableFiles = @(Get-ChildItem -Path $bundledNodeModules -Recurse -File |
+            Where-Object { $_.Extension -in @(".map", ".ts", ".md") })
+        $prunableDirs = @(Get-ChildItem -Path $bundledNodeModules -Recurse -Directory |
+            Where-Object { $_.Name -in @("@types", "test", "tests", "__tests__", "examples") })
+        $prunableFiles | Remove-Item -Force
+        foreach ($dir in $prunableDirs) {
+            if (Test-Path -LiteralPath $dir.FullName) {
+                Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+            }
+        }
     }
     if (Test-Path "$workspace\crates\wu\resources\agents\mcp") {
         Copy-Item -Path "$workspace\crates\wu\resources\agents\mcp" -Destination "$innoDir\agents\mcp" -Recurse -Force
@@ -195,7 +213,8 @@ function CollectFiles {
     Move-Item -Path "$innoDir\zed_explorer_command_injector.appx" -Destination "$innoDir\appx\zed_explorer_command_injector.appx" -Force
     Move-Item -Path "$innoDir\zed_explorer_command_injector.dll" -Destination "$innoDir\appx\zed_explorer_command_injector.dll" -Force
     Move-Item -Path "$innoDir\cli.exe" -Destination "$innoDir\bin\ide.exe" -Force
-    Copy-Item -Path "$innoDir\bin\ide.exe" -Destination "$innoDir\bin\wu.exe" -Force
+    # bin\wu.exe is created as a hard link to bin\ide.exe at install time (see zed.iss),
+    # so the installer ships the CLI only once.
     Move-Item -Path "$innoDir\zed.sh" -Destination "$innoDir\bin\ide" -Force
     Copy-Item -Path "$innoDir\bin\ide" -Destination "$innoDir\bin\wu" -Force
     Move-Item -Path "$innoDir\auto_update_helper.exe" -Destination "$innoDir\tools\auto_update_helper.exe" -Force
