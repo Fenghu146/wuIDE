@@ -1,6 +1,6 @@
 use crate::{App, AppContext, GpuiBorrow, VisualContext, Window, seal::Sealed};
 use anyhow::{Context as _, Result};
-use collections::FxHashSet;
+use collections::{FxHashMap, FxHashSet};
 use derive_more::{Deref, DerefMut};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use slotmap::{KeyData, SecondaryMap, SlotMap};
@@ -12,6 +12,7 @@ use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     num::NonZeroU64,
+    panic::Location,
     sync::{
         Arc, Weak,
         atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
@@ -57,6 +58,10 @@ pub(crate) struct EntityMap {
     entities: SecondaryMap<EntityId, Box<dyn Any>>,
     pub accessed_entities: RefCell<FxHashSet<EntityId>>,
     ref_counts: Arc<RwLock<EntityRefCounts>>,
+    /// Where each currently leased entity was leased from. Purely diagnostic: a
+    /// leased entity is no longer in `entities`, so this is the only way a
+    /// nested access can name the outer `read`/`update` holding it.
+    lease_locations: RefCell<FxHashMap<EntityId, &'static Location<'static>>>,
 }
 
 #[doc(hidden)]
@@ -72,6 +77,7 @@ impl EntityMap {
         Self {
             entities: SecondaryMap::new(),
             accessed_entities: RefCell::new(FxHashSet::default()),
+            lease_locations: RefCell::new(FxHashMap::default()),
             ref_counts: Arc::new(RwLock::new(EntityRefCounts {
                 counts: SlotMap::with_key(),
                 dropped_entity_ids: Vec::new(),
@@ -129,20 +135,32 @@ impl EntityMap {
         handle
     }
 
-    /// Move an entity to the stack.
+    /// Move an entity to the stack, so it can be read or updated through the
+    /// returned [`Lease`].
+    ///
+    /// A leased entity is removed from the map for the duration of the lease,
+    /// so reading or updating it again before [`Self::end_lease`] panics. The
+    /// panic names the location of this lease (see [`Self::read`] for why that
+    /// nested access cannot work).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is already leased by an outer `read`/`update`.
     #[track_caller]
     pub fn lease<T>(&mut self, pointer: &Entity<T>) -> Lease<T> {
         self.assert_valid_context(pointer);
         let mut accessed_entities = self.accessed_entities.get_mut();
         accessed_entities.insert(pointer.entity_id);
 
-        let entity = Some(
-            self.entities
-                .remove(pointer.entity_id)
-                .unwrap_or_else(|| double_lease_panic::<T>("update")),
-        );
+        let location = Location::caller();
+        let Some(entity) = self.entities.remove(pointer.entity_id) else {
+            double_lease_panic::<T>("update", self.lease_location(pointer.entity_id));
+        };
+        self.lease_locations
+            .borrow_mut()
+            .insert(pointer.entity_id, location);
         Lease {
-            entity,
+            entity: Some(entity),
             id: pointer.entity_id,
             entity_type: PhantomData,
         }
@@ -151,8 +169,23 @@ impl EntityMap {
     /// Returns an entity after moving it to the stack.
     pub fn end_lease<T>(&mut self, mut lease: Lease<T>) {
         self.entities.insert(lease.id, lease.entity.take().unwrap());
+        self.lease_locations.borrow_mut().remove(&lease.id);
     }
 
+    /// Returns a shared reference to an entity.
+    ///
+    /// This looks like a pure read but is not one from the entity map's point of
+    /// view: while an entity is leased by an outer `read`/`update`, it lives on
+    /// the stack instead of in the map, so a nested `read` cannot find it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is already leased by an outer `read`/`update`,
+    /// including a read of the very entity whose `update` you are inside. Pass
+    /// the `&T` (or the `&[Entity<_>]` you are iterating) down into the
+    /// callback, or copy out what you need before entering the update, instead
+    /// of reading the entity again. The panic names the location of the outer
+    /// lease.
     pub fn read<T: 'static>(&self, entity: &Entity<T>) -> &T {
         self.assert_valid_context(entity);
         let mut accessed_entities = self.accessed_entities.borrow_mut();
@@ -161,7 +194,13 @@ impl EntityMap {
         self.entities
             .get(entity.entity_id)
             .and_then(|entity| entity.downcast_ref())
-            .unwrap_or_else(|| double_lease_panic::<T>("read"))
+            .unwrap_or_else(|| {
+                double_lease_panic::<T>("read", self.lease_location(entity.entity_id))
+            })
+    }
+
+    fn lease_location(&self, entity_id: EntityId) -> Option<&'static Location<'static>> {
+        self.lease_locations.borrow().get(&entity_id).copied()
     }
 
     fn assert_valid_context(&self, entity: &AnyEntity) {
@@ -204,9 +243,18 @@ impl EntityMap {
 }
 
 #[track_caller]
-fn double_lease_panic<T>(operation: &str) -> ! {
+fn double_lease_panic<T>(operation: &str, first_lease: Option<&'static Location<'static>>) -> ! {
+    let first_lease = match first_lease {
+        Some(location) => format!("{}:{}", location.file(), location.line()),
+        None => "unknown (the entity is not in the entity map)".to_string(),
+    };
     panic!(
-        "cannot {operation} {} while it is already being updated",
+        "cannot {operation} {} while it is already being updated. A leased entity is moved out \
+         of the entity map for as long as it is leased, so a nested `read`, `update` or \
+         `update_in` of the same entity always panics. Instead of borrowing it again, pass the \
+         value you already have (the `&T`, or the `&[Entity<_>]` you are iterating) down into the \
+         callback, or fetch what you need before entering the update.\n\
+         first leased at {first_lease}",
         std::any::type_name::<T>()
     )
 }
@@ -460,18 +508,35 @@ impl<T: 'static> Entity<T> {
     }
 
     /// Grab a reference to this entity from the context.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this entity is currently being updated (or otherwise leased),
+    /// for example when called on the same entity from inside its own `update`
+    /// closure.
     #[inline]
     pub fn read<'a>(&self, cx: &'a App) -> &'a T {
         cx.entities.read(self)
     }
 
     /// Read the entity referenced by this handle with the given function.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this entity is currently being updated (or otherwise leased),
+    /// for example when called on the same entity from inside its own `update`
+    /// closure.
     #[inline]
     pub fn read_with<R, C: AppContext>(&self, cx: &C, f: impl FnOnce(&T, &App) -> R) -> R {
         cx.read_entity(self, f)
     }
 
     /// Updates the entity referenced by this handle with the given function.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this entity is already being updated, i.e. when called on the
+    /// same entity from inside its own `update` closure.
     #[inline]
     pub fn update<R, C: AppContext>(
         &self,
@@ -498,6 +563,11 @@ impl<T: 'static> Entity<T> {
     /// Updates the entity referenced by this handle with the given function if
     /// the referenced entity still exists, within a visual context that has a window.
     /// Returns an error if the window has been closed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this entity is already being updated, i.e. when called on the
+    /// same entity from inside its own `update` closure.
     #[inline]
     pub fn update_in<R, C: VisualContext>(
         &self,
@@ -774,6 +844,11 @@ impl<T: 'static> WeakEntity<T> {
     /// Updates the entity referenced by this handle with the given function if
     /// the referenced entity still exists. Returns an error if the entity has
     /// been released.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this entity is already being updated, i.e. when called on the
+    /// same entity from inside its own `update` closure.
     pub fn update<C, R>(
         &self,
         cx: &mut C,
@@ -789,6 +864,11 @@ impl<T: 'static> WeakEntity<T> {
     /// Updates the entity referenced by this handle with the given function if
     /// the referenced entity still exists, within a visual context that has a window.
     /// Returns an error if the entity has been released.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this entity is already being updated, i.e. when called on the
+    /// same entity from inside its own `update` closure.
     pub fn update_in<C, R>(
         &self,
         cx: &mut C,
@@ -1254,6 +1334,46 @@ mod test {
         entity_map.assert_no_new_leaks(&snapshot);
 
         drop(pre_existing);
+    }
+
+    /// A second access to an entity that is already leased has to say where the
+    /// first lease was taken: when this happens inside a window callback, the
+    /// backtrace is the only other clue, and on Windows a panic cannot even
+    /// unwind past an `extern "system"` function.
+    #[test]
+    fn test_double_lease_panic_reports_first_lease_location() {
+        let mut entity_map = EntityMap::new();
+        let slot = entity_map.reserve::<TestEntity>();
+        let handle = entity_map.insert(slot, TestEntity { i: 1 });
+
+        let first_lease_line = line!() + 1;
+        let lease = entity_map.lease(&handle);
+
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            entity_map.read(&handle);
+        }))
+        .expect_err("reading an already leased entity should panic");
+
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|m| m.to_string()))
+            .expect("panic payload should be a string");
+
+        assert!(
+            message.contains("cannot read")
+                && message.contains("while it is already being updated"),
+            "expected the message to name the operation:\n{message}"
+        );
+        // The reported location must be the `lease` call above, not the `read`
+        // that panicked.
+        let expected_location = format!("{}:{}", file!(), first_lease_line);
+        assert!(
+            message.contains(&format!("first leased at {expected_location}")),
+            "expected the message to point at `{expected_location}`:\n{message}"
+        );
+
+        entity_map.end_lease(lease);
     }
 
     #[test]
