@@ -3,16 +3,29 @@ use settings::{RegisterSetting, Settings};
 
 use crate::resolve::{CommandSource, DebugEntry};
 
-/// How a language runs: either a command line from the settings, or the
-/// built-in C/C++ plan that links the sources of a directory or builds a CMake
-/// project.
+/// How a language runs: either a command line from the settings, or a built-in
+/// plan for the languages that need more than one command or a choice that
+/// depends on the files around the one being run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunCase<'a> {
     Command {
         template: &'a str,
         source: CommandSource,
     },
+    /// C and C++: link the sources of a directory, or build a CMake project.
     CppFamily {
+        source: CommandSource,
+    },
+    /// Rust: `cargo run` in a crate, or `rustc` for a file on its own.
+    Rust {
+        source: CommandSource,
+    },
+    /// Go: `go run` the file.
+    Go {
+        source: CommandSource,
+    },
+    /// Java: `javac` into `out`, then `java` the class named after the file.
+    Java {
         source: CommandSource,
     },
 }
@@ -34,6 +47,15 @@ enum RunEntry {
         source: CommandSource,
     },
     CppFamily {
+        source: CommandSource,
+    },
+    Rust {
+        source: CommandSource,
+    },
+    Go {
+        source: CommandSource,
+    },
+    Java {
         source: CommandSource,
     },
 }
@@ -64,7 +86,8 @@ impl CodeRunnerSettings {
             })
             .collect::<HashMap<_, _>>();
         // C and C++ have no single command: the runner decides between one
-        // file, a directory of sources, and a CMake project.
+        // file, a directory of sources, and a CMake project. Rust, Go and Java
+        // need a command per file or a second step, so they have plans too.
         for language in CPP_FAMILY {
             run_entries.insert(
                 (*language).to_owned(),
@@ -73,6 +96,24 @@ impl CodeRunnerSettings {
                 },
             );
         }
+        run_entries.insert(
+            "rust".to_owned(),
+            RunEntry::Rust {
+                source: CommandSource::BuiltIn,
+            },
+        );
+        run_entries.insert(
+            "go".to_owned(),
+            RunEntry::Go {
+                source: CommandSource::BuiltIn,
+            },
+        );
+        run_entries.insert(
+            "java".to_owned(),
+            RunEntry::Java {
+                source: CommandSource::BuiltIn,
+            },
+        );
         for (language, command) in user_run_map {
             if command.trim().is_empty() {
                 // An empty entry removes the default, so a language can be
@@ -129,14 +170,20 @@ impl CodeRunnerSettings {
                 source: *source,
             },
             RunEntry::CppFamily { source } => RunCase::CppFamily { source: *source },
+            RunEntry::Rust { source } => RunCase::Rust { source: *source },
+            RunEntry::Go { source } => RunCase::Go { source: *source },
+            RunEntry::Java { source } => RunCase::Java { source: *source },
         })
     }
 
     /// A command line configured for a language, if the user set one.
+    ///
+    /// Languages with a built-in plan have no single command, so they return
+    /// `None` here even though [`Self::run_case`] knows how to run them.
     pub fn command(&self, language: &str) -> Option<(&str, CommandSource)> {
         match self.run_entries.get(language)? {
             RunEntry::Command { command, source } => Some((command.as_str(), *source)),
-            RunEntry::CppFamily { .. } => None,
+            _ => None,
         }
     }
 
@@ -208,15 +255,16 @@ impl Settings for CodeRunnerSettings {
 /// The languages the built-in C/C++ plan handles.
 pub const CPP_FAMILY: [&str; 2] = ["c", "cpp"];
 
-/// Commands for the languages WuIDE supports out of the box.
+/// Commands for the languages that run as one shell command.
 ///
-/// The Windows entries differ in how the interpreter is named, and because
-/// C/C++ is not in here at all: those are compiled by the runner.
+/// C/C++ and Rust have no entry here: the runner decides what to build from
+/// the files around the current one. Go and Java have plans too, because both
+/// need a tool check and Java needs a compile step, so every language in here
+/// is one command line and nothing else.
 pub fn default_run_map(is_windows: bool) -> HashMap<String, String> {
     let mut map = HashMap::default();
 
     let python = if is_windows { "python" } else { "python3" };
-    map.insert("rust".to_owned(), "cargo run".to_owned());
     map.insert("python".to_owned(), format!("{python} \"$ZED_FILENAME\""));
     map.insert("javascript".to_owned(), "node \"$ZED_FILENAME\"".to_owned());
     map.insert(
@@ -270,6 +318,16 @@ mod tests {
         }
     }
 
+    fn run_case_source(case: RunCase<'_>) -> CommandSource {
+        match case {
+            RunCase::Command { source, .. }
+            | RunCase::CppFamily { source }
+            | RunCase::Rust { source }
+            | RunCase::Go { source }
+            | RunCase::Java { source } => source,
+        }
+    }
+
     #[test]
     fn c_and_cpp_use_the_directory_plan_and_other_languages_a_command() {
         let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
@@ -318,11 +376,47 @@ mod tests {
             })
         );
         assert_eq!(
-            settings.run_case("rust").map(|case| match case {
-                RunCase::Command { source, .. } => source,
-                RunCase::CppFamily { source } => source,
-            }),
+            settings.run_case("python").map(run_case_source),
             Some(CommandSource::BuiltIn)
+        );
+    }
+
+    #[test]
+    fn every_language_with_a_built_in_plan_shows_up_but_has_no_single_command() {
+        let settings = CodeRunnerSettings::new(&HashMap::default(), &HashMap::default(), false);
+
+        for (language, expected) in [
+            ("c", RunCase::CppFamily { source: CommandSource::BuiltIn }),
+            ("cpp", RunCase::CppFamily { source: CommandSource::BuiltIn }),
+            ("rust", RunCase::Rust { source: CommandSource::BuiltIn }),
+            ("go", RunCase::Go { source: CommandSource::BuiltIn }),
+            ("java", RunCase::Java { source: CommandSource::BuiltIn }),
+        ] {
+            assert_eq!(settings.run_case(language), Some(expected), "{language}");
+            assert_eq!(settings.command(language), None, "{language}");
+        }
+    }
+
+    #[test]
+    fn a_user_entry_turns_a_plan_language_back_into_a_command() {
+        let settings = CodeRunnerSettings::new(
+            &[("go".to_owned(), "go run \"$ZED_FILE\"".to_owned())]
+                .into_iter()
+                .collect(),
+            &HashMap::default(),
+            false,
+        );
+
+        assert_eq!(
+            settings.run_case("go"),
+            Some(RunCase::Command {
+                template: "go run \"$ZED_FILE\"",
+                source: CommandSource::Settings
+            })
+        );
+        assert_eq!(
+            settings.command("go").map(|(_, source)| source),
+            Some(CommandSource::Settings)
         );
     }
 

@@ -1688,21 +1688,28 @@
     // (`ctrl-f5`) and the run button on the editor tab. `$ZED_FILE`,
     // `$ZED_FILENAME`, `$ZED_DIRNAME`, `$ZED_STEM`, `$ZED_WORKTREE_ROOT` and
     // `$ZED_LANGUAGE` are substituted before the command runs, in the
-    // directory of the file (the CMake project directory for `cmake`).
+    // directory of the file (the CMake project directory for `cmake`). Each
+    // value is escaped for the double quotes around it, so `"$ZED_FILENAME"`
+    // is safe for names with `$`, backticks, quotes, spaces and non-ASCII
+    // characters; keep the double quotes around the variables.
     //
-    // Keys are language ids: `c`, `cpp`, `rust`, `python`, `javascript`,
-    // `typescript`, and `cmake` for C/C++ files in a project with a
-    // `CMakeLists.txt`. Any other key is matched against the file extension,
-    // so `"lua": "lua \"$ZED_FILENAME\""` runs `.lua` files. An empty value
-    // removes the built-in command for that language.
+    // `python`, `javascript` and `typescript` have a built-in command here;
+    // any other key is matched against the file extension, so
+    // `"lua": "lua \"$ZED_FILENAME\""` runs `.lua` files. An empty value
+    // removes the built-in command or plan for that language.
+    //
+    // C and C++ (`c`, `cpp`), Rust, Go and Java run as built-in plans instead
+    // of one command, because they build first or pick their command from the
+    // files around the current one: C/C++ compile a file, link a directory or
+    // build a CMake project, Rust runs the crate with `cargo` or compiles the
+    // file with `rustc`, and Java compiles into `out` and runs the class named
+    // after the file. An entry for one of them replaces its plan with that
+    // command line, and `cmake` replaces the built-in CMake plan.
     //
     // Entries left out here use the built-in defaults. Runs reuse one terminal,
     // so the command and its output stay visible there; "Run Current File…"
-    // opens the command for editing first.
-    //
-    // The built-in commands join the steps with `&&`, which needs a shell that
-    // supports it: PowerShell 7+, cmd and POSIX shells do, Windows PowerShell
-    // 5.1 does not. Use `;` instead there.
+    // opens the command for editing first. A plan runs one step after another,
+    // each in its own terminal, and stops at the first failure.
     "executor_map": {},
     // How to build and start a debug session per language, used by
     // "Debug Current File" (`ctrl-shift-f5`) and the debug button on the
