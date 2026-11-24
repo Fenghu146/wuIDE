@@ -2636,6 +2636,9 @@ pub fn project_sources(project: &Entity<Project>, cx: &App) -> Vec<SourceFile> {
 /// Builds a symbol map for the whole project off the foreground thread, reusing
 /// the cache. The returned task is cancelled when dropped.
 pub fn symbol_map_task(project: Entity<Project>, cx: &App) -> Task<Arc<SymbolMap>> {
+    if !crate::builds_map(cx) {
+        return Task::ready(Arc::new(SymbolMap::default()));
+    }
     let sources = project_sources(&project, cx);
     let roots: Vec<PathBuf> = project
         .read(cx)

@@ -10349,6 +10349,7 @@ dependencies = [
  "project",
  "serde",
  "serde_json",
+ "settings",
  "sha2",
  "streaming-iterator",
  "tempfile",

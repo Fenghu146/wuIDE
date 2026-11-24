@@ -623,6 +623,7 @@ impl ChatView {
         if self.subagent.is_some()
             || self.digest_offered
             || !crate::AgentChatSettings::get_global(cx).inject_repo_map_digest
+            || !repo_wiki::injects_digest(cx)
         {
             return false;
         }

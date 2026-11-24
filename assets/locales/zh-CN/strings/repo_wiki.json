@@ -15,5 +15,7 @@
   "{days} d ago": "{days} 天前",
   "{hours} h ago": "{hours} 小时前",
   "{kind} x{count} (lines {first}–{last})": "{kind} ×{count}（第 {first}–{last} 行）",
-  "{minutes} min ago": "{minutes} 分钟前"
+  "{minutes} min ago": "{minutes} 分钟前",
+  "Repo Map is off": "仓库地图已关闭",
+  "Turn it on in Settings → Panels → Repo Map. Building a large repository takes about 15–20 seconds the first time.": "在“设置 → 面板 → 仓库地图”里打开。大型仓库第一次构建约需 15–20 秒。"
 }

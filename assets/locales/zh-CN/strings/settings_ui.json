@@ -952,6 +952,7 @@
   "setting value|Automatic": "自动",
   "setting value|Background": "背景",
   "setting value|Bar": "竖线",
+  "setting value|Basic": "基础",
   "setting value|Binary": "二进制",
   "setting value|Block": "方块",
   "setting value|Border": "边框",
@@ -1120,5 +1121,8 @@
   "setting value|Warning": "警告",
   "setting value|With Arguments": "带参数",
   "setting value|Wrapped": "按换行",
-  "setting value|X-High": "超高"
+  "setting value|X-High": "超高",
+  "Repo Map": "仓库地图",
+  "Repo Map Mode": "仓库地图模式",
+  "How much work the repository map does. Off builds nothing. Basic (the default) builds the map only when you open the Repo Map panel or ask an agent for it, and never adds a digest to a chat. Full also builds it in the background when a project opens and puts a project digest in the first message of a new chat. Building the map parses the project with tree-sitter: about 15–20 seconds the first time on a large repository (19.5k files here), under a second afterwards from its parse cache. The snapshot it writes is 0.58 MiB for that repository.": "仓库地图做多少工作。Off 什么都不建。Basic（默认）只在你打开仓库地图面板或让智能体取用时才构建，且不会往对话里注入摘要。Full 还会在打开项目时后台构建，并在新对话的第一条消息里带上项目摘要。构建时会用 tree-sitter 解析整个项目：大型仓库（本仓库 19.5k 个文件）第一次约 15–20 秒，之后走解析缓存不到一秒；它写出的快照对本仓库是 0.58 MiB。"
 }

@@ -148,6 +148,7 @@ pub(crate) fn translated_setting_value(label: &str) -> Option<SharedString> {
         "Automatic" => tc!("setting value", "Automatic"),
         "Background" => tc!("setting value", "Background"),
         "Bar" => tc!("setting value", "Bar"),
+        "Basic" => tc!("setting value", "Basic"),
         "Binary" => tc!("setting value", "Binary"),
         "Block" => tc!("setting value", "Block"),
         "Border" => tc!("setting value", "Border"),

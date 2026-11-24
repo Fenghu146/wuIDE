@@ -1039,6 +1039,23 @@
     // Where to dock the search panel. Can be 'left' or 'right'.
     "dock": "left",
   },
+  // How much the repository map does for each project.
+  //
+  // - "off": build nothing. No map, no snapshot on disk, no digest in a chat.
+  // - "basic": build the map only when you open the Repo Map panel or ask an
+  //   agent for it. No digest is added to a chat. (default)
+  // - "full": also build the map in the background when a project opens, so the
+  //   panel has data the first time you open it, and put a project digest in the
+  //   first message of a new chat.
+  //
+  // The map parses the project with tree-sitter: about 15-20 seconds for a large
+  // repository the first time (this one has 19.5k files), under a second
+  // afterwards from its parse cache. The snapshot it writes is small (0.58 MiB
+  // for the same repository). The cost is the parse, and in "full" the digest
+  // added to a first message.
+  "repo_map": {
+    "mode": "basic",
+  },
   "outline_panel": {
     // Whether to show the outline panel button in the status bar
     "button": true,

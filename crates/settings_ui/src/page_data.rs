@@ -4614,6 +4614,27 @@ fn window_and_layout_page() -> SettingsPage {
 }
 
 fn panels_page() -> SettingsPage {
+    fn repo_map_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(n!("Repo Map")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Repo Map Mode"),
+                description: n!(
+                    "How much work the repository map does. Off builds nothing. Basic (the default) builds the map only when you open the Repo Map panel or ask an agent for it, and never adds a digest to a chat. Full also builds it in the background when a project opens and puts a project digest in the first message of a new chat. Building the map parses the project with tree-sitter: about 15–20 seconds the first time on a large repository (19.5k files here), under a second afterwards from its parse cache. The snapshot it writes is 0.58 MiB for that repository."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("repo_map.mode"),
+                    pick: |settings_content| settings_content.repo_map.as_ref()?.mode.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.repo_map.get_or_insert_default().mode = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     fn project_panel_section() -> [SettingsPageItem; 31] {
         [
             SettingsPageItem::SectionHeader(n!("Project Panel")),
@@ -6096,6 +6117,7 @@ fn panels_page() -> SettingsPage {
     SettingsPage {
         title: n!("Panels"),
         items: concat_sections![
+            repo_map_section(),
             project_panel_section(),
             search_panel_section(),
             terminal_panel_section(),
