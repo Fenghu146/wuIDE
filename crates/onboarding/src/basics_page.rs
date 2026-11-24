@@ -237,7 +237,7 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
         ToggleButtonGroup::two_rows(
             "base_keymap_selection",
             [
-                ToggleButtonWithIcon::new("IDE", IconName::Wu, |_, _, cx| {
+                ToggleButtonWithIcon::new("WuIDE", IconName::Wu, |_, _, cx| {
                     write_keymap_base(BaseKeymap::Zed, cx);
                 }),
                 ToggleButtonWithIcon::new("VS Code", IconName::EditorVsCode, |_, _, cx| {
@@ -291,14 +291,14 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
     };
 
     let tooltip_description = t!(
-        "IDE can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted."
+        "WuIDE can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted."
     );
 
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
         Some(t!("Trust All Projects By Default")),
         Some(t!(
-            "Automatically mark all new projects as trusted to unlock all IDE's features"
+            "Automatically mark all new projects as trusted to unlock all WuIDE's features"
         )),
         toggle_state,
         {

@@ -233,14 +233,14 @@ export DO_STARTUP_NOTIFY="true"
 export APP_CLI="ide"
 export APP_ICON="ide"
 export APP_ARGS="%U"
-# APP_NAME is the label shown in app launchers, so it follows the IDE rename. APP_ID
+# APP_NAME is the label shown in app launchers, so it follows the product name. APP_ID
 # stays as-is: it is the .desktop filename and what desktops remember for pins and
 # default-app associations.
 if [[ "$channel" == "dev" ]]; then
-  export APP_NAME="IDE Dev"
+  export APP_NAME="WuIDE Dev"
   APP_ID="me.farshed.Wu-Dev"
 else
-  export APP_NAME="IDE"
+  export APP_NAME="WuIDE"
   APP_ID="me.farshed.Wu"
 fi
 

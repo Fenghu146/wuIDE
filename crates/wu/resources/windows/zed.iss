@@ -1,6 +1,6 @@
 [Setup]
 AppId={#AppId}
-AppName={#AppName}
+AppName={#AppDisplayName}
 AppVerName={#AppDisplayName}
 AppPublisher=Farshed
 AppPublisherURL=https://github.com/Fenghu146/wuIDE
@@ -39,7 +39,7 @@ LicenseFile={#ResourcesDir}\LICENSE.txt
 SignTool=Defaultsign
 #endif
 
-DefaultDirName={autopf}\{#AppName}
+DefaultDirName={autopf}\{#AppDirName}
 PrivilegesRequired=lowest
 
 ArchitecturesAllowed=x64compatible

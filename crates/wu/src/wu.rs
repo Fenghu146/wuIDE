@@ -600,7 +600,7 @@ fn show_software_emulation_warning_if_needed(
             )
         };
         let message = t!(
-            "IDE uses {graphics_api} for rendering and requires a compatible GPU.\n\nCurrently you are using a software emulated GPU ({device_name}) which\nwill result in awful performance.\n\nFor troubleshooting see: {docs_url}\nSet ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.",
+            "WuIDE uses {graphics_api} for rendering and requires a compatible GPU.\n\nCurrently you are using a software emulated GPU ({device_name}) which\nwill result in awful performance.\n\nFor troubleshooting see: {docs_url}\nSet ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.",
             graphics_api = graphics_api,
             device_name = specs.device_name,
             docs_url = docs_url
@@ -1459,7 +1459,7 @@ fn open_about_window(cx: &mut App) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
-                title: Some(t!("About IDE")),
+                title: Some(t!("About WuIDE")),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.), px(12.))),
             }),

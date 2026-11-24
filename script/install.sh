@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Downloads an IDE release from GitHub and unpacks it into ~/.local/.
+# Downloads a WuIDE release from GitHub and unpacks it into ~/.local/.
 # Optional: WU_VERSION=1.2.3 picks a release, WU_BUNDLE_PATH installs a local tarball.
 # The ZED_ names of these variables still work for older instructions.
 
@@ -62,9 +62,9 @@ main() {
     "$platform" "$@"
 
     if [ "$(command -v ide)" = "$HOME/.local/bin/ide" ]; then
-        echo "IDE has been installed. Run with 'ide'"
+        echo "WuIDE has been installed. Run with 'ide'"
     else
-        echo "To run IDE from your terminal, you must add ~/.local/bin to your PATH"
+        echo "To run WuIDE from your terminal, you must add ~/.local/bin to your PATH"
         echo "Run:"
 
         case "$SHELL" in
@@ -81,7 +81,7 @@ main() {
                 ;;
         esac
 
-        echo "To run IDE now, '~/.local/bin/ide'"
+        echo "To run WuIDE now, '~/.local/bin/ide'"
     fi
 }
 
@@ -89,7 +89,7 @@ linux() {
     if [ -n "$bundle_path" ]; then
         cp "$bundle_path" "$temp/ide-linux-$arch.tar.gz"
     else
-        echo "Downloading IDE version: $version"
+        echo "Downloading WuIDE version: $version"
         curl "$download_base/ide-linux-$arch.tar.gz" > "$temp/ide-linux-$arch.tar.gz"
     fi
 
@@ -121,9 +121,9 @@ linux() {
     if [ -f "$ide_editor" ] && command -v ldd >/dev/null 2>&1; then
         missing="$(ldd "$ide_editor" 2>/dev/null | sed -n 's/^[[:space:]]*\(.*\) => not found$/\1/p')"
         if [ -n "$missing" ]; then
-            echo "Warning: your system is missing libraries that IDE needs:"
+            echo "Warning: your system is missing libraries that WuIDE needs:"
             echo "$missing" | sed 's/^/    /'
-            echo "Install them with your package manager, or IDE will fail to start."
+            echo "Install them with your package manager, or WuIDE will fail to start."
         fi
     fi
 
@@ -143,7 +143,7 @@ linux() {
 }
 
 macos() {
-    echo "Downloading IDE version: $version"
+    echo "Downloading WuIDE version: $version"
     curl "$download_base/IDE-$arch.dmg" > "$temp/IDE-$arch.dmg"
     hdiutil attach -quiet "$temp/IDE-$arch.dmg" -mountpoint "$temp/mount"
     app="$(cd "$temp/mount/"; echo *.app)"

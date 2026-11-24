@@ -150,7 +150,7 @@ impl Settings for CodeRunnerSettings {
     }
 }
 
-/// Commands for the languages the IDE supports out of the box.
+/// Commands for the languages WuIDE supports out of the box.
 ///
 /// The Windows entries differ in three ways: the compiler writes a `.exe`, the
 /// executable has to be run with the PowerShell call operator (`&`) because it
@@ -192,7 +192,7 @@ pub fn default_run_map(is_windows: bool) -> HashMap<String, String> {
     map
 }
 
-/// Build commands with debug symbols for the languages the IDE debugs out of
+/// Build commands with debug symbols for the languages WuIDE debugs out of
 /// the box. The binary is named after the run one plus `.dbg`, so the two never
 /// overwrite each other.
 pub fn default_debug_map(is_windows: bool) -> HashMap<String, DebugEntry> {

@@ -7,7 +7,7 @@ use crate::settings::CodeRunnerSettings;
 /// Where the command that is about to run came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandSource {
-    /// The IDE's default for the language.
+    /// WuIDE's default for the language.
     BuiltIn,
     /// `code_runner.executor_map` or `code_runner.debug_map` in the settings.
     Settings,
@@ -88,7 +88,7 @@ pub struct RunRequest<'a> {
 ///
 /// Known languages get their language id; anything else falls back to the
 /// lowercased extension, which is what lets a user add a command for a file
-/// type the IDE does not know about.
+/// type WuIDE does not know about.
 pub fn language_id_for_path(path: &Path) -> Option<String> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     let language = match extension.as_str() {

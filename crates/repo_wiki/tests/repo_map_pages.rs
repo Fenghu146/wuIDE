@@ -1,6 +1,6 @@
 //! One rendering, two implementations, one set of bytes.
 //!
-//! The IDE renders a repo map page in Rust and the bundled MCP server renders
+//! The WuIDE renders a repo map page in Rust and the bundled MCP server renders
 //! it again in JavaScript from the snapshot Rust wrote. An agent reads whichever
 //! one its environment gives it, so the two must produce the same text for the
 //! same snapshot — including the paging and omission rules. These tests pin both
@@ -154,7 +154,7 @@ fn the_fixture_states_the_ordering_the_ide_prints() {
     assert_eq!(
         doc["order"].as_str(),
         Some(SymbolMap::order_description()),
-        "the fixture's order note must be the one the IDE writes"
+        "the fixture's order note must be the one WuIDE writes"
     );
     assert_eq!(doc["max_chars"].as_u64(), Some(MAX_REPO_MAP_CHARS as u64));
 }

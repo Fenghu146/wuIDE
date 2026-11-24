@@ -2726,7 +2726,7 @@ impl Project {
     ///
     /// Pi's MCP server reads the file from `paths::diagnostics_snapshots_dir()`
     /// and derives the same name from its working directory, so no IPC channel
-    /// is needed between the IDE and the agent.
+    /// is needed between WuIDE and the agent.
     fn write_diagnostics_snapshots(&mut self, cx: &mut Context<Self>) -> Task<()> {
         let mut by_worktree = HashMap::<WorktreeId, Vec<diagnostics_snapshot::Item>>::default();
         self.lsp_store

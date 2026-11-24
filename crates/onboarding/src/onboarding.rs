@@ -284,7 +284,7 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new(t!("Welcome to IDE"))
+                                                        Headline::new(t!("Welcome to WuIDE"))
                                                             .size(HeadlineSize::Small),
                                                     )
                                                     .child(

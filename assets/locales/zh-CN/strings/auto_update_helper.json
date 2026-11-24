@@ -1,5 +1,5 @@
 {
-  "Error: IDE update failed.": "错误：IDE 更新失败",
+  "Error: WuIDE update failed.": "错误：WuIDE 更新失败",
   "Error: {error}": "错误：{error}",
-  "Updating IDE...": "正在更新 IDE…"
+  "Updating WuIDE...": "正在更新 WuIDE…"
 }

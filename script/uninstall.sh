@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Uninstalls IDE that was installed using the install.sh script.
+# Uninstalls WuIDE that was installed using the install.sh script.
 #
 # Data directories are listed for every name this fork has used, so an install
 # from before the WuIDE rename is cleaned up as well.
@@ -20,7 +20,7 @@ check_remaining_installations() {
 }
 
 prompt_remove_preferences() {
-    printf "Do you want to keep your IDE preferences? [Y/n] "
+    printf "Do you want to keep your WuIDE preferences? [Y/n] "
     read -r response
     case "$response" in
         [nN]|[nN][oO])
@@ -49,7 +49,7 @@ main() {
 
     "$platform"
 
-    echo "IDE has been uninstalled"
+    echo "WuIDE has been uninstalled"
 }
 
 linux() {

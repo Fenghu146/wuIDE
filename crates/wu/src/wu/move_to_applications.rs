@@ -72,12 +72,12 @@ impl MoveToApplicationsRequest {
         cx: &mut AsyncWindowContext,
     ) -> Result<()> {
         let detail = t!(
-            "IDE is running from a temporary location. Move it to Applications to finish installing it."
+            "WuIDE is running from a temporary location. Move it to Applications to finish installing it."
         );
         let response = cx
             .prompt(
                 PromptLevel::Info,
-                &t!("Move IDE to Applications?"),
+                &t!("Move WuIDE to Applications?"),
                 Some(detail.as_str()),
                 &[
                     PromptButton::ok(t!("Yes")),
@@ -108,7 +108,7 @@ impl MoveToApplicationsRequest {
                 if let Err(error) = result {
                     cx.prompt(
                         PromptLevel::Critical,
-                        &t!("Failed to move IDE to Applications"),
+                        &t!("Failed to move WuIDE to Applications"),
                         Some(&error.to_string()),
                         &[PromptButton::ok(t!("OK"))],
                     )
@@ -183,7 +183,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new(t!("Installing IDE…"))),
+                    .child(Label::new(t!("Installing WuIDE…"))),
             )
             .child(
                 h_flex()
@@ -201,9 +201,9 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new(t!("Moving IDE to Applications")))
+                            .child(Label::new(t!("Moving WuIDE to Applications")))
                             .child(
-                                Label::new(t!("IDE will reopen when installation is complete."))
+                                Label::new(t!("WuIDE will reopen when installation is complete."))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

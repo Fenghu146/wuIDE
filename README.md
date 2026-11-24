@@ -1,8 +1,8 @@
 <p align="center">English | <a href="README.zh-CN.md">中文</a></p>
 
 <div align="center">
-  <img src="crates/wu/resources/app-icon.png" alt="IDE" width="128">
-  <h1>IDE</h1>
+  <img src="crates/wu/resources/app-icon.png" alt="WuIDE" width="128">
+  <h1>WuIDE</h1>
   <p>A fast, native code editor with built-in coding agents.</p>
   <p>Written in Rust. Batteries included.</p>
   <p><a href="#download"><strong>Download</strong></a> · <a href="./FORK.md">What changed from upstream</a></p>
@@ -10,9 +10,9 @@
 
 ---
 
-> **This is a personal fork.** It is built from [dstrml/wu](https://github.com/dstrml/wu), which is itself a fork of [Zed](https://github.com/zed-industries/zed). It has been modified: the product is renamed to **IDE**, the built-in agent list changed, and it ships its own bundled agent runtimes. See [FORK.md](./FORK.md) for the full list of changes. Releases here are built by this repository's CI from a tagged commit, and the corresponding source is this repository.
+> **This is a personal fork.** It is built from [dstrml/wu](https://github.com/dstrml/wu), which is itself a fork of [Zed](https://github.com/zed-industries/zed). It has been modified: the product is renamed to **WuIDE**, the built-in agent list changed, and it ships its own bundled agent runtimes. See [FORK.md](./FORK.md) for the full list of changes. Releases here are built by this repository's CI from a tagged commit, and the corresponding source is this repository.
 
-IDE is a fast, native code editor written in Rust, with a clean, modern design and coding agents built in. It is a fork of Zed, but diverges heavily from it.
+WuIDE is a fast, native code editor written in Rust, with a clean, modern design and coding agents built in. It is a fork of Zed, but diverges heavily from it.
 
 ## Features
 
@@ -71,7 +71,7 @@ Two things worth knowing:
 
 ## Network access
 
-IDE sends no analytics, no crash reports, and no usage telemetry. It does make these outbound requests, which you can audit in the source:
+WuIDE sends no analytics, no crash reports, and no usage telemetry. It does make these outbound requests, which you can audit in the source:
 
 | What | Where | When |
 | --- | --- | --- |
@@ -84,11 +84,11 @@ If you want the editor to stop talking to the extension registry, set `"server_u
 
 ## Building
 
-IDE builds the same way Zed does. See the [Zed development docs](https://zed.dev/docs/development), [FORK.md](./FORK.md) for the fork-specific packaging notes (bundled agent runtimes, icon and bundle scripts), and [SYNC.md](./SYNC.md) for how this fork tracks upstream.
+WuIDE builds the same way Zed does. See the [Zed development docs](https://zed.dev/docs/development), [FORK.md](./FORK.md) for the fork-specific packaging notes (bundled agent runtimes, icon and bundle scripts), and [SYNC.md](./SYNC.md) for how this fork tracks upstream.
 
 ## Licensing
 
-IDE is distributed under **GPL-3.0-or-later**, with Apache-2.0 components where marked. See [LICENSE-GPL](./LICENSE-GPL) and [LICENSE-APACHE](./LICENSE-APACHE), and [NOTICE](./NOTICE) for the upstream attribution this fork carries.
+WuIDE is distributed under **GPL-3.0-or-later**, with Apache-2.0 components where marked. See [LICENSE-GPL](./LICENSE-GPL) and [LICENSE-APACHE](./LICENSE-APACHE), and [NOTICE](./NOTICE) for the upstream attribution this fork carries.
 
 Bundled third-party runtimes have their own licenses, shipped alongside them:
 

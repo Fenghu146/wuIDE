@@ -330,7 +330,7 @@ impl SymbolMap {
         let total = files.len();
         if total == 0 {
             return String::from(
-                "这个项目还没有可用的仓库地图（请先在 IDE 里打开一次 Repository Map 面板）",
+                "这个项目还没有可用的仓库地图（请先在 WuIDE 里打开一次 Repository Map 面板）",
             );
         }
 
@@ -2228,7 +2228,7 @@ fn collect_references(
 ///
 /// This is the single source of truth for the agent-facing map: the snapshot
 /// records it as `max_chars` and the bundled MCP server reads it from there, so
-/// the IDE's rendering and the server's cannot drift apart. `limit` is an upper
+/// WuIDE's rendering and the server's cannot drift apart. `limit` is an upper
 /// bound on the files of one page; the budget can end the page earlier and the
 /// header says so. It covers the whole page, the list of omitted paths
 /// included.
@@ -4556,7 +4556,7 @@ vector<int> bfs(int start) {
         let digest = SymbolMap::default().to_digest(20, 5, MAX_DIGEST_CHARS);
         assert_eq!(
             digest,
-            "这个项目还没有可用的仓库地图（请先在 IDE 里打开一次 Repository Map 面板）"
+            "这个项目还没有可用的仓库地图（请先在 WuIDE 里打开一次 Repository Map 面板）"
         );
     }
 }

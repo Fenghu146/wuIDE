@@ -310,7 +310,7 @@ impl ExtensionCard {
                             move |_, cx| {
                                 Tooltip::simple(
                                     t!(
-                                        "v{version} is not compatible with this version of IDE.",
+                                        "v{version} is not compatible with this version of WuIDE.",
                                         version = version
                                     ),
                                     cx,

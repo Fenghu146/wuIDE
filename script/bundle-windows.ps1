@@ -222,11 +222,11 @@ function BuildInstaller {
             # Wu used Zed's AppId before it got its own, so installs from then are registered under it.
             $oldAppId = "2DB0DA96-CA55-49BB-AF4F-64AF36A86712"
             $appIconName = "app-icon"
-            # `appName` names the install directory. A fresh install lands in {autopf}\IDE and the
+            # `appDirName` names the install directory. A fresh install lands in {autopf}\IDE and the
             # post-install step deletes a leftover {autopf}\Wu; an upgrade keeps the directory it
             # finds in the previous uninstall entry (Inno's UsePreviousAppDir), so old installs stay in {autopf}\Wu.
-            $appName = "IDE"
-            $appDisplayName = "IDE"
+            $appDirName = "IDE"
+            $appDisplayName = "WuIDE"
             $appSetupName = "IDE-$Architecture"
             # Must match `app_identifier()` in crates/release_channel/src/lib.rs plus the "-Instance-Mutex" suffix
             # used by crates/wu/src/wu/windows_only_instance.rs.
@@ -234,21 +234,21 @@ function BuildInstaller {
             $appExeName = "IDE"
             $regValueName = "IDE"
             $appUserId = "Farshed.Wu"
-            $appShellNameShort = "I&DE"
+            $appShellNameShort = "W&uIDE"
             $appAppxFullName = "Farshed.Wu_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "dev" {
             $appId = "{{3EF9FC05-FE00-4BD0-941C-21F3BA4E6952}"
             $oldAppId = "8357632E-24A4-4F32-BA97-E575B4D1FE5D"
             $appIconName = "app-icon-dev"
-            $appName = "IDE Dev"
-            $appDisplayName = "IDE Dev"
+            $appDirName = "IDE Dev"
+            $appDisplayName = "WuIDE Dev"
             $appSetupName = "IDE-$Architecture"
             $appMutex = "Wu-Editor-Dev-Instance-Mutex"
             $appExeName = "IDE"
             $regValueName = "IDEDev"
             $appUserId = "Farshed.Wu.Dev"
-            $appShellNameShort = "I&DE Dev"
+            $appShellNameShort = "W&uIDE Dev"
             $appAppxFullName = "Farshed.Wu_1.0.0.0_neutral__japxn1gcva8rg"
         }
         default {
@@ -274,7 +274,7 @@ function BuildInstaller {
         "AppIconName"    = $appIconName
         "OutputDir"      = "$workspace\target"
         "AppSetupName"   = $appSetupName
-        "AppName"        = $appName
+        "AppDirName"     = $appDirName
         "AppDisplayName" = $appDisplayName
         "RegValueName"   = $regValueName
         "AppMutex"       = $appMutex
@@ -326,7 +326,7 @@ Pop-Location
 if ($buildSuccess) {
     Write-Output "Build successful"
     if ($Install) {
-        Write-Output "Installing IDE..."
+        Write-Output "Installing WuIDE..."
         Start-Process -FilePath "$workspace/target/IDE-$Architecture.exe"
     }
     exit 0

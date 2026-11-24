@@ -101,7 +101,7 @@ pub struct DebugEntrySettingsContent {
     ///
     /// Default: `$ZED_STEM.dbg`, with `.exe` on Windows.
     pub program: Option<String>,
-    /// Name of the debug adapter to start, as registered by the IDE or an
+    /// Name of the debug adapter to start, as registered by WuIDE or an
     /// extension.
     ///
     /// Default: `GDB`
