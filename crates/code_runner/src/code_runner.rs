@@ -12,9 +12,9 @@ mod settings;
 
 pub use resolve::{
     CmakeBinary, CommandSource, DebugEntry, DebugPlan, DirectorySources, Program, RunError,
-    RunPlan, RunRequest, RunStep, StepKind, cmake_run_step, cmake_target, debug_adapter_available,
-    debug_adapter_available_in, defines_main, find_cmake_binary, find_executable,
-    language_id_for_path, resolve, resolve_debug, scan_directory, source_extensions,
-    tool_available,
+    RunPlan, RunRequest, RunStep, StepKind, Toolchain, cmake_run_step, cmake_target,
+    debug_adapter_available, debug_adapter_available_in, defines_main, find_cmake_binary,
+    find_executable, language_id_for_path, resolve, resolve_debug, scan_directory,
+    source_extensions, tool_available,
 };
 pub use settings::{CPP_FAMILY, CodeRunnerSettings, RunCase, default_debug_map, default_run_map};

@@ -24,6 +24,9 @@ pub enum RunError {
     NoMain { directory: PathBuf },
     /// A tool the plan needs is not installed.
     MissingTool { tool: String },
+    /// A `.tsx` file, which Node's type stripping cannot run: it strips types
+    /// but does not transform JSX, so the file would fail with a syntax error.
+    TsxNeedsTransform,
     /// A `$ZED_*` variable in a configured command has no value.
     UnresolvedVariable,
     /// The editor has no local file to run, such as an untitled buffer.
@@ -33,6 +36,48 @@ pub enum RunError {
     /// `code_runner.executor_map` has an entry, but the run dialog was closed
     /// without a command.
     EmptyCommand,
+}
+
+/// The external tools a run plan may need, as they were found on `PATH`.
+///
+/// The editor fills this in when it builds a [`RunRequest`], so [`resolve`] can
+/// name a missing tool instead of leaving a shell error in the terminal. Tests
+/// fill it in themselves, which keeps them independent of what is installed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Toolchain {
+    pub cmake: bool,
+    pub cargo: bool,
+    pub rustc: bool,
+    pub go: bool,
+    pub javac: bool,
+    pub java: bool,
+}
+
+impl Toolchain {
+    /// Looks every tool up on `PATH`.
+    pub fn detect() -> Self {
+        Self {
+            cmake: tool_available("cmake"),
+            cargo: tool_available("cargo"),
+            rustc: tool_available("rustc"),
+            go: tool_available("go"),
+            javac: tool_available("javac"),
+            java: tool_available("java"),
+        }
+    }
+
+    /// Whether the tool with this name was found.
+    pub fn has(&self, tool: &str) -> bool {
+        match tool {
+            "cmake" => self.cmake,
+            "cargo" => self.cargo,
+            "rustc" => self.rustc,
+            "go" => self.go,
+            "javac" => self.javac,
+            "java" => self.java,
+            _ => false,
+        }
+    }
 }
 
 /// What a step of a run plan is for. The label of the step says which one it is,
@@ -169,9 +214,9 @@ pub struct RunRequest<'a> {
     /// The `.c`/`.cpp` files in the file's own directory, so a file without a
     /// `main` can be linked with the one that has it.
     pub directory: DirectorySources,
-    /// Whether `cmake` can be found, because a CMake project cannot be built
-    /// without it and saying so beats a shell error.
-    pub cmake_available: bool,
+    /// The tools the plans can use, because a plan that needs a tool that is
+    /// not installed should say so rather than leave a shell error.
+    pub tools: Toolchain,
 }
 
 impl RunRequest<'_> {
@@ -310,6 +355,10 @@ pub fn scan_directory(directory: &Path, language: &str) -> DirectorySources {
 /// a CMake project a file without `main` is built together with the sibling
 /// sources that do define it, and refused with [`RunError::NoMain`] when none
 /// of them do.
+///
+/// Rust, Go and Java have plans of their own: Rust picks `cargo` or `rustc`
+/// from the files around it, Go runs the file, and Java compiles it into `out`
+/// before running the class named after it.
 pub fn resolve(
     request: &RunRequest<'_>,
     settings: &CodeRunnerSettings,
@@ -322,18 +371,21 @@ pub fn resolve(
         .ok_or_else(|| RunError::NoCommand {
             language: language.clone(),
         })?;
+    let is_windows = settings.is_windows();
 
     match entry {
         RunCase::Command { template, source } => {
+            // The built-in TypeScript command strips types but cannot run JSX,
+            // so say that instead of starting Node on a file it will reject. A
+            // command the user configured is assumed to handle TSX itself.
+            if source == CommandSource::BuiltIn
+                && language == "typescript"
+                && is_tsx(request.file)
+            {
+                return Err(RunError::TsxNeedsTransform);
+            }
             let cwd = file_directory(request);
-            single_command_plan(
-                request,
-                &language,
-                template,
-                source,
-                cwd,
-                settings.is_windows(),
-            )
+            single_command_plan(request, &language, template, source, cwd, is_windows)
         }
         RunCase::CppFamily { source } => {
             if let Some(cmake_root) = request.cmake_root {
@@ -346,20 +398,17 @@ pub fn resolve(
                         template,
                         template_source,
                         cmake_root.to_path_buf(),
-                        settings.is_windows(),
+                        is_windows,
                     );
                 }
-                cmake_plan(
-                    request,
-                    &language,
-                    cmake_root,
-                    source,
-                    settings.is_windows(),
-                )
+                cmake_plan(request, &language, cmake_root, source, is_windows)
             } else {
-                compile_plan(request, &language, source, settings.is_windows())
+                compile_plan(request, &language, source, is_windows)
             }
         }
+        RunCase::Rust { source } => rust_plan(request, &language, source, is_windows),
+        RunCase::Go { source } => go_plan(request, &language, source, is_windows),
+        RunCase::Java { source } => java_plan(request, &language, source, is_windows),
     }
 }
 
@@ -388,7 +437,7 @@ pub fn resolve_debug(
     if matches!(language.as_str(), "c" | "cpp")
         && let Some(cmake_root) = request.cmake_root
     {
-        if !request.cmake_available {
+        if !request.tools.cmake {
             return Err(RunError::MissingTool {
                 tool: "cmake".to_owned(),
             });
@@ -441,11 +490,19 @@ pub fn resolve_debug(
             )
         }
         (_, _) => {
-            let context = task_context(request, &cwd, &language);
-            let build_line = substitute_variables_in_str(&entry.build, &context)
-                .ok_or(RunError::UnresolvedVariable)?;
-            let program_line = substitute_variables_in_str(&entry.program, &context)
-                .ok_or(RunError::UnresolvedVariable)?;
+            // The build is a shell command line, so its values are escaped for
+            // the double quotes around them. The program is a path the debugger
+            // opens, so it keeps the raw value.
+            let build_line = substitute_variables_in_str(
+                &entry.build,
+                &shell_task_context(request, &cwd, &language, is_windows),
+            )
+            .ok_or(RunError::UnresolvedVariable)?;
+            let program_line = substitute_variables_in_str(
+                &entry.program,
+                &task_context(request, &cwd, &language),
+            )
+            .ok_or(RunError::UnresolvedVariable)?;
             let program = if Path::new(&program_line).is_absolute() {
                 PathBuf::from(program_line)
             } else {
@@ -510,7 +567,7 @@ fn single_command_plan(
     cwd: PathBuf,
     is_windows: bool,
 ) -> Result<RunPlan, RunError> {
-    let context = task_context(request, &cwd, language);
+    let context = shell_task_context(request, &cwd, language, is_windows);
     let command_line =
         substitute_variables_in_str(template, &context).ok_or(RunError::UnresolvedVariable)?;
     let filename = file_name(request.file);
@@ -605,6 +662,246 @@ fn compile_plan(
     })
 }
 
+/// Runs a Rust file the way the project around it expects.
+///
+/// Inside a crate it is `cargo run`, by the binary whose name matches the file
+/// when the crate has one (`src/bin/<stem>.rs` or a `[[bin]]` in `Cargo.toml`),
+/// and the crate's default target otherwise, with a note saying so. A file that
+/// belongs to no crate is compiled with `rustc` and then run, because `cargo
+/// run` cannot build a lone file.
+fn rust_plan(
+    request: &RunRequest<'_>,
+    language: &str,
+    source: CommandSource,
+    is_windows: bool,
+) -> Result<RunPlan, RunError> {
+    let cwd = file_directory(request);
+    let filename = file_name(request.file);
+    let stem = stem_of(request.file);
+
+    if let Some(project) = cargo_project_root(request.file) {
+        if !request.tools.cargo {
+            return Err(RunError::MissingTool {
+                tool: "cargo".to_owned(),
+            });
+        }
+        let named_binary = has_cargo_binary(&project, &stem);
+        let is_default_target = request.file == project.join("src").join("main.rs");
+        let (command_line, note) = if named_binary {
+            (format!("cargo run --bin {stem}"), None)
+        } else {
+            (
+                "cargo run".to_owned(),
+                (!is_default_target).then(|| {
+                    format!(
+                        "{filename} is not a binary target of the crate at {}, so the run builds and starts its default target.",
+                        project.display()
+                    )
+                }),
+            )
+        };
+        return Ok(RunPlan {
+            language: language.to_owned(),
+            filename: filename.clone(),
+            root: cwd.clone(),
+            steps: vec![RunStep {
+                kind: StepKind::Run,
+                label: format!("run {filename}"),
+                command_line,
+                cwd,
+            }],
+            pending_binary: None,
+            source,
+            note,
+        });
+    }
+
+    if !request.tools.rustc {
+        return Err(RunError::MissingTool {
+            tool: "rustc".to_owned(),
+        });
+    }
+    let suffix = if is_windows { ".exe" } else { "" };
+    let binary = format!("{stem}{suffix}");
+    let build_line = format!(
+        "rustc {} -o {}",
+        quote(&filename, is_windows),
+        quote(&binary, is_windows)
+    );
+    let run_line = run_line_for(&binary, is_windows);
+
+    Ok(RunPlan {
+        language: language.to_owned(),
+        filename: filename.clone(),
+        root: cwd.clone(),
+        steps: vec![
+            RunStep {
+                kind: StepKind::Build,
+                label: format!("build {filename}"),
+                command_line: build_line,
+                cwd: cwd.clone(),
+            },
+            RunStep {
+                kind: StepKind::Run,
+                label: format!("run {filename}"),
+                command_line: run_line,
+                cwd,
+            },
+        ],
+        pending_binary: None,
+        source,
+        note: Some(format!(
+            "{filename} is not inside a crate, so it is compiled with rustc and the binary is started on its own."
+        )),
+    })
+}
+
+/// Runs a Go file with `go run`, which compiles and starts it in one step.
+fn go_plan(
+    request: &RunRequest<'_>,
+    language: &str,
+    source: CommandSource,
+    is_windows: bool,
+) -> Result<RunPlan, RunError> {
+    if !request.tools.go {
+        return Err(RunError::MissingTool {
+            tool: "go".to_owned(),
+        });
+    }
+    let cwd = file_directory(request);
+    let filename = file_name(request.file);
+    let path = request.file.to_string_lossy();
+    Ok(RunPlan {
+        language: language.to_owned(),
+        filename: filename.clone(),
+        root: cwd.clone(),
+        steps: vec![RunStep {
+            kind: StepKind::Run,
+            label: format!("run {filename}"),
+            command_line: format!("go run {}", quote(&path, is_windows)),
+            cwd,
+        }],
+        pending_binary: None,
+        source,
+        note: None,
+    })
+}
+
+/// Compiles a Java file into `out` and runs the class named after it.
+///
+/// `javac` requires a public class to live in a file of the same name, so the
+/// file stem is the class name; a file that breaks that rule fails to compile
+/// instead of being guessed at.
+fn java_plan(
+    request: &RunRequest<'_>,
+    language: &str,
+    source: CommandSource,
+    is_windows: bool,
+) -> Result<RunPlan, RunError> {
+    for tool in ["javac", "java"] {
+        if !request.tools.has(tool) {
+            return Err(RunError::MissingTool {
+                tool: tool.to_owned(),
+            });
+        }
+    }
+    let cwd = file_directory(request);
+    let filename = file_name(request.file);
+    let stem = stem_of(request.file);
+    let out = cwd.join("out").to_string_lossy().into_owned();
+    let build_line = format!(
+        "javac -d {} {}",
+        quote(&out, is_windows),
+        quote(&filename, is_windows)
+    );
+    let run_line = format!("java -cp {} {}", quote(&out, is_windows), quote(&stem, is_windows));
+
+    Ok(RunPlan {
+        language: language.to_owned(),
+        filename: filename.clone(),
+        root: cwd.clone(),
+        steps: vec![
+            RunStep {
+                kind: StepKind::Build,
+                label: format!("build {filename}"),
+                command_line: build_line,
+                cwd: cwd.clone(),
+            },
+            RunStep {
+                kind: StepKind::Run,
+                label: format!("run {filename}"),
+                command_line: run_line,
+                cwd,
+            },
+        ],
+        pending_binary: None,
+        source,
+        note: None,
+    })
+}
+
+/// The crate a Rust file belongs to: the closest directory above it that holds
+/// a `Cargo.toml`, which is how `cargo` finds it too.
+fn cargo_project_root(file: &Path) -> Option<PathBuf> {
+    let mut directory = file.parent();
+    for _ in 0..24 {
+        let current = directory?;
+        if current.join("Cargo.toml").is_file() {
+            return Some(current.to_path_buf());
+        }
+        directory = current.parent();
+    }
+    None
+}
+
+/// Whether the crate has a binary target named after the file.
+fn has_cargo_binary(project: &Path, stem: &str) -> bool {
+    project
+        .join("src")
+        .join("bin")
+        .join(format!("{stem}.rs"))
+        .is_file()
+        || cargo_toml_names_binary(project, stem)
+}
+
+/// Whether a `[[bin]]` table in the crate's manifest has this name.
+fn cargo_toml_names_binary(project: &Path, stem: &str) -> bool {
+    let Ok(contents) = std::fs::read_to_string(project.join("Cargo.toml")) else {
+        return false;
+    };
+    let mut in_bin_table = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_bin_table = line == "[[bin]]";
+            continue;
+        }
+        if !in_bin_table {
+            continue;
+        }
+        let Some(value) = line.strip_prefix("name") else {
+            continue;
+        };
+        let Some(value) = value.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let value = value.split('#').next().unwrap_or_default().trim();
+        let value = value.trim_matches(|character| character == '"' || character == '\'');
+        if value == stem {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the file is TypeScript with JSX, which `node --experimental-strip-types`
+/// strips types from but cannot transform.
+fn is_tsx(file: &Path) -> bool {
+    file.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tsx"))
+}
+
 /// Configures the project when it has no build directory yet, builds it, and
 /// leaves the target binary for the caller to find once the build has run.
 fn cmake_plan(
@@ -614,7 +911,7 @@ fn cmake_plan(
     source: CommandSource,
     _is_windows: bool,
 ) -> Result<RunPlan, RunError> {
-    if !request.cmake_available {
+    if !request.tools.cmake {
         return Err(RunError::MissingTool {
             tool: "cmake".to_owned(),
         });
@@ -829,9 +1126,11 @@ fn program_sources(request: &RunRequest<'_>) -> Option<ProgramSources> {
     })
 }
 
+/// Wraps a path or a binary name in the quotes the plan runs it with, escaping
+/// what those quotes leave special.
 fn quote(value: &str, is_windows: bool) -> String {
     if is_windows {
-        format!("\"{}\"", value.replace('"', "`\""))
+        format!("\"{}\"", escape_double_quoted(value, true))
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
@@ -933,6 +1232,64 @@ fn task_context(request: &RunRequest<'_>, cwd: &Path, language: &str) -> TaskCon
     }
 }
 
+/// The variables a command line is substituted from, with every value escaped
+/// for the double quotes the templates put around them.
+///
+/// The built-in templates and the plans all quote the values they insert
+/// (`python "$ZED_FILENAME"`), so escaping here is what keeps a file name like
+/// `a$b.py` from being read as a shell variable. The values are only escaped
+/// for a command line: a plan that needs the path itself, such as a debugger's
+/// program, uses [`task_context`] instead.
+fn shell_task_context(
+    request: &RunRequest<'_>,
+    cwd: &Path,
+    language: &str,
+    is_windows: bool,
+) -> TaskContext {
+    let TaskContext {
+        cwd,
+        task_variables,
+        project_env,
+    } = task_context(request, cwd, language);
+    let task_variables = task_variables
+        .into_iter()
+        .map(|(name, value)| (name, escape_double_quoted(&value, is_windows)))
+        .collect::<TaskVariables>();
+    TaskContext {
+        cwd,
+        task_variables,
+        project_env,
+    }
+}
+
+/// Escapes a value that a template places inside a double-quoted string.
+///
+/// The templates always quote `$ZED_*` values, so the escaping only has to
+/// cover what those quotes leave special:
+///
+/// - PowerShell: a backtick escapes a backtick, `$` and `"`. A backslash is the
+///   path separator and not an escape, so it must stay as it is; `&`, `^`, `%`,
+///   `!`, `'`, `[` and `]` are literal inside double quotes.
+/// - POSIX shells: a backslash escapes a backslash, a backtick, `$` and `"`;
+///   `&`, `'`, `[` and `]` are literal inside double quotes.
+///
+/// This is why `a$b.py` no longer runs `a.py`, and why a file name with a
+/// backtick no longer turns into a backspace.
+fn escape_double_quoted(value: &str, is_windows: bool) -> String {
+    if is_windows {
+        value
+            .replace('`', "``")
+            .replace('$', "`$")
+            .replace('"', "`\"")
+    } else {
+        value
+            .replace('\\', "\\\\")
+            .replace('`', "\\`")
+            .replace('$', "\\$")
+            .replace('"', "\\\"")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,6 +1315,19 @@ mod tests {
         }
     }
 
+    /// The tools every plan can use, so a test only says whether `cmake` is
+    /// there. Tool-missing tests build a `Toolchain` themselves.
+    fn tools(cmake: bool) -> Toolchain {
+        Toolchain {
+            cmake,
+            cargo: true,
+            rustc: true,
+            go: true,
+            javac: true,
+            java: true,
+        }
+    }
+
     fn request<'a>(
         file: &'a Path,
         root: &'a Path,
@@ -970,7 +1340,7 @@ mod tests {
             worktree_root: root,
             cmake_root,
             directory,
-            cmake_available,
+            tools: tools(cmake_available),
         }
     }
 
@@ -1335,14 +1705,13 @@ mod tests {
     }
 
     #[test]
-    fn rust_python_and_node_are_recognized() {
+    fn python_node_and_typescript_are_recognized() {
         let root = Path::new("/work");
         let settings = settings(&[], false);
         for (file, expected) in [
-            ("src/main.rs", "cargo run"),
             ("tool.py", r#"python3 "tool.py""#),
             ("index.mjs", r#"node "index.mjs""#),
-            ("app.tsx", r#"node --experimental-strip-types "app.tsx""#),
+            ("app.ts", r#"node --experimental-strip-types "app.ts""#),
         ] {
             let file = root.join(file);
             let plan = resolve(
@@ -1353,6 +1722,30 @@ mod tests {
             assert_eq!(plan.steps.len(), 1, "{file:?}");
             assert_eq!(plan.steps[0].command_line, expected, "{file:?}");
         }
+    }
+
+    #[test]
+    fn tsx_is_refused_with_a_reason_instead_of_a_syntax_error_from_node() {
+        let file = Path::new("/work/App.tsx");
+        let result = resolve(
+            &request(file, Path::new("/work"), DirectorySources::default(), None, false),
+            &settings(&[], false),
+        );
+
+        assert_eq!(result, Err(RunError::TsxNeedsTransform));
+    }
+
+    #[test]
+    fn a_configured_typescript_command_still_gets_a_chance_at_tsx() {
+        let file = Path::new("/work/App.tsx");
+        let plan = resolve(
+            &request(file, Path::new("/work"), DirectorySources::default(), None, false),
+            &settings(&[("typescript", "npx tsx \"$ZED_FILENAME\"")], false),
+        )
+        .expect("the user's TSX-capable command wins");
+
+        assert_eq!(plan.steps[0].command_line, "npx tsx \"App.tsx\"");
+        assert_eq!(plan.source, CommandSource::Settings);
     }
 
     #[test]
@@ -1421,7 +1814,7 @@ mod tests {
                     &["my file.cpp"],
                     Path::new(r"C:\work"),
                 ),
-                cmake_available: false,
+                tools: tools(false),
             },
             &settings(&[], true),
         )
@@ -1481,7 +1874,7 @@ mod tests {
                 worktree_root: Path::new("/work"),
                 cmake_root: None,
                 directory: DirectorySources::default(),
-                cmake_available: false,
+                tools: tools(false),
             },
             &settings(&[], false),
         );
@@ -1541,5 +1934,325 @@ mod tests {
         assert_eq!(debug_adapter_available_in("GDB", &[]), false);
         assert_eq!(debug_adapter_available_in("CodeLLDB", &[]), true);
         assert_eq!(debug_adapter_available_in("gdb", &[]), true);
+    }
+
+    fn write_file(directory: &Path, name: &str, contents: &str) -> PathBuf {
+        let path = directory.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("fixture directory");
+        }
+        std::fs::write(&path, contents).expect("fixture file");
+        path
+    }
+
+    #[test]
+    fn windows_values_escape_what_powershell_still_expands_inside_double_quotes() {
+        for (value, expected) in [
+            // A `$` or a backtick would be read as a variable or an escape.
+            ("a$b.py", "a`$b.py"),
+            ("a`b.py", "a``b.py"),
+            ("a\"b.py", "a`\"b.py"),
+            // Everything else is literal inside double quotes, and a backslash
+            // is the path separator rather than an escape.
+            ("it's.py", "it's.py"),
+            ("a&b.py", "a&b.py"),
+            ("a^b.py", "a^b.py"),
+            ("a%b.py", "a%b.py"),
+            ("a!b.py", "a!b.py"),
+            ("a b.py", "a b.py"),
+            ("中文 目录", "中文 目录"),
+            ("a[1].py", "a[1].py"),
+            (r"C:\tmp\x.py", r"C:\tmp\x.py"),
+        ] {
+            assert_eq!(escape_double_quoted(value, true), expected, "{value}");
+        }
+    }
+
+    #[test]
+    fn posix_values_escape_what_a_double_quoted_string_still_expands() {
+        for (value, expected) in [
+            ("a$b.py", r"a\$b.py"),
+            ("a`b.py", r"a\`b.py"),
+            ("a\"b.py", "a\\\"b.py"),
+            (r"a\b.py", r"a\\b.py"),
+            ("it's.py", "it's.py"),
+            ("a&b.py", "a&b.py"),
+            ("a b.py", "a b.py"),
+            ("a[1].py", "a[1].py"),
+            ("中文 目录", "中文 目录"),
+        ] {
+            assert_eq!(escape_double_quoted(value, false), expected, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_configured_command_escapes_the_values_it_substitutes() {
+        let directory = Path::new(r"C:\中文 目录");
+        let file = directory.join("a$b.py");
+        let plan = resolve(
+            &request(&file, directory, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("python has a default command");
+
+        assert_eq!(
+            plan.steps[0].command_line,
+            format!("{WINDOWS_UTF8_OUTPUT}python \"a`$b.py\"")
+        );
+        // The command runs in the real directory, not an escaped copy of it.
+        assert_eq!(plan.steps[0].cwd, directory);
+    }
+
+    #[test]
+    fn a_c_compile_line_escapes_the_file_name_and_the_binary() {
+        let directory = Path::new(r"C:\work");
+        let file = directory.join("a$b.cpp");
+        let plan = resolve(
+            &request(
+                &file,
+                directory,
+                directory_sources(&["a$b.cpp"], &["a$b.cpp"], directory),
+                None,
+                false,
+            ),
+            &settings(&[], true),
+        )
+        .expect("cpp has a built-in plan");
+
+        assert_eq!(
+            plan.steps
+                .iter()
+                .map(|step| step.command_line.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                r#"g++ -std=c++17 "a`$b.cpp" -o "a`$b.exe""#.to_owned(),
+                format!("{WINDOWS_UTF8_OUTPUT}& \".\\a`$b.exe\"")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rust_file_outside_a_crate_is_compiled_with_rustc_and_started() {
+        let directory = temp_directory("rust-single");
+        let file = write_file(&directory, "hello.rs", "fn main() {}\n");
+
+        let plan = resolve(
+            &request(&file, &directory, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("a lone rust file is compiled by the runner");
+
+        assert_eq!(
+            plan.steps
+                .iter()
+                .map(|step| (step.kind, step.command_line.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (StepKind::Build, r#"rustc "hello.rs" -o "hello.exe""#),
+                (StepKind::Run, r#"& ".\hello.exe""#),
+            ]
+        );
+        assert!(
+            plan.note
+                .as_deref()
+                .is_some_and(|note| note.contains("not inside a crate")),
+            "the note explains why rustc is used: {:?}",
+            plan.note
+        );
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_rust_file_in_a_crate_runs_the_binary_named_after_it() {
+        let project = temp_directory("rust-bin-dir");
+        write_file(&project, "Cargo.toml", "[package]\nname = \"demo\"\n");
+        let file = write_file(&project, "src/bin/tool.rs", "fn main() {}\n");
+
+        let plan = resolve(
+            &request(&file, &project, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("a crate binary resolves");
+
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].command_line, "cargo run --bin tool");
+        assert_eq!(plan.note, None);
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_binary_named_in_the_manifest_is_run_by_its_name() {
+        let project = temp_directory("rust-bin-manifest");
+        write_file(
+            &project,
+            "Cargo.toml",
+            "[package]\nname = \"demo\"\n\n[[bin]]\nname = \"tool\"  # the CLI\npath = \"tool.rs\"\n",
+        );
+        let file = write_file(&project, "tool.rs", "fn main() {}\n");
+
+        let plan = resolve(
+            &request(&file, &project, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("a manifest binary resolves");
+
+        assert_eq!(plan.steps[0].command_line, "cargo run --bin tool");
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_rust_file_that_is_no_binary_target_runs_the_default_one_and_says_so() {
+        let project = temp_directory("rust-default");
+        write_file(&project, "Cargo.toml", "[package]\nname = \"demo\"\n");
+        write_file(&project, "src/main.rs", "fn main() {}\n");
+        let file = write_file(&project, "notes.rs", "// not a target\n");
+
+        let plan = resolve(
+            &request(&file, &project, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("a crate file falls back to the default target");
+
+        assert_eq!(plan.steps[0].command_line, "cargo run");
+        assert!(
+            plan.note
+                .as_deref()
+                .is_some_and(|note| note.contains("default target")),
+            "the note says which target runs: {:?}",
+            plan.note
+        );
+
+        let main_file = project.join("src").join("main.rs");
+        let plan = resolve(
+            &request(&main_file, &project, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("the default target resolves");
+        assert_eq!(plan.steps[0].command_line, "cargo run");
+        assert_eq!(plan.note, None, "main.rs is the default target");
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_missing_rust_tool_is_named_instead_of_left_to_the_shell() {
+        let directory = temp_directory("rust-missing");
+        let file = write_file(&directory, "hello.rs", "fn main() {}\n");
+        let mut missing_rustc = tools(false);
+        missing_rustc.rustc = false;
+
+        let result = resolve(
+            &RunRequest {
+                file: &file,
+                worktree_root: &directory,
+                cmake_root: None,
+                directory: DirectorySources::default(),
+                tools: missing_rustc,
+            },
+            &settings(&[], true),
+        );
+
+        assert_eq!(
+            result,
+            Err(RunError::MissingTool {
+                tool: "rustc".to_owned()
+            })
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn go_runs_the_file_it_was_asked_for() {
+        let directory = Path::new(r"C:\work");
+        let file = directory.join("main.go");
+        let plan = resolve(
+            &request(&file, directory, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("go has a built-in plan");
+
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].label, "run main.go");
+        assert_eq!(plan.steps[0].command_line, r#"go run "C:\work\main.go""#);
+    }
+
+    #[test]
+    fn a_missing_go_is_named_instead_of_left_to_the_shell() {
+        let directory = Path::new(r"C:\work");
+        let file = directory.join("main.go");
+        let mut missing_go = tools(false);
+        missing_go.go = false;
+
+        let result = resolve(
+            &RunRequest {
+                file: &file,
+                worktree_root: directory,
+                cmake_root: None,
+                directory: DirectorySources::default(),
+                tools: missing_go,
+            },
+            &settings(&[], true),
+        );
+
+        assert_eq!(
+            result,
+            Err(RunError::MissingTool {
+                tool: "go".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn java_compiles_into_out_and_runs_the_class_named_after_the_file() {
+        let directory = Path::new(r"C:\work");
+        let file = directory.join("Main.java");
+        let plan = resolve(
+            &request(&file, directory, DirectorySources::default(), None, false),
+            &settings(&[], true),
+        )
+        .expect("java has a built-in plan");
+
+        assert_eq!(
+            plan.steps
+                .iter()
+                .map(|step| (step.kind, step.command_line.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    StepKind::Build,
+                    r#"javac -d "C:\work\out" "Main.java""#
+                ),
+                (StepKind::Run, r#"java -cp "C:\work\out" "Main""#),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_java_tool_is_named_instead_of_left_to_the_shell() {
+        let directory = Path::new(r"C:\work");
+        let file = directory.join("Main.java");
+        let mut no_javac = tools(false);
+        no_javac.javac = false;
+
+        let result = resolve(
+            &RunRequest {
+                file: &file,
+                worktree_root: directory,
+                cmake_root: None,
+                directory: DirectorySources::default(),
+                tools: no_javac,
+            },
+            &settings(&[], true),
+        );
+
+        assert_eq!(
+            result,
+            Err(RunError::MissingTool {
+                tool: "javac".to_owned()
+            })
+        );
     }
 }

@@ -119,6 +119,7 @@
   "The remote instance of WuIDE does not support this yet. It must be upgraded to {version}": "远程 WuIDE 实例尚不支持此功能，需要升级到 {version}",
   "The run command could not be built from its template. Check code_runner.executor_map.": "无法从模板生成运行命令。请检查 code_runner.executor_map。",
   "The run command is empty.": "运行命令为空。",
+  "This .tsx file is TypeScript with JSX, and Node's --experimental-strip-types only removes types, so it cannot run JSX. Run it through a bundler, or point code_runner.executor_map.typescript at a runner that handles TSX.": "这个 .tsx 文件是带 JSX 的 TypeScript，而 Node 的 --experimental-strip-types 只去掉类型、不转换 JSX，因此无法运行。请改用打包器，或把 code_runner.executor_map.typescript 指向能处理 TSX 的运行器。",
   "The run command uses a variable that has no value for this file.": "运行命令使用了对这个文件没有取值的变量。",
   "The workspace closed before the command could start.": "命令开始前工作区已关闭。",
   "There is no run command for this file type.": "这种文件类型没有运行命令。",

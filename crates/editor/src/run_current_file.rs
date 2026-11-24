@@ -66,7 +66,7 @@ impl CodeRunTarget {
             worktree_root: &self.worktree_root,
             cmake_root: self.cmake_root.as_deref(),
             directory: scan_directory(&directory, language),
-            cmake_available: code_runner::tool_available("cmake"),
+            tools: code_runner::Toolchain::detect(),
         }
     }
 }
@@ -675,6 +675,9 @@ fn run_error_message(error: &RunError) -> SharedString {
         RunError::MissingTool { tool } => t!(
             "{tool} was not found in PATH. Install {tool} or add it to PATH.",
             tool = tool.clone()
+        ),
+        RunError::TsxNeedsTransform => t!(
+            "This .tsx file is TypeScript with JSX, and Node's --experimental-strip-types only removes types, so it cannot run JSX. Run it through a bundler, or point code_runner.executor_map.typescript at a runner that handles TSX."
         ),
         RunError::UnresolvedVariable => {
             t!("The run command uses a variable that has no value for this file.")
