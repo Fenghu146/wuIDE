@@ -828,7 +828,6 @@ impl AgentPanel {
                         })
                 };
                 let compact_rows_entry = {
-                    let store = store.clone();
                     ContextMenuEntry::new(t!("Compact Rows"))
                         .toggleable(IconPosition::Start, compact_rows)
                         .handler(move |_, cx| {
