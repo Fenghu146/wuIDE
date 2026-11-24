@@ -3,7 +3,10 @@ use crate::{
     NewOpencodeChat, NewPiChat, ToggleFocus,
     chat_style::{accent, ink, selected_row, text_faint, ui, wash},
     chat_view::ChatView,
-    session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, RunSettings, SessionSummary},
+    session::{
+        AgentSession, AgentStore, ChatListPrefs, ChatOutcome, RunSettings, SessionSummary,
+        TitleSource,
+    },
 };
 use agent_harness::PermissionMode;
 use anyhow::Result;
@@ -27,7 +30,10 @@ use std::{
     time::Duration,
 };
 use time::OffsetDateTime;
-use ui::{Clickable, ContextMenu, IconName, PopoverMenu, Toggleable, Tooltip, prelude::*};
+use ui::{
+    Clickable, ContextMenu, ContextMenuEntry, IconName, IconPosition, PopoverMenu, Toggleable,
+    Tooltip, prelude::*,
+};
 use util::ResultExt as _;
 use workspace::{
     SaveIntent, SplitDirection, Toast, Workspace,
@@ -465,6 +471,19 @@ impl AgentPanel {
         .detach_and_log_err(cx);
     }
 
+    /// Renames a chat with the agent, once, when the user asks from the menu.
+    fn retitle_with_model(&mut self, id: SharedString, cx: &mut Context<Self>) {
+        let opening = self
+            .store
+            .update(cx, |store, cx| store.open_session(&id, cx));
+        cx.spawn(async move |_, cx| {
+            let session = opening.await?;
+            session.update(cx, |session, cx| session.request_smart_title(true, cx));
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
     fn close_views(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace
             .update(cx, |workspace, cx| {
@@ -586,6 +605,8 @@ impl AgentPanel {
         let id: SharedString = session.id.clone().into();
         let title = session.title.clone();
         let pinned = session.pinned;
+        let archived = session.archived_at.is_some();
+        let auto_named = session.title_source == Some(TitleSource::Auto);
         let native_id = session.native_session_id.clone();
         let panel = cx.entity().downgrade();
         let menu = ContextMenu::build(window, cx, move |menu, _, _| {
@@ -620,6 +641,16 @@ impl AgentPanel {
                         }),
                     )
                 })
+                .item({
+                    let id = id.clone();
+                    let handler = action(
+                        &panel,
+                        Box::new(move |panel, _, cx| panel.retitle_with_model(id.clone(), cx)),
+                    );
+                    ContextMenuEntry::new(t!("Rename with AI"))
+                        .handler(move |window, cx| handler(window, cx))
+                        .disabled(!auto_named)
+                })
                 .entry(pin_label, None, {
                     let id = id.clone();
                     action(
@@ -645,15 +676,35 @@ impl AgentPanel {
                 }),
                 None => menu,
             };
-            menu.separator().entry(t!("Delete…"), None, {
-                let (id, title) = (id.clone(), title.clone());
-                action(
-                    &panel,
-                    Box::new(move |panel, window, cx| {
-                        panel.confirm_delete(id.clone(), title.clone(), window, cx)
-                    }),
+            menu.separator()
+                .entry(
+                    if archived {
+                        t!("Unarchive")
+                    } else {
+                        t!("Archive")
+                    },
+                    None,
+                    {
+                        let id = id.clone();
+                        action(
+                            &panel,
+                            Box::new(move |panel, _, cx| {
+                                panel.store.update(cx, |store, cx| {
+                                    store.set_archived(&id, !archived, false, cx)
+                                })
+                            }),
+                        )
+                    },
                 )
-            })
+                .entry(t!("Delete…"), None, {
+                    let (id, title) = (id.clone(), title.clone());
+                    action(
+                        &panel,
+                        Box::new(move |panel, window, cx| {
+                            panel.confirm_delete(id.clone(), title.clone(), window, cx)
+                        }),
+                    )
+                })
         });
         let dismiss = cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, _, cx| {
             this.row_menu = None;
@@ -707,6 +758,101 @@ impl AgentPanel {
                         },
                     )
                 }))
+            })
+    }
+
+    /// View options for the list. They live here rather than in Settings because
+    /// they only change what this panel shows.
+    fn list_options_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let prefs = self.store.read(cx).list_prefs().clone();
+        let store = self.store.clone();
+        PopoverMenu::new("agent-panel-list-options")
+            .trigger(HeaderButton::new(
+                "agent-panel-list-options-trigger",
+                IconName::Settings,
+                t!("Chat list options"),
+            ))
+            .anchor(gpui::Anchor::TopRight)
+            .menu(move |window, cx| {
+                let store = store.clone();
+                let group_by_project = prefs.group_by_project;
+                let all_projects = prefs.all_projects;
+                let compact_rows = prefs.compact_rows;
+                let archived_open = !prefs
+                    .collapsed_sections
+                    .iter()
+                    .any(|section| section == ARCHIVED_KEY);
+                let archived_entry = {
+                    let store = store.clone();
+                    ContextMenuEntry::new(t!("Archived"))
+                        .toggleable(IconPosition::Start, archived_open)
+                        .handler(move |_, cx| {
+                            store.update(cx, |store, cx| {
+                                store.update_list_prefs(
+                                    |prefs| {
+                                        let archived = prefs
+                                            .collapsed_sections
+                                            .iter()
+                                            .position(|section| section == ARCHIVED_KEY);
+                                        match archived {
+                                            Some(index) => {
+                                                prefs.collapsed_sections.remove(index);
+                                            }
+                                            None => prefs
+                                                .collapsed_sections
+                                                .push(ARCHIVED_KEY.to_string()),
+                                        }
+                                    },
+                                    cx,
+                                )
+                            })
+                        })
+                };
+                let group_by_project_entry = {
+                    let store = store.clone();
+                    ContextMenuEntry::new(t!("Group by Project"))
+                        .toggleable(IconPosition::Start, group_by_project)
+                        .handler(move |_, cx| {
+                            store.update(cx, |store, cx| {
+                                store.update_list_prefs(
+                                    |prefs| prefs.group_by_project = !group_by_project,
+                                    cx,
+                                )
+                            })
+                        })
+                };
+                let all_projects_entry = {
+                    let store = store.clone();
+                    ContextMenuEntry::new(t!("Show All Projects"))
+                        .toggleable(IconPosition::Start, all_projects)
+                        .handler(move |_, cx| {
+                            store.update(cx, |store, cx| {
+                                store.update_list_prefs(
+                                    |prefs| prefs.all_projects = !all_projects,
+                                    cx,
+                                )
+                            })
+                        })
+                };
+                let compact_rows_entry = {
+                    ContextMenuEntry::new(t!("Compact Rows"))
+                        .toggleable(IconPosition::Start, compact_rows)
+                        .handler(move |_, cx| {
+                            store.update(cx, |store, cx| {
+                                store.update_list_prefs(
+                                    |prefs| prefs.compact_rows = !compact_rows,
+                                    cx,
+                                )
+                            })
+                        })
+                };
+                let menu = ContextMenu::build(window, cx, move |menu, _, _| {
+                    menu.item(group_by_project_entry)
+                        .item(all_projects_entry)
+                        .item(compact_rows_entry)
+                        .item(archived_entry)
+                });
+                Some(menu)
             })
     }
 
@@ -770,6 +916,7 @@ impl AgentPanel {
                             }),
                         ),
                     )
+                    .child(self.list_options_menu(cx))
                     .child(self.new_chat_menu()),
             )
             .child(
@@ -975,6 +1122,7 @@ impl AgentPanel {
         &self,
         session: SessionSummary,
         nested: bool,
+        dimmed: bool,
         now: i64,
         compact: bool,
         selected: bool,
@@ -982,7 +1130,11 @@ impl AgentPanel {
     ) -> AnyElement {
         let id: SharedString = session.id.clone().into();
         let colors = cx.theme().colors();
-        let text = colors.text;
+        let text = if dimmed {
+            colors.text.opacity(0.6)
+        } else {
+            colors.text
+        };
         let subline = colors.text_muted.opacity(0.5);
         let time_color = colors.text_muted.opacity(0.8);
         let hovered = self.hovered_row.as_ref() == Some(&id);
@@ -1111,7 +1263,19 @@ impl AgentPanel {
             }))
             .on_click(cx.listener({
                 let id = id.clone();
-                move |this, _, window, cx| this.open_session(id.clone(), window, cx)
+                let rename_title = session.title.to_string();
+                move |this, event: &ClickEvent, window, cx| {
+                    if event.click_count() >= 2 {
+                        this.start_rename(
+                            Renaming::Chat(id.clone()),
+                            rename_title.clone(),
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    this.open_session(id.clone(), window, cx)
+                }
             }))
             .on_mouse_down(
                 MouseButton::Right,
@@ -1176,6 +1340,7 @@ impl AgentPanel {
         &self,
         key: SharedString,
         label: SharedString,
+        icon: Option<IconName>,
         collapsed: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -1196,6 +1361,9 @@ impl AgentPanel {
             .px(px(SPACE_SM))
             .gap(px(SPACE_SM))
             .cursor_pointer()
+            .when_some(icon, |this, icon| {
+                this.child(glyph(icon, 12., faint))
+            })
             .child(label_element)
             .child(div().flex_1())
             .child(disclosure_chevron(!collapsed, faint))
@@ -1271,7 +1439,48 @@ impl AgentPanel {
             active,
             searching,
             rendered_rows,
+            notice: self.render_auto_archive_notice(cx),
         }
+    }
+
+    /// The one line that keeps the time rule honest: what it archived, and a way
+    /// to put it back.
+    fn render_auto_archive_notice(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let count = self.store.read(cx).last_auto_archive().len();
+        if count == 0 {
+            return None;
+        }
+        let colors = cx.theme().colors();
+        Some(
+            h_flex()
+                .id("agent-auto-archive-notice")
+                .w_full()
+                .px(px(SPACE_SM))
+                .pt(px(SPACE_SM))
+                .gap(px(6.))
+                .text_size(ui(11.))
+                .text_color(colors.text_muted)
+                .child(
+                    div()
+                        .min_w_0()
+                        .child(t!("{count} chats were archived automatically", count = count)),
+                )
+                .child(div().child("·"))
+                .child(
+                    div()
+                        .id("agent-auto-archive-undo")
+                        .cursor_pointer()
+                        .text_color(colors.text)
+                        .hover(|style| style.text_color(colors.text_muted))
+                        .child(t!("Undo"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.store
+                                .update(cx, |store, cx| store.undo_auto_archive(cx));
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_group(
@@ -1282,24 +1491,34 @@ impl AgentPanel {
         cx: &Context<Self>,
     ) -> AnyElement {
         let collapsed = group.collapsed;
-        let (key, label, top_gap): (SharedString, SharedString, bool) = match &group.kind {
-            GroupKind::Pinned => (
-                PINNED_KEY.into(),
-                disclosure_label(&t!("Pinned"), collapsed, group.total),
-                false,
-            ),
-            GroupKind::Project(project) => (
-                project_key(project).into(),
-                disclosure_label(&project_name(project), collapsed, group.total),
-                true,
-            ),
-            GroupKind::Chats => (
-                CHATS_KEY.into(),
-                disclosure_label(&t!("Chats"), collapsed, group.total),
-                follows_group,
-            ),
-        };
-        let header = self.section_header(key.clone(), label, collapsed, cx);
+        let (key, label, icon, top_gap): (SharedString, SharedString, Option<IconName>, bool) =
+            match &group.kind {
+                GroupKind::Pinned => (
+                    PINNED_KEY.into(),
+                    disclosure_label(&t!("Pinned"), collapsed, group.total),
+                    None,
+                    false,
+                ),
+                GroupKind::Project(project) => (
+                    project_key(project).into(),
+                    disclosure_label(&project_name(project), collapsed, group.total),
+                    None,
+                    true,
+                ),
+                GroupKind::Chats => (
+                    CHATS_KEY.into(),
+                    disclosure_label(&t!("Chats"), collapsed, group.total),
+                    None,
+                    follows_group,
+                ),
+                GroupKind::Archived => (
+                    ARCHIVED_KEY.into(),
+                    disclosure_label(&t!("Archived"), collapsed, group.total),
+                    Some(IconName::Archive),
+                    true,
+                ),
+            };
+        let header = self.section_header(key.clone(), label, icon, collapsed, cx);
         let body: Vec<AnyElement> = group
             .rows
             .iter()
@@ -1308,6 +1527,7 @@ impl AgentPanel {
                 self.render_session(
                     row.session.clone(),
                     row.nested,
+                    row.dimmed,
                     row_context.now,
                     row_context.compact,
                     selected,
@@ -1341,6 +1561,7 @@ struct ChatList {
     active: Vec<AnyElement>,
     searching: bool,
     rendered_rows: HashSet<String>,
+    notice: Option<AnyElement>,
 }
 
 struct RowContext {
@@ -1354,6 +1575,7 @@ enum GroupKind {
     Pinned,
     Project(PathBuf),
     Chats,
+    Archived,
 }
 
 struct ListGroup<'a> {
@@ -1366,6 +1588,8 @@ struct ListGroup<'a> {
 struct ListRow<'a> {
     session: &'a SessionSummary,
     nested: bool,
+    /// A chat in the archived section reads as secondary.
+    dimmed: bool,
 }
 
 struct ListLayout<'a> {
@@ -1399,6 +1623,7 @@ fn layout_list<'a>(
     };
     let group = |kind: GroupKind, members: &[&'a SessionSummary], collapsed: bool| {
         let collapsed = collapsed && !searching;
+        let dimmed = kind == GroupKind::Archived;
         let mut rows = Vec::new();
         for &session in members {
             let mut children = children_of(session);
@@ -1411,10 +1636,12 @@ fn layout_list<'a>(
             rows.push(ListRow {
                 session,
                 nested: false,
+                dimmed,
             });
             rows.extend(children.into_iter().map(|session| ListRow {
                 session,
                 nested: true,
+                dimmed,
             }));
         }
         ListGroup {
@@ -1427,6 +1654,12 @@ fn layout_list<'a>(
     let live: Vec<&SessionSummary> = sessions
         .iter()
         .filter(|session| is_top_level(session))
+        .filter(|session| session.archived_at.is_none())
+        .collect();
+    let archived: Vec<&SessionSummary> = sessions
+        .iter()
+        .filter(|session| is_top_level(session))
+        .filter(|session| session.archived_at.is_some())
         .collect();
     let mut active = Vec::new();
     let pinned: Vec<&SessionSummary> = live
@@ -1464,11 +1697,19 @@ fn layout_list<'a>(
     } else if !rest.is_empty() {
         active.push(group(GroupKind::Chats, &rest, is_collapsed(CHATS_KEY)));
     }
+    if !archived.is_empty() {
+        active.push(group(
+            GroupKind::Archived,
+            &archived,
+            is_collapsed(ARCHIVED_KEY),
+        ));
+    }
     ListLayout { active }
 }
 
 const PINNED_KEY: &str = "agent-pinned";
 const CHATS_KEY: &str = "agent-chats";
+const ARCHIVED_KEY: &str = "agent-archived";
 
 fn project_key(project: &Path) -> String {
     format!("agent-project:{}", project.to_string_lossy())
@@ -1947,7 +2188,8 @@ impl Render for AgentPanel {
                     .track_scroll(&self.list_scroll)
                     .px(px(SPACE_SM))
                     .pt(px(LIST_PAD_TOP))
-                    .children(active),
+                    .children(active)
+                    .children(list.notice),
             )
             .into_any_element()
         } else {
@@ -2163,6 +2405,9 @@ mod tests {
             side_chat: false,
             outcome: None,
             unseen: false,
+            title_source: Some(TitleSource::Auto),
+            archived_at: None,
+            auto_archived: false,
             project_root: PathBuf::from(project),
             branch: None,
             native_session_id: None,
@@ -2225,6 +2470,32 @@ mod tests {
 
         let no_match = layout_list(&[], &prefs, true);
         assert!(no_match.active.is_empty());
+    }
+
+    #[test]
+    fn archived_chats_leave_the_list_and_get_their_own_section() {
+        let prefs = ChatListPrefs::default();
+        let archived = SessionSummary {
+            archived_at: Some(1),
+            auto_archived: true,
+            ..session("old", "/a")
+        };
+        let sessions = vec![session("live", "/a"), archived, session("live-2", "/a")];
+
+        let layout = layout_list(&sessions, &prefs, false);
+        let kinds: Vec<&GroupKind> = layout.active.iter().map(|group| &group.kind).collect();
+        assert_eq!(kinds, [&GroupKind::Chats, &GroupKind::Archived]);
+        assert_eq!(row_ids(&layout.active[0]), ["live", "live-2"]);
+        assert_eq!(row_ids(&layout.active[1]), ["old"]);
+        assert!(layout.active[1].rows[0].dimmed);
+
+        // A search finds archived chats even while their section is collapsed.
+        let collapsed = ChatListPrefs {
+            collapsed_sections: vec![ARCHIVED_KEY.to_string()],
+            ..ChatListPrefs::default()
+        };
+        let layout = layout_list(&sessions, &collapsed, true);
+        assert_eq!(row_ids(&layout.active[1]), ["old"]);
     }
 
     #[test]

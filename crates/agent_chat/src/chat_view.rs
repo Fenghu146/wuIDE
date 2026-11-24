@@ -805,11 +805,13 @@ impl ChatView {
             .into_iter()
             .filter(|skill| text.contains(&format!("${}", skill.name)))
             .collect();
+        let title_hint = Some(text.clone());
         let text = self.expand_composer_refs(&text, cx);
         let prompt = Prompt {
             text,
             attachments: std::mem::take(&mut self.attachments),
             skills,
+            title_hint,
         };
         self.attachment_error = None;
         if self.editing_queued.is_some() {
@@ -922,6 +924,7 @@ impl ChatView {
                     text: expanded_text,
                     attachments,
                     skills,
+                    title_hint: None,
                 };
                 this.session
                     .update(cx, |session, cx| session.send_message(prompt, cx));

@@ -1124,5 +1124,12 @@
   "setting value|X-High": "超高",
   "Repo Map": "仓库地图",
   "Repo Map Mode": "仓库地图模式",
-  "How much work the repository map does. Off builds nothing. Basic (the default) builds the map only when you open the Repo Map panel or ask an agent for it, and never adds a digest to a chat. Full also builds it in the background when a project opens and puts a project digest in the first message of a new chat. Building the map parses the project with tree-sitter: about 15–20 seconds the first time on a large repository (19.5k files here), under a second afterwards from its parse cache. The snapshot it writes is 0.58 MiB for that repository.": "仓库地图做多少工作。Off 什么都不建。Basic（默认）只在你打开仓库地图面板或让智能体取用时才构建，且不会往对话里注入摘要。Full 还会在打开项目时后台构建，并在新对话的第一条消息里带上项目摘要。构建时会用 tree-sitter 解析整个项目：大型仓库（本仓库 19.5k 个文件）第一次约 15–20 秒，之后走解析缓存不到一秒；它写出的快照对本仓库是 0.58 MiB。"
+  "How much work the repository map does. Off builds nothing. Basic (the default) builds the map only when you open the Repo Map panel or ask an agent for it, and never adds a digest to a chat. Full also builds it in the background when a project opens and puts a project digest in the first message of a new chat. Building the map parses the project with tree-sitter: about 15–20 seconds the first time on a large repository (19.5k files here), under a second afterwards from its parse cache. The snapshot it writes is 0.58 MiB for that repository.": "仓库地图做多少工作。Off 什么都不建。Basic（默认）只在你打开仓库地图面板或让智能体取用时才构建，且不会往对话里注入摘要。Full 还会在打开项目时后台构建，并在新对话的第一条消息里带上项目摘要。构建时会用 tree-sitter 解析整个项目：大型仓库（本仓库 19.5k 个文件）第一次约 15–20 秒，之后走解析缓存不到一秒；它写出的快照对本仓库是 0.58 MiB。",
+  "Chat List": "对话列表",
+  "Auto-Archive": "自动归档",
+  "Move chats you haven't used for a while to Archived, where they stay one click away. Pinned chats are never archived.": "很久没用的对话会移到「已归档」，随时可以点开。置顶的对话不会被归档。",
+  "Auto-Archive After": "自动归档时间",
+  "Days without a new message before a chat is archived. Between 7 and 365.": "对话有多少天没有新消息后会被归档。取值 7 到 365。",
+  "Smart Titles": "智能标题",
+  "Name each new chat with your agent after its first reply. This sends one request through your agent and counts against your plan; it usually takes 2–10 seconds, and if it fails the title from your first message stays. Right-click a chat to rename it with your agent once.": "对话第一轮回复结束后，用你的智能体给它起个名字。这会通过你的智能体发起一次请求，计入你的套餐额度；通常需要 2–10 秒，失败时保留首条消息生成的标题。也可以右键某条对话，单次让智能体重命名。"
 }

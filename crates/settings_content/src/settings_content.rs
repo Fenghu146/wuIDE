@@ -1161,6 +1161,18 @@ pub struct AgentChatSettingsContent {
     pub claude_in_chrome: Option<bool>,
     /// How the Git panel writes commit messages.
     pub commit_message: Option<AgentChatCommitMessageContent>,
+    /// Move chats you haven't sent a message in for `auto_archive_days` days to Archived, where they stay one click away. Pinned chats are never archived.
+    ///
+    /// Default: true
+    pub auto_archive: Option<bool>,
+    /// How many days without a new message before a chat is archived. Between 7 and 365.
+    ///
+    /// Default: 30
+    pub auto_archive_days: Option<u32>,
+    /// Write each chat's title with your agent after its first reply. This sends one request through your agent and counts against your plan. If it fails, the title from your first message stays.
+    ///
+    /// Default: false
+    pub smart_titles: Option<bool>,
 }
 
 #[with_fallible_options]

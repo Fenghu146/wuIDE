@@ -158,6 +158,14 @@
       // Extra instructions, such as the language or style to use.
       "instructions": null,
     },
+    // Moves chats you haven't sent a message in for `auto_archive_days` days to
+    // Archived, where they stay one click away. Pinned chats are never archived.
+    "auto_archive": true,
+    // How many days without a new message before a chat is archived (7-365).
+    "auto_archive_days": 30,
+    // Names each chat with your agent after its first reply. This sends one
+    // request through your agent and counts against your plan.
+    "smart_titles": false,
   },
   // A snapshot copies a worktree's dirty files before and after an agent
   // session, so they can be put back if the agent leaves them broken. Snapshots
