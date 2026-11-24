@@ -90,9 +90,11 @@ function PrepareForBundle {
         # The copy above is disposable, so pruning it leaves crates\wu\resources\agents intact.
         $bundledNodeModules = "$innoDir\agents\node_modules"
         $prunableFiles = @(Get-ChildItem -Path $bundledNodeModules -Recurse -File |
-            Where-Object { $_.Extension -in @(".map", ".ts", ".md") })
+            Where-Object {
+                $_.Extension -in @(".map", ".ts", ".tsbuildinfo", ".md") -or $_.Name -match '\.d\.(m|c)ts$'
+            })
         $prunableDirs = @(Get-ChildItem -Path $bundledNodeModules -Recurse -Directory |
-            Where-Object { $_.Name -in @("@types", "test", "tests", "__tests__", "examples") })
+            Where-Object { $_.Name -in @("@types", "test", "tests", "__tests__", "examples", "docs") })
         $prunableFiles | Remove-Item -Force
         foreach ($dir in $prunableDirs) {
             if (Test-Path -LiteralPath $dir.FullName) {
