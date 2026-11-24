@@ -304,7 +304,7 @@ if [[ "$hooks_path" == ".githooks" && -x "$hook_file" ]]; then
     pass "core.hooksPath=.githooks with an executable pre-commit"
 elif [[ "$hooks_path" != ".githooks" ]]; then
     warn "core.hooksPath is ${hooks_path:-unset}, so the commit guards do not run"
-    note "Enable them once per clone: script/setup-hooks"
+    note "Expected outside a merge window; the orchestrator turns them on then: script/setup-hooks"
 else
     warn "core.hooksPath is .githooks, but $hook_file is missing or not executable"
     note "This branch predates the hooks; nothing guards commits made in this worktree."

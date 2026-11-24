@@ -10,6 +10,11 @@
 # Storage is one file per lease, <token>.lease, holding key=value lines. That
 # is line-oriented on purpose: it stays readable by sed and by people, needs no
 # jq, and keeps notes with spaces or quotes intact.
+#
+# Every lease file is read once into shell variables by load_lease. Command
+# substitutions and pipelines in that loop cost a process per lease, which on
+# Windows is two hundred milliseconds; with twenty leases a claim would take
+# seconds instead of milliseconds.
 
 set -euo pipefail
 
@@ -111,27 +116,29 @@ overlaps() {
     return 1
 }
 
-human_duration() {
+# humanize <seconds> sets HUMAN. It writes to a variable instead of printing
+# because a command substitution is a forked shell, and this runs per lease.
+humanize() {
     local s=$1 m h d
     ((s < 0)) && s=0
     if ((s < 60)); then
-        printf '%ds' "$s"
+        HUMAN="${s}s"
         return
     fi
     m=$((s / 60))
     if ((m < 60)); then
-        printf '%dm' "$m"
+        HUMAN="${m}m"
         return
     fi
     h=$((m / 60))
     m=$((m % 60))
     if ((h < 24)); then
-        printf '%dh%02dm' "$h" "$m"
+        printf -v HUMAN '%dh%02dm' "$h" "$m"
         return
     fi
     d=$((h / 24))
     h=$((h % 24))
-    printf '%dd%02dh' "$d" "$h"
+    printf -v HUMAN '%dd%02dh' "$d" "$h"
 }
 
 parse_ttl() {
@@ -151,7 +158,13 @@ parse_ttl() {
 }
 
 sanitize() {
-    printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+    local s=$1
+    s=${s//$'\n'/ }
+    s=${s//$'\r'/ }
+    s=${s//$'\t'/ }
+    s=${s#"${s%%[![:space:]]*}"}
+    s=${s%"${s##*[![:space:]]}"}
+    printf '%s' "$s"
 }
 
 json_string() {
@@ -168,78 +181,131 @@ if [[ "$git_dir" != /* && "$git_dir" != [A-Za-z]:* ]]; then
     git_dir=$(cd "$git_dir" && pwd -P)
 fi
 lease_dir="$git_dir/amp-leases"
+lock_dir="$lease_dir/.claim-lock"
+lock_held=false
+
+# One timestamp per invocation; a claim does not need sub-second accuracy and
+# `date` is a process.
+NOW=$(now)
 
 thread=${AMP_THREAD_ID:-}
 own_token=${AMP_LEASE_TOKEN:-}
 
+release_lock() {
+    if [[ "$lock_held" == true ]]; then
+        rmdir "$lock_dir" 2>/dev/null || true
+        lock_held=false
+    fi
+}
+
+# Serializes claim: checking for overlaps and then writing the lease is not one
+# step, so two threads claiming the same paths at the same instant could both
+# pass the check. mkdir is atomic everywhere this runs, so the directory itself
+# is the guard; it is held for the few milliseconds a claim takes.
+acquire_lock() {
+    mkdir -p "$lease_dir"
+    local attempts=0 stale
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        # A claim killed between mkdir and rmdir would block every later claim,
+        # so drop the guard once it is clearly abandoned.
+        stale=$(find "$lock_dir" -maxdepth 0 -mmin +2 2>/dev/null || true)
+        if [[ -n "$stale" ]]; then
+            rmdir "$lock_dir" 2>/dev/null || true
+            continue
+        fi
+        attempts=$((attempts + 1))
+        if ((attempts >= 100)); then
+            die "another claim has held $lock_dir for 10s; remove it if nothing is claiming"
+        fi
+        sleep 0.1
+    done
+    lock_held=true
+}
+
+trap release_lock EXIT
+
 lease_file() { printf '%s/%s.lease' "$lease_dir" "$1"; }
 
-field() {
-    sed -n "s/^$2=//p" "$1" | head -1
+# load_lease <file> fills L_* from one read of the file, without spawning
+# anything. L_PATHS is an array.
+load_lease() {
+    L_TOKEN=""
+    L_THREAD=""
+    L_KIND=""
+    L_NOTE=""
+    L_CREATED=""
+    L_EXPIRES=""
+    L_PATHS=()
+    local line key value
+    while IFS= read -r line; do
+        key=${line%%=*}
+        value=${line#*=}
+        case "$key" in
+            token) L_TOKEN=$value ;;
+            thread) L_THREAD=$value ;;
+            kind) L_KIND=$value ;;
+            note) L_NOTE=$value ;;
+            created_at) L_CREATED=$value ;;
+            expires_at) L_EXPIRES=$value ;;
+            path) L_PATHS+=("$value") ;;
+        esac
+    done < "$1"
 }
 
-lease_paths() {
-    sed -n 's/^path=//p' "$1"
+is_mine() {
+    if [[ -n "$own_token" && "$L_TOKEN" == "$own_token" ]]; then
+        return 0
+    fi
+    if [[ -n "$thread" && "$L_THREAD" == "$thread" ]]; then
+        return 0
+    fi
+    return 1
 }
 
-is_expired() {
-    local expires
-    expires=$(field "$1" expires_at)
-    (( ${expires:-0} <= $(now) ))
+describe_loaded() {
+    local age remaining
+    humanize $(( NOW - ${L_CREATED:-0} ))
+    age=$HUMAN
+    humanize $(( ${L_EXPIRES:-0} - NOW ))
+    remaining=$HUMAN
+    printf 'holder   %s\n' "$L_THREAD"
+    printf 'token    %s\n' "$L_TOKEN"
+    printf 'note     %s\n' "$L_NOTE"
+    printf 'held     %s ago, expires in %s\n' "$age" "$remaining"
 }
 
 prune_expired() {
-    local f
-    for f in "$lease_dir"/*.lease; do
-        [[ -e "$f" ]] || continue
-        if is_expired "$f"; then
-            rm -f "$f"
+    local file
+    for file in "$lease_dir"/*.lease; do
+        [[ -e "$file" ]] || continue
+        load_lease "$file"
+        if (( ${L_EXPIRES:-0} <= NOW )); then
+            rm -f "$file"
         fi
     done
 }
 
-# lease_is_mine <file>
-lease_is_mine() {
-    local owner_token owner_thread
-    owner_token=$(field "$1" token)
-    owner_thread=$(field "$1" thread)
-    [[ -n "$own_token" && "$owner_token" == "$own_token" ]] && return 0
-    [[ -n "$thread" && "$owner_thread" == "$thread" ]] && return 0
-    return 1
-}
-
-describe_lease() {
-    local file=$1 age remaining created expires
-    created=$(field "$file" created_at)
-    expires=$(field "$file" expires_at)
-    age=$(human_duration $(( $(now) - ${created:-0} )))
-    remaining=$(human_duration $(( ${expires:-0} - $(now) )))
-    printf 'holder   %s\n' "$(field "$file" thread)"
-    printf 'token    %s\n' "$(field "$file" token)"
-    printf 'note     %s\n' "$(field "$file" note)"
-    printf 'held     %s ago, expires in %s\n' "$age" "$remaining"
-}
-
+# Sets TOKEN instead of printing it: one fork saved per claim matters on
+# Windows, where every command substitution is a process.
 new_token() {
-    local token
-    token="l-$(date +%s)-$$-${RANDOM}"
-    while [[ -e "$(lease_file "$token")" ]]; do
-        token="l-$(date +%s)-$$-${RANDOM}"
+    TOKEN="l-$NOW-$$-$RANDOM"
+    while [[ -e "$lease_dir/$TOKEN.lease" ]]; do
+        TOKEN="l-$NOW-$$-$RANDOM"
     done
-    printf '%s' "$token"
 }
 
 write_lease() {
     local token=$1 kind=$2 note=$3 expires=$4 file tmp
     shift 4
-    file=$(lease_file "$token")
+    file="$lease_dir/$token.lease"
     tmp="$file.tmp.$$"
+
     {
         printf 'token=%s\n' "$token"
         printf 'thread=%s\n' "${thread:-$token}"
         printf 'kind=%s\n' "$kind"
         printf 'note=%s\n' "$note"
-        printf 'created_at=%s\n' "$(now)"
+        printf 'created_at=%s\n' "$NOW"
         printf 'expires_at=%s\n' "$expires"
         local p
         for p in "$@"; do
@@ -284,51 +350,49 @@ cmd_claim() {
         prefixes+=("$(normalize "$input")")
     done
 
-    mkdir -p "$lease_dir"
+    acquire_lock
     prune_expired
 
-    local conflict=false file mine theirs
-    local -a holders=()
+    local conflict=false file mine theirs seen=" "
     for file in "$lease_dir"/*.lease; do
         [[ -e "$file" ]] || continue
-        [[ "$(field "$file" kind)" == "$kind" ]] || continue
-        lease_is_mine "$file" && continue
-        while IFS= read -r theirs; do
-            [[ -n "$theirs" ]] || continue
+        load_lease "$file"
+        [[ "$L_KIND" == "$kind" ]] || continue
+        is_mine && continue
+        for theirs in "${L_PATHS[@]}"; do
             for mine in "${prefixes[@]}"; do
                 if overlaps "$mine" "$theirs"; then
                     conflict=true
-                    holders+=("$file|$theirs|$mine")
+                    if [[ "$seen" != *" $L_TOKEN "* ]]; then
+                        seen+="$L_TOKEN "
+                        {
+                            printf 'FAIL  %s lease refused: overlaps an active lease\n' "$kind"
+                            describe_loaded
+                            printf 'overlaps %s (theirs) and %s (yours)\n\n' "$theirs" "$mine"
+                            printf 'Ask the holder to release it, or wait for it to expire:\n'
+                            printf '  script/lease status\n'
+                        } >&2
+                    fi
                 fi
             done
-        done < <(lease_paths "$file")
+        done
     done
 
     if [[ "$conflict" == true ]]; then
-        {
-            printf 'FAIL  %s lease refused: overlaps an active lease\n' "$kind"
-            local entry holder_path holder_prefix mine_prefix seen=""
-            for entry in "${holders[@]}"; do
-                IFS='|' read -r holder_path holder_prefix mine_prefix <<< "$entry"
-                [[ "$seen" == *" $(field "$holder_path" token) "* ]] && continue
-                seen+=" $(field "$holder_path" token) "
-                describe_lease "$holder_path"
-                printf 'overlaps %s (theirs) and %s (yours)\n\n' "$holder_prefix" "$mine_prefix"
-            done
-            printf 'Ask the holder to release it, or wait for it to expire:\n'
-            printf '  script/lease status\n'
-        } >&2
         exit 1
     fi
 
-    local token
-    token=$(new_token)
-    write_lease "$token" "$kind" "$note" $(( $(now) + ttl )) "${prefixes[@]}"
+    local expires=$(( NOW + ttl ))
+    new_token
+    local token=$TOKEN
+    write_lease "$token" "$kind" "$note" "$expires" "${prefixes[@]}"
+    release_lock
 
     if [[ "$json" == true ]]; then
-        print_json_result "$token" "$note" $(( $(now) + ttl )) "${prefixes[@]}"
+        print_json_result "$token" "$note" "$expires" "${prefixes[@]}"
     else
-        printf 'Claimed %s for %s as %s\n' "${prefixes[*]}" "$(human_duration "$ttl")" "${thread:-$token}"
+        humanize "$ttl"
+        printf 'Claimed %s for %s as %s\n' "${prefixes[*]}" "$HUMAN" "${thread:-$token}"
         printf 'token=%s\n' "$token"
         printf 'Export it so later commands and the commit hook recognize it:\n'
         printf '  export AMP_LEASE_TOKEN=%s\n' "$token"
@@ -343,7 +407,8 @@ cmd_release() {
         local file released=0
         for file in "$lease_dir"/*.lease; do
             [[ -e "$file" ]] || continue
-            if lease_is_mine "$file"; then
+            load_lease "$file"
+            if is_mine; then
                 rm -f "$file"
                 released=$((released + 1))
             fi
@@ -378,20 +443,21 @@ cmd_heartbeat() {
     local file expires tmp
     file=$(lease_file "$token")
     [[ -e "$file" ]] || die "no lease with token $token (see script/lease status)"
-    expires=$(( $(now) + ttl ))
+    expires=$(( NOW + ttl ))
     tmp="$file.tmp.$$"
     {
         local key value
         while IFS='=' read -r key value; do
             case "$key" in
                 expires_at) printf 'expires_at=%s\n' "$expires" ;;
-                "" ) : ;;
+                "") : ;;
                 *) printf '%s=%s\n' "$key" "$value" ;;
             esac
         done < "$file"
     } > "$tmp"
     mv "$tmp" "$file"
-    printf 'Extended %s by %s (expires in %s).\n' "$token" "$(human_duration "$ttl")" "$(human_duration "$ttl")"
+    humanize "$ttl"
+    printf 'Extended %s by %s (expires in %s).\n' "$token" "$HUMAN" "$HUMAN"
 }
 
 cmd_build() {
@@ -408,27 +474,31 @@ cmd_build() {
                     *) die "unknown option: $1" ;;
                 esac
             done
-            mkdir -p "$lease_dir"
+            acquire_lock
             prune_expired
             local file
             for file in "$lease_dir"/*.lease; do
                 [[ -e "$file" ]] || continue
-                [[ "$(field "$file" kind)" == "build" ]] || continue
+                load_lease "$file"
+                [[ "$L_KIND" == "build" ]] || continue
                 {
                     printf 'FAIL  the build lock is already held\n'
-                    describe_lease "$file"
+                    describe_loaded
                     printf '\nA release-fast build and packaging share target dirs, so\n'
                     printf 'only one may run at a time. See script/lease status.\n'
                 } >&2
                 exit 1
             done
-            local token
-            token=$(new_token)
-            write_lease "$token" "build" "$note" $(( $(now) + ttl ))
+            local expires=$(( NOW + ttl ))
+            new_token
+            local token=$TOKEN
+            write_lease "$token" "build" "$note" "$expires"
+            release_lock
             if [[ "$json" == true ]]; then
-                print_json_result "$token" "$note" $(( $(now) + ttl ))
+                print_json_result "$token" "$note" "$expires"
             else
-                printf 'Holding the build lock for %s as %s\n' "$(human_duration "$ttl")" "${thread:-$token}"
+                humanize "$ttl"
+                printf 'Holding the build lock for %s as %s\n' "$HUMAN" "${thread:-$token}"
                 printf 'token=%s\n' "$token"
                 if [[ -n "$note" ]]; then
                     printf 'note=%s\n' "$note"
@@ -439,7 +509,8 @@ cmd_build() {
             local file released=false
             for file in "$lease_dir"/*.lease; do
                 [[ -e "$file" ]] || continue
-                [[ "$(field "$file" kind)" == "build" ]] || continue
+                load_lease "$file"
+                [[ "$L_KIND" == "build" ]] || continue
                 rm -f "$file"
                 released=true
             done
@@ -480,20 +551,19 @@ cmd_status() {
         local first=true p
         for file in "$lease_dir"/*.lease; do
             [[ -e "$file" ]] || continue
-            [[ "$first" == true ]] && first=false || printf ','
+            load_lease "$file"
+            if [[ "$first" == true ]]; then first=false; else printf ','; fi
             printf '{"token":%s,"thread":%s,"kind":%s,"note":%s,"created_at":%s,"expires_at":%s,"paths":[' \
-                "$(json_string "$(field "$file" token)")" \
-                "$(json_string "$(field "$file" thread)")" \
-                "$(json_string "$(field "$file" kind)")" \
-                "$(json_string "$(field "$file" note)")" \
-                "$(field "$file" created_at)" \
-                "$(field "$file" expires_at)"
+                "$(json_string "$L_TOKEN")" "$(json_string "$L_THREAD")" \
+                "$(json_string "$L_KIND")" "$(json_string "$L_NOTE")" \
+                "${L_CREATED:-0}" "${L_EXPIRES:-0}"
             local inner=true
-            while IFS= read -r p; do
-                [[ -n "$p" ]] || continue
-                [[ "$inner" == true ]] && inner=false || printf ','
-                json_string "$p" | tr -d '\n'
-            done < <(lease_paths "$file")
+            if ((${#L_PATHS[@]} > 0)); then
+                for p in "${L_PATHS[@]}"; do
+                    if [[ "$inner" == true ]]; then inner=false; else printf ','; fi
+                    json_string "$p" | tr -d '\n'
+                done
+            fi
             printf ']}'
         done
         printf ']}\n'
@@ -501,14 +571,24 @@ cmd_status() {
     fi
 
     printf 'ACTIVE LEASES\n'
+    local p
     for file in "$lease_dir"/*.lease; do
         [[ -e "$file" ]] || continue
-        printf '\n%s\n' "$(field "$file" kind | tr '[:lower:]' '[:upper:]')"
-        describe_lease "$file"
-        local p
-        while IFS= read -r p; do
-            [[ -n "$p" ]] && printf 'path     %s\n' "$p"
-        done < <(lease_paths "$file")
+        load_lease "$file"
+        case "$L_KIND" in
+            work) kind_label=WORK ;;
+            build) kind_label=BUILD ;;
+            *) kind_label=$L_KIND ;;
+        esac
+        printf '\n%s\n' "$kind_label"
+        describe_loaded
+        if ((${#L_PATHS[@]} > 0)); then
+            for p in "${L_PATHS[@]}"; do
+                if [[ -n "$p" ]]; then
+                    printf 'path     %s\n' "$p"
+                fi
+            done
+        fi
     done
 }
 
@@ -526,7 +606,6 @@ cmd_check() {
         esac
     done
 
-    [[ -n "$lease_dir" ]] || exit 0
     [[ -d "$lease_dir" ]] || exit 0
     prune_expired
 
@@ -534,8 +613,9 @@ cmd_check() {
         local file
         for file in "$lease_dir"/*.lease; do
             [[ -e "$file" ]] || continue
-            [[ "$(field "$file" kind)" == "build" ]] || continue
-            describe_lease "$file" >&2
+            load_lease "$file"
+            [[ "$L_KIND" == "build" ]] || continue
+            describe_loaded >&2
             exit 1
         done
         exit 0
@@ -548,12 +628,12 @@ cmd_check() {
     case "$mode" in
         staged)
             while IFS= read -r f; do
-                [[ -n "$f" ]] && files+=("$f")
+                if [[ -n "$f" ]]; then files+=("$f"); fi
             done < <(git diff --cached --name-only --diff-filter=ACMR)
             ;;
         range)
             while IFS= read -r f; do
-                [[ -n "$f" ]] && files+=("$f")
+                if [[ -n "$f" ]]; then files+=("$f"); fi
             done < <(git diff --name-only "$range")
             ;;
         paths)
@@ -567,36 +647,32 @@ cmd_check() {
         mine+=("$(normalize "$f")")
     done
 
-    local conflict=false file theirs prefix
-    local -a holders=()
+    local conflict=false file theirs prefix seen=" "
     for file in "$lease_dir"/*.lease; do
         [[ -e "$file" ]] || continue
-        [[ "$(field "$file" kind)" == "work" ]] || continue
-        if [[ -n "$extra_token" && "$(field "$file" token)" == "$extra_token" ]]; then
+        load_lease "$file"
+        [[ "$L_KIND" == "work" ]] || continue
+        if [[ -n "$extra_token" && "$L_TOKEN" == "$extra_token" ]]; then
             continue
         fi
-        lease_is_mine "$file" && continue
-        while IFS= read -r theirs; do
-            [[ -n "$theirs" ]] || continue
+        is_mine && continue
+        for theirs in "${L_PATHS[@]}"; do
             for prefix in "${mine[@]}"; do
                 if overlaps "$prefix" "$theirs"; then
                     conflict=true
-                    holders+=("$file|$theirs|$prefix")
+                    if [[ "$seen" != *" $L_TOKEN "* ]]; then
+                        seen+="$L_TOKEN "
+                        {
+                            describe_loaded
+                            printf 'overlaps %s (theirs) and %s (yours)\n\n' "$theirs" "$prefix"
+                        } >&2
+                    fi
                 fi
             done
-        done < <(lease_paths "$file")
+        done
     done
 
     [[ "$conflict" == true ]] || exit 0
-
-    local entry holder_path holder_prefix mine_prefix seen=" "
-    for entry in "${holders[@]}"; do
-        IFS='|' read -r holder_path holder_prefix mine_prefix <<< "$entry"
-        [[ "$seen" == *" $(field "$holder_path" token) "* ]] && continue
-        seen+="$(field "$holder_path" token) "
-        describe_lease "$holder_path" >&2
-        printf 'overlaps %s (theirs) and %s (yours)\n\n' "$holder_prefix" "$mine_prefix" >&2
-    done
     exit 1
 }
 

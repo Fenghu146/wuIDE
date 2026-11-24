@@ -144,6 +144,39 @@ sleep 2
 expect_fail "a heartbeated lease still blocks after its original ttl" "thread-a" \
     env AMP_THREAD_ID=thread-b "$lease" claim 'vendor/v.rs'
 
+# --- concurrent claims ------------------------------------------------------
+
+race_rounds=5
+race_wrong=0
+round=1
+while ((round <= race_rounds)); do
+    start="$tmp/race-start-$round"
+    (
+        for _ in $(seq 1 200000); do [[ -e "$start" ]] && break; done
+        AMP_THREAD_ID="racer-a-$round" "$lease" claim "race-$round/**" >/dev/null 2>&1
+        printf '%s' "$?" > "$tmp/race-a-$round"
+    ) &
+    (
+        for _ in $(seq 1 200000); do [[ -e "$start" ]] && break; done
+        AMP_THREAD_ID="racer-b-$round" "$lease" claim "race-$round/**" >/dev/null 2>&1
+        printf '%s' "$?" > "$tmp/race-b-$round"
+    ) &
+    touch "$start"
+    wait
+    codes=$(sort "$tmp/race-a-$round" "$tmp/race-b-$round" | tr '\n' ' ')
+    if [[ "$codes" != "0 1 " ]]; then
+        race_wrong=$((race_wrong + 1))
+        printf '      round %s let through exit codes: %s\n' "$round" "$codes"
+    fi
+    round=$((round + 1))
+done
+if ((race_wrong == 0)); then
+    ok "two claims for the same paths at the same instant: one wins ($race_rounds rounds)"
+else
+    no "two claims for the same paths at the same instant: one wins" \
+        "$race_wrong of $race_rounds rounds did not resolve to exactly one winner"
+fi
+
 # --- build lock -------------------------------------------------------------
 
 expect_ok "the build lock can be taken" "$lease" build claim

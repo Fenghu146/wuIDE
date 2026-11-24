@@ -74,6 +74,8 @@ path=assets/locales/zh-CN/
 
 这样选的理由：纯 bash 就能正确解析（一行一个字段、`path=` 可重复），note 里有空格和引号也不用转义，不需要 jq、python 或 node。文件名用 `.lease` 而不是 `.json`，是因为内容确实不是 JSON，用 `.json` 的名字会误导下一个打开它的人。`--json` 是给脚本用的输出开关，与存储格式无关。
 
+"查重 + 写入"不是一步，所以 `claim` 用 `mkdir .git/amp-leases/.claim-lock` 做原子守卫：`mkdir` 成功即获得锁，另一个人同一瞬间来 claim 会在重试里等它，只有一个能进去。锁在 claim 结束时释放；万一进程死在中间，超过 2 分钟的残锁会被下一个 claim 清掉。
+
 ### 路径重叠的判定（保守近似）
 
 每条 claim 先归一成一个**目录前缀**，两个前缀互相包含就算重叠：
@@ -94,6 +96,8 @@ path=assets/locales/zh-CN/
 
 宁可让人多说一句"这两个文件不冲突"，也不要让两个人各改一半。
 
+有一条退化路径要提前写下来：归一化到父目录会让同一个大目录互斥，久而久之，负责大模块的线程会学着 claim 一个很大的目录，然后对所有告警免疫——那时租约退化成"每人大包一块"，只剩最粗的互斥。这是任何目录级租约的天然走向，不是这个实现的 bug；记在这里是为了它发生时能被认出来，而不是被当成"大家都不守规矩"。
+
 ### 过期不等于可以抢
 
 租约过期只说明**持有它的线程可能已经死了**，不代表那段工作已经完成或可以覆盖。抢之前先看 `script/lease status` 里它留下的 note，以及那个 worktree 里的 `git status`——很可能有人改到一半的东西还在那儿。租约过期机制解决的是"别让死线程永久占着路"，不是"过期即安全"。
@@ -111,9 +115,13 @@ script/lease build release
 
 ## 提交钩子
 
+**由编排者在合并/发版窗口启用，不是每条线程自己开。**
+
 ```sh
-script/setup-hooks      # 每个 clone 一次：git config core.hooksPath .githooks
+script/setup-hooks      # 设置 core.hooksPath=.githooks，整个 clone 共享
 ```
+
+`core.hooksPath` 是每个 clone 的共享配置：在四条线程同时跑着的时候打开它，会立刻改变它们的提交流程；而那些从没 claim 过路径的线程，会直接撞上别人租约的误报。所以它的位置是**合并与发版窗口**——编排者在合并前跑 `script/setup-hooks`，用 `AMP_MAIN_COMMIT=1` 完成合并提交，平时不开。`./script/pre-merge-check` 的第 10 项会报出当前状态。
 
 启用后 `.githooks/pre-commit` 挡两件事：
 
