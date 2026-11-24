@@ -1453,6 +1453,22 @@ impl AgentSession {
         Some(prompt)
     }
 
+    /// Names the chat after its first message. Only a title the app wrote itself
+    /// may be replaced: a name from the user, a name an agent wrote, and a title
+    /// saved before titles had a source all stay as they are.
+    fn retitle_from_first_message(&mut self, prompt: &Prompt) {
+        if self.metadata.title_source != Some(TitleSource::Auto) || !self.metadata.title.is_empty()
+        {
+            return;
+        }
+        self.metadata.title = if prompt.title_hint.is_some() {
+            title_for_prompt(prompt)
+        } else {
+            title_from(&prompt.text)
+        };
+        self.metadata.title_source = Some(TitleSource::Auto);
+    }
+
     fn last_user_index(&self) -> Option<usize> {
         self.transcript
             .entries
@@ -1519,12 +1535,7 @@ impl AgentSession {
             self.restart_on_next_send = false;
         }
         if self.metadata.title.is_empty() {
-            self.metadata.title = if prompt.title_hint.is_some() {
-                title_for_prompt(&prompt)
-            } else {
-                title_from(&prompt.text)
-            };
-            self.metadata.title_source = Some(TitleSource::Auto);
+            self.retitle_from_first_message(&prompt);
         }
         self.transcript.push_user(
             prompt.text.clone(),
@@ -2314,14 +2325,13 @@ impl AgentSession {
     /// turned smart titles on. A failure leaves the title from the first message.
     /// The menu can ask for one rename at a time, whatever the setting says.
     pub(crate) fn request_smart_title(&mut self, manual: bool, cx: &mut Context<Self>) {
-        let replaceable = match self.metadata.title_source {
-            Some(TitleSource::User) => false,
-            Some(TitleSource::Auto) => true,
-            // A name the agent wrote, or one saved before titles had a source,
-            // changes only when the user asks for it.
-            Some(TitleSource::Agent) | None => manual,
-        };
-        if !replaceable || (!manual && !AgentChatSettings::get_global(cx).smart_titles) {
+        // Only a title the app made from the first message may be rewritten: a
+        // name the user typed, a name an agent wrote, and a title saved before
+        // titles had a source all stay.
+        if self.metadata.title_source != Some(TitleSource::Auto) {
+            return;
+        }
+        if !manual && !AgentChatSettings::get_global(cx).smart_titles {
             return;
         }
         let mut prompts = self.transcript.entries.iter().filter_map(|entry| match entry {
@@ -2373,12 +2383,7 @@ impl AgentSession {
             };
             this.update(cx, |this, cx| {
                 let title = agent_title(&clean_title(&reply));
-                let replaceable = match this.metadata.title_source {
-                    Some(TitleSource::User) => false,
-                    Some(TitleSource::Auto) => true,
-                    Some(TitleSource::Agent) | None => manual,
-                };
-                if title.is_empty() || !replaceable {
+                if title.is_empty() || this.metadata.title_source != Some(TitleSource::Auto) {
                     return;
                 }
                 this.metadata.title = title;
@@ -2487,6 +2492,9 @@ pub struct SessionSummary {
     pub side_chat: bool,
     pub outcome: Option<ChatOutcome>,
     pub unseen: bool,
+    /// Who wrote the title; the list may only ask the agent for a new one when
+    /// the app wrote it.
+    pub title_source: Option<TitleSource>,
     pub archived_at: Option<i64>,
     pub auto_archived: bool,
     pub project_root: PathBuf,
@@ -3739,6 +3747,7 @@ impl AgentStore {
                     side_chat: metadata.side_chat,
                     outcome: metadata.outcome,
                     unseen: metadata.unseen,
+                    title_source: metadata.title_source,
                     archived_at: metadata.archived_at,
                     auto_archived: metadata.auto_archived,
                     project_root: metadata.project_root().to_path_buf(),
@@ -5006,6 +5015,167 @@ pub(crate) mod tests {
                 .collect();
             assert_eq!(saved.len(), 30);
             assert!(saved.iter().all(|session| session.auto_archived));
+        });
+    }
+
+    #[gpui::test]
+    async fn undo_puts_the_auto_archived_batch_back(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let now = now();
+        let write = |id: &str, age_days: i64| {
+            let mut metadata = SessionMetadata::new(
+                AgentKind::Claude,
+                directory.path().to_path_buf(),
+                RunSettings::default(),
+            );
+            metadata.id = id.to_string();
+            metadata.title = format!("chat {id}");
+            metadata.updated_at = now - age_days * DAY;
+            std::fs::write(
+                metadata_path(directory.path(), id),
+                serde_json::to_vec(&metadata).expect("metadata serializes"),
+            )
+            .expect("metadata is written");
+        };
+        for index in 0..30 {
+            write(&format!("old-{index}"), 31 + index);
+        }
+        write("fresh", 0);
+
+        let store = new_store(directory.path(), cx);
+        cx.run_until_parked();
+
+        store.update(cx, |store, cx| {
+            assert_eq!(store.last_auto_archive().len(), 30);
+            store.undo_auto_archive(cx);
+        });
+        cx.run_until_parked();
+
+        store.read_with(cx, |store, cx| {
+            assert!(store.last_auto_archive().is_empty());
+            let archived: Vec<_> = store
+                .sessions_in(&[directory.path().to_path_buf()], cx)
+                .into_iter()
+                .filter(|session| session.archived_at.is_some())
+                .collect();
+            assert!(
+                archived.is_empty(),
+                "undo puts every chat of the batch back in the list"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn undo_leaves_a_chat_archived_by_hand_alone(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let now = now();
+        let write = |id: &str, age_days: i64| {
+            let mut metadata = SessionMetadata::new(
+                AgentKind::Claude,
+                directory.path().to_path_buf(),
+                RunSettings::default(),
+            );
+            metadata.id = id.to_string();
+            metadata.title = format!("chat {id}");
+            metadata.updated_at = now - age_days * DAY;
+            std::fs::write(
+                metadata_path(directory.path(), id),
+                serde_json::to_vec(&metadata).expect("metadata serializes"),
+            )
+            .expect("metadata is written");
+        };
+        for index in 0..30 {
+            write(&format!("old-{index}"), 31 + index);
+        }
+        write("fresh", 0);
+
+        let store = new_store(directory.path(), cx);
+        cx.run_until_parked();
+
+        store.update(cx, |store, cx| {
+            assert_eq!(store.last_auto_archive().len(), 30);
+            // Archived by hand after the sweep, so it is not part of the batch.
+            store.set_archived("fresh", true, false, cx);
+            store.undo_auto_archive(cx);
+        });
+        cx.run_until_parked();
+
+        store.read_with(cx, |store, cx| {
+            let archived: Vec<_> = store
+                .sessions_in(&[directory.path().to_path_buf()], cx)
+                .into_iter()
+                .filter(|session| session.archived_at.is_some())
+                .collect();
+            assert_eq!(archived.len(), 1, "only the hand-archived chat stays");
+            assert_eq!(archived[0].id, "fresh");
+            assert!(!archived[0].auto_archived);
+        });
+    }
+
+    #[gpui::test]
+    async fn only_a_title_the_app_wrote_is_replaced(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let named = |hint: &str| Prompt {
+            text: hint.to_string(),
+            title_hint: Some(hint.to_string()),
+            ..Default::default()
+        };
+
+        // A new chat takes its name from the first message.
+        session.update(cx, |session, _| {
+            session.retitle_from_first_message(&named("why does login redirect twice"))
+        });
+        session.read_with(cx, |session, _| {
+            assert_eq!(session.metadata.title, "why does login redirect…");
+            assert_eq!(session.metadata.title_source, Some(TitleSource::Auto));
+        });
+
+        // A name the user typed survives taking the message back and sending it again.
+        session.update(cx, |session, cx| {
+            session
+                .transcript
+                .push_user("why does login redirect twice".into(), Vec::new(), Vec::new());
+            session.editable_prompt = Some("prompt".into());
+            session.metadata.title = "登录重定向".into();
+            session.metadata.title_source = Some(TitleSource::User);
+            let prompt = session
+                .edit_last_message(cx)
+                .expect("the first message can be taken back");
+            assert_eq!(session.metadata.title, "登录重定向");
+            session.retitle_from_first_message(&prompt);
+            assert_eq!(session.metadata.title, "登录重定向");
+            session.retitle_from_first_message(&named("a completely different first message"));
+            assert_eq!(session.metadata.title, "登录重定向");
+        });
+        session.read_with(cx, |session, _| {
+            assert_eq!(session.metadata.title_source, Some(TitleSource::User))
+        });
+
+        // No source but Auto ever names a chat, even an unnamed one.
+        for source in [
+            Some(TitleSource::Agent),
+            Some(TitleSource::User),
+            None,
+        ] {
+            session.update(cx, |session, _| {
+                session.metadata.title.clear();
+                session.metadata.title_source = source;
+                session.retitle_from_first_message(&named("explain the redirect"));
+                assert_eq!(session.metadata.title, "", "a {source:?} title is never replaced");
+                assert_eq!(session.metadata.title_source, source);
+            });
+        }
+
+        // An automatic title is written once; a later message does not rename it.
+        session.update(cx, |session, _| {
+            session.metadata.title = "first name".into();
+            session.metadata.title_source = Some(TitleSource::Auto);
+            session.retitle_from_first_message(&named("second message"));
+            assert_eq!(session.metadata.title, "first name");
         });
     }
 

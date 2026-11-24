@@ -3,7 +3,10 @@ use crate::{
     NewOpencodeChat, NewPiChat, ToggleFocus,
     chat_style::{accent, ink, selected_row, text_faint, ui, wash},
     chat_view::ChatView,
-    session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, RunSettings, SessionSummary},
+    session::{
+        AgentSession, AgentStore, ChatListPrefs, ChatOutcome, RunSettings, SessionSummary,
+        TitleSource,
+    },
 };
 use agent_harness::PermissionMode;
 use anyhow::Result;
@@ -603,6 +606,7 @@ impl AgentPanel {
         let title = session.title.clone();
         let pinned = session.pinned;
         let archived = session.archived_at.is_some();
+        let auto_named = session.title_source == Some(TitleSource::Auto);
         let native_id = session.native_session_id.clone();
         let panel = cx.entity().downgrade();
         let menu = ContextMenu::build(window, cx, move |menu, _, _| {
@@ -637,12 +641,15 @@ impl AgentPanel {
                         }),
                     )
                 })
-                .entry(t!("Rename with AI"), None, {
+                .item({
                     let id = id.clone();
-                    action(
+                    let handler = action(
                         &panel,
                         Box::new(move |panel, _, cx| panel.retitle_with_model(id.clone(), cx)),
-                    )
+                    );
+                    ContextMenuEntry::new(t!("Rename with AI"))
+                        .handler(move |window, cx| handler(window, cx))
+                        .disabled(!auto_named)
                 })
                 .entry(pin_label, None, {
                     let id = id.clone();
@@ -2398,6 +2405,7 @@ mod tests {
             side_chat: false,
             outcome: None,
             unseen: false,
+            title_source: Some(TitleSource::Auto),
             archived_at: None,
             auto_archived: false,
             project_root: PathBuf::from(project),
