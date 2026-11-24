@@ -455,3 +455,16 @@ attachments, dictation, pins, archiving, favorites, closing and retrying are
 Solar Icons (Linear) by 480 Design (https://github.com/480-Design/Solar-Icon-Set),
 licensed under the Creative Commons
 Attribution 4.0 International License (https://creativecommons.org/licenses/by/4.0/).
+
+----------------------------------------------------------------------
+
+IDE Mark
+
+wu_mark.svg, wu.svg, ../images/wu_logo.svg and the logoSvg embedded in
+../badge/v0.json were made by the author of this fork with AI image generation
+tools, using publicly published artwork as a style reference, and are
+distributed with this project under GPL-3.0 (see FORK.md, section 4). The
+author claims no exclusivity over the style itself and grants nothing beyond
+this project's license. If a third party believes one of these images
+conflicts with their rights, contact the author through the repository issues
+and it will be replaced or removed.
