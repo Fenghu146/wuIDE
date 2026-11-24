@@ -7,6 +7,8 @@ mod open_listener;
 mod open_url_modal;
 mod quick_action_bar;
 pub mod remote_debug;
+mod run_toolbar;
+
 #[cfg(all(target_os = "macos", feature = "visual-tests"))]
 pub mod visual_tests;
 #[cfg(target_os = "windows")]
@@ -63,6 +65,7 @@ use quick_action_bar::QuickActionBar;
 use recent_projects::open_remote_project;
 use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use rope::Rope;
+use run_toolbar::RunToolbar;
 use search::project_search::ProjectSearchBar;
 use search::search_panel::SearchPanel;
 use settings::{
@@ -98,9 +101,9 @@ use workspace::{
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use wu_actions::{
-    About, AddDiagnosticsToChat, AddSelectionToChat, AskAgentAboutSelection, FixDiagnosticsWithAgent,
-    OpenBrowser, OpenDocs,
-    OpenProjectTasks, OpenServerSettings, OpenSettingsFile, OpenWuUrl, Quit,
+    About, AddDiagnosticsToChat, AddSelectionToChat, AskAgentAboutSelection, DebugCurrentFile,
+    FixDiagnosticsWithAgent, OpenBrowser, OpenDocs, OpenProjectTasks, OpenServerSettings,
+    OpenSettingsFile, OpenWuUrl, Quit, RunCurrentFile, StopCurrentFile,
 };
 
 const DOCS_URL: &str = "https://wu.dstrml.org/docs";
@@ -486,6 +489,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         let active_toolchain_language =
             cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
         let image_info = cx.new(|_cx| ImageInfo::new(workspace));
+        let run_status = cx.new(|_| run_toolbar::RunStatusItem::new());
 
         let lsp_button_menu_handle = PopoverMenuHandle::default();
         let lsp_button =
@@ -513,6 +517,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             status_bar.add_right_item(line_ending_indicator, window, cx);
             status_bar.add_right_item(cursor_position, window, cx);
             status_bar.add_right_item(image_info, window, cx);
+            status_bar.add_left_item(run_status, window, cx);
         });
 
         let panels_task = initialize_panels(window, cx);
@@ -682,7 +687,36 @@ fn register_actions(
     _: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
+    // The run commands are also handled here, so they keep working when the
+    // focus is in the terminal a run just opened rather than in the editor.
     workspace
+        .register_action(
+            |workspace: &mut Workspace, _: &RunCurrentFile, window, cx| {
+                if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
+                    editor.update(cx, |editor, cx| {
+                        editor.run_current_file(&RunCurrentFile, window, cx)
+                    });
+                }
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace, _: &DebugCurrentFile, window, cx| {
+                if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
+                    editor.update(cx, |editor, cx| {
+                        editor.debug_current_file(&DebugCurrentFile, window, cx)
+                    });
+                }
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace, _: &StopCurrentFile, window, cx| {
+                if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
+                    editor.update(cx, |editor, cx| {
+                        editor.stop_current_file(&StopCurrentFile, window, cx)
+                    });
+                }
+            },
+        )
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
         .register_action(
             |workspace: &mut Workspace,
@@ -1240,6 +1274,8 @@ fn initialize_pane(
             let quick_action_bar =
                 cx.new(|cx| QuickActionBar::new(buffer_search_bar, workspace, cx));
             toolbar.add_item(quick_action_bar, window, cx);
+            let run_toolbar = cx.new(|_| RunToolbar::new(workspace));
+            toolbar.add_item(run_toolbar, window, cx);
             let diagnostic_editor_controls = cx.new(|_| diagnostics::ToolbarControls::new());
             toolbar.add_item(diagnostic_editor_controls, window, cx);
             let project_search_bar = cx.new(|_| ProjectSearchBar::new());

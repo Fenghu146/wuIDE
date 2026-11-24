@@ -327,6 +327,12 @@ pub trait TerminalProvider {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Option<Result<ExitStatus>>>;
+
+    /// Ends the process of the task with this terminal label, and says whether
+    /// there was one. Providers that cannot reach a process return `false`.
+    fn kill_task(&self, _label: &str, _cx: &mut App) -> bool {
+        false
+    }
 }
 
 pub trait DebuggerProvider {
@@ -3146,6 +3152,14 @@ impl Workspace {
 
     pub fn set_terminal_provider(&mut self, provider: impl TerminalProvider + 'static) {
         self.terminal_provider = Some(Box::new(provider));
+    }
+
+    /// Ends the process of the task whose terminals carry this label, which is
+    /// how the code runner's stop button reaches a running program.
+    pub fn kill_task_terminal(&self, label: &str, cx: &mut App) -> bool {
+        self.terminal_provider
+            .as_ref()
+            .is_some_and(|provider| provider.kill_task(label, cx))
     }
 
     pub fn set_debugger_provider(&mut self, provider: impl DebuggerProvider + 'static) {

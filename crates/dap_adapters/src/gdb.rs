@@ -228,11 +228,27 @@ impl DebugAdapter for GdbDebugAdapter {
             ensure_dap_interface(args)
         };
 
+        // A window that opened a single file has that file as its worktree
+        // root, and a process cannot be spawned in a file: Windows fails with
+        // "the directory name is invalid". The launch configuration of such a
+        // run names the directory to use instead.
+        let worktree_root = delegate.worktree_root_path();
+        let working_directory = if worktree_root.is_dir() {
+            worktree_root.to_path_buf()
+        } else {
+            config
+                .config
+                .get("cwd")
+                .and_then(|cwd| cwd.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| worktree_root.to_path_buf())
+        };
+
         let mut configuration = config.config.clone();
         if let Some(configuration) = configuration.as_object_mut() {
             configuration
                 .entry("cwd")
-                .or_insert_with(|| delegate.worktree_root_path().to_string_lossy().into());
+                .or_insert_with(|| working_directory.to_string_lossy().into());
         }
 
         let mut base_env = delegate.shell_env().await;
@@ -255,7 +271,7 @@ impl DebugAdapter for GdbDebugAdapter {
             command: Some(gdb_path),
             arguments: gdb_args,
             envs: base_env,
-            cwd: Some(delegate.worktree_root_path().to_path_buf()),
+            cwd: Some(working_directory),
             connection: None,
             request_args: StartDebuggingRequestArguments {
                 request: self.request_kind(&config.config).await?,

@@ -1804,6 +1804,19 @@ impl Panel for TerminalPanel {
 struct TerminalProvider(Entity<TerminalPanel>);
 
 impl workspace::TerminalProvider for TerminalProvider {
+    fn kill_task(&self, label: &str, cx: &mut App) -> bool {
+        let terminal_panel = self.0.clone();
+        terminal_panel.update(cx, |terminal_panel, cx| {
+            let terminals = terminal_panel.terminals_for_task(label, cx);
+            let killed = !terminals.is_empty();
+            for (_, _, terminal_view) in terminals {
+                let terminal = terminal_view.read(cx).terminal().clone();
+                terminal.update(cx, |terminal, _| terminal.kill_active_task());
+            }
+            killed
+        })
+    }
+
     fn spawn(
         &self,
         task: SpawnInTerminal,

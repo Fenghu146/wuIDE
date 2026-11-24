@@ -85,6 +85,8 @@ actions!(
         RunCurrentFile,
         /// Opens the run dialog to edit the command before running the file.
         RunCurrentFileWithCommand,
+        /// Stops the program the code runner started.
+        StopCurrentFile,
         /// Builds the file with debug symbols and starts a debug session.
         DebugCurrentFile,
     ]

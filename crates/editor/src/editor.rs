@@ -1089,7 +1089,11 @@ pub struct Editor {
     runnables: RunnableData,
     /// The command last run with "Run Current File", together with the file it
     /// was resolved for, so the next run does not have to ask again.
-    last_run: Option<(PathBuf, code_runner::RunCommand)>,
+    last_run: Option<(PathBuf, code_runner::RunPlan)>,
+    /// The run in flight, which the stop button ends.
+    code_run: Option<run_current_file::ActiveCodeRun>,
+    /// The last answer from the debug adapter lookup, with when it was taken.
+    debug_adapter_check: Option<(std::time::Instant, bool)>,
     bookmark_store: Option<Entity<BookmarkStore>>,
     bookmarks_tab_state: Option<Entity<BookmarksTabState>>,
     bookmarks_tab_subscription: Option<Subscription>,
@@ -1822,6 +1826,7 @@ impl Editor {
         clone.enable_runnables = self.enable_runnables;
         clone.enable_code_lens = self.enable_code_lens;
         clone.last_run = self.last_run.clone();
+        clone.code_run = self.code_run.clone();
         if let Some(bookmarks_tab_state) = self.bookmarks_tab_state.clone() {
             clone.set_bookmarks_tab_state(bookmarks_tab_state, cx);
         }
@@ -2426,6 +2431,8 @@ impl Editor {
                 .unwrap_or_default(),
             runnables: RunnableData::new(),
             last_run: None,
+            code_run: None,
+            debug_adapter_check: None,
             pull_diagnostics_task: Task::ready(()),
             colors: None,
             code_lens: None,

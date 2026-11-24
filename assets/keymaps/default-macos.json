@@ -546,10 +546,14 @@
       "cmd-shift-x": "wu::Extensions",
       // Runs the file in the editor with the command for its language; the
       // first run shows the command, later runs rerun it.
-      "ctrl-f5": "wu::RunCurrentFile",
-      // Debugging builds with -g first, then starts the configured adapter.
-      "ctrl-shift-f5": "wu::DebugCurrentFile",
-      "f5": "debugger::Rerun",
+      // Debugging builds the file, then starts the configured adapter.
+      "f5": "wu::DebugCurrentFile",
+      // Runs the file without a debugger, with the command key the rest of the
+      // menu shortcuts use on macOS.
+      "cmd-f5": "wu::RunCurrentFile",
+      // The Code Runner extension's shortcuts, kept as they are everywhere.
+      "ctrl-alt-n": "wu::RunCurrentFile",
+      "ctrl-alt-m": "wu::StopCurrentFile",
     },
   },
   {
