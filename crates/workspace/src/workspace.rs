@@ -330,7 +330,11 @@ pub trait TerminalProvider {
 
     /// Ends the process of the task with this terminal label, and says whether
     /// there was one. Providers that cannot reach a process return `false`.
-    fn kill_task(&self, _label: &str, _cx: &mut App) -> bool {
+    ///
+    /// `workspace` is passed in because whoever asks already holds it loaned:
+    /// looking it up again through an entity handle would lease it a second
+    /// time, which panics inside a click handler and aborts the editor.
+    fn kill_task(&self, _label: &str, _workspace: &Workspace, _cx: &mut App) -> bool {
         false
     }
 }
@@ -3159,7 +3163,7 @@ impl Workspace {
     pub fn kill_task_terminal(&self, label: &str, cx: &mut App) -> bool {
         self.terminal_provider
             .as_ref()
-            .is_some_and(|provider| provider.kill_task(label, cx))
+            .is_some_and(|provider| provider.kill_task(label, self, cx))
     }
 
     pub fn set_debugger_provider(&mut self, provider: impl DebuggerProvider + 'static) {
