@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Points this clone at the repository's hooks, so the main-checkout guard and
+# the lease check actually run before a commit.
+# Usage: script/setup-hooks
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [[ ! -d .githooks ]]; then
+    echo "error: .githooks is missing; hooks cannot be installed" >&2
+    exit 1
+fi
+
+chmod +x .githooks/* 2>/dev/null || true
+git config core.hooksPath .githooks
+
+echo "core.hooksPath=.githooks"
+printf 'Enabled hooks:'
+for hook in .githooks/*; do
+    printf ' %s' "$(basename "$hook")"
+done
+printf '\n'

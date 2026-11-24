@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+# Keeps a commit out of the shared main checkout, and keeps it out of files
+# another thread has leased.
+#
+# Only a hand-made commit needs AMP_MAIN_COMMIT=1, and the usual case is
+# finishing a conflicted merge. A clean `git merge` runs pre-merge-commit,
+# which this repository does not provide, so it passes untouched. The variable
+# also skips the lease check, because such a commit closes out work that
+# script/pre-merge-check already cleared.
+
+set -euo pipefail
+
+toplevel=$(git rev-parse --show-toplevel)
+primary=$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)
+
+normalize_dir() {
+    (cd "$1" && pwd -P)
+}
+
+if [[ "$(normalize_dir "$toplevel")" == "$(normalize_dir "$primary")" ]]; then
+    if [[ "${AMP_MAIN_COMMIT:-}" != 1 ]]; then
+        cat >&2 <<EOF
+pre-commit: the shared main checkout is not a place to edit.
+
+  $toplevel
+
+It exists for merges, releases and tags. Two threads switching branches here
+put commits on each other's branch, so work in a worktree of its own:
+
+  git worktree add ..\\<name> -b <branch> origin/main
+
+Only a hand-made commit here needs AMP_MAIN_COMMIT=1, including the one that
+finishes a conflicted merge. A clean `git merge` does not run this hook at all.
+EOF
+        exit 1
+    fi
+    exit 0
+fi
+
+lease="$toplevel/script/lease"
+if [[ ! -x "$lease" ]]; then
+    exit 0
+fi
+
+lease_args=(check --staged)
+if [[ -n "${AMP_LEASE_TOKEN:-}" ]]; then
+    lease_args+=(--token "$AMP_LEASE_TOKEN")
+fi
+
+if ! "$lease" "${lease_args[@]}"; then
+    cat >&2 <<'EOF'
+
+pre-commit: another thread holds a lease on these files.
+
+Leave them out of this commit. The holder may still be editing them, and a
+commit now splits their work in two. script/lease status shows who holds what
+and what their note says; ask them to release it, or wait for the lease to
+expire, then commit the rest.
+EOF
+    exit 1
+fi

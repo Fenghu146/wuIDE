@@ -1,0 +1,690 @@
+#!/usr/bin/env bash
+
+# Coordinates threads that touch the same paths.
+# Usage: script/lease <command> [args]; `script/lease help` lists the commands.
+#
+# A lease records "this thread is working on these paths" under
+# .git/amp-leases, so a second thread learns about the overlap before it
+# starts, instead of after two sets of edits have to be told apart by hand.
+#
+# Storage is one file per lease, <token>.lease, holding key=value lines. That
+# is line-oriented on purpose: it stays readable by sed and by people, needs no
+# jq, and keeps notes with spaces or quotes intact.
+#
+# Every lease file is read once into shell variables by load_lease. Command
+# substitutions and pipelines in that loop cost a process per lease, which on
+# Windows is two hundred milliseconds; with twenty leases a claim would take
+# seconds instead of milliseconds.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+help() {
+    cat <<'EOF'
+Usage: script/lease <command> [args]
+
+  claim <path>... [--note <text>] [--ttl <time>] [--json]
+      Register these paths for this thread. Exits non-zero if an active lease
+      of another thread overlaps them, listing the holder, its note and the
+      time left. --ttl takes 30m, 2h, 1d or plain seconds (default 2h).
+
+  release <token>       Drop one lease.
+  release --all-mine    Drop every lease of this thread.
+  heartbeat <token> [--ttl <time>]
+      Extend one lease. Long tasks should heartbeat instead of claiming a
+      large ttl up front, so a dead thread's paths free up quickly.
+  status [--json]       List active leases; also drops the expired ones.
+
+  build claim [--note <text>] [--ttl <time>] [--json]
+  build release         Hold or drop the single machine-wide build lock.
+      release-fast builds and packaging take it, so two of them never share a
+      target dir. Only another build claim conflicts with it.
+
+  check --staged | --paths <path>... | --range <rev-range> [--token <token>]
+      Internal, used by .githooks/pre-commit and script/pre-merge-check:
+      report overlaps between these files and other threads' leases.
+  check --build
+      Internal: exit non-zero while the build lock is held.
+
+Paths are compared after being reduced to a directory prefix:
+
+  crates/code_runner/**          -> crates/code_runner/
+  crates/settings_ui/src/*.rs    -> crates/settings_ui/src/
+  crates/settings_ui/src/a.rs    -> crates/settings_ui/src/
+  docs/x.md                      -> docs/
+  **/*.rs                        -> ./  (the whole repository)
+
+Two leases overlap when one prefix contains the other, so a claim on a file
+reserves its whole directory. This is a conservative approximation: adjacent
+files in one directory report a conflict even though they could be edited in
+parallel. It over-reports; it does not miss a collision.
+
+Identity comes from AMP_THREAD_ID. `claim` prints its token, and exporting it
+as AMP_LEASE_TOKEN lets heartbeat, release and the pre-commit hook tell your
+leases from everyone else's.
+EOF
+}
+
+die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+now() { date +%s; }
+
+# normalize <path-or-glob> -> directory prefix ending in /, or ./ for the repo
+normalize() {
+    local raw=$1 is_dir=false prefix="" seg count=0
+    raw=${raw//\\//}
+    raw=${raw#./}
+    [[ "$raw" == */ ]] && is_dir=true
+    raw=${raw%/}
+    if [[ -z "$raw" || "$raw" == "." ]]; then
+        printf './'
+        return
+    fi
+
+    local -a parts
+    IFS=/ read -r -a parts <<< "$raw"
+    for seg in "${parts[@]}"; do
+        case "$seg" in
+            *'*'* | *'?'* | *'['*) break ;;
+        esac
+        prefix+="$seg/"
+        count=$((count + 1))
+    done
+
+    if ((count == ${#parts[@]})) && [[ "$is_dir" == false ]]; then
+        # A plain path that is not marked as a directory may be a file, so
+        # reserve its parent directory too: over-reporting beats missing one.
+        prefix=${prefix%*/}
+        prefix=${prefix%/*}/
+        if [[ -z "$prefix" || "$prefix" == "/" ]]; then
+            prefix="./"
+        fi
+    fi
+    printf '%s' "${prefix:-./}"
+}
+
+overlaps() {
+    local a=$1 b=$2
+    [[ "$a" == "./" || "$b" == "./" ]] && return 0
+    [[ "$a" == "$b" ]] && return 0
+    [[ "$a" == "$b"* ]] && return 0
+    [[ "$b" == "$a"* ]] && return 0
+    return 1
+}
+
+# humanize <seconds> sets HUMAN. It writes to a variable instead of printing
+# because a command substitution is a forked shell, and this runs per lease.
+humanize() {
+    local s=$1 m h d
+    ((s < 0)) && s=0
+    if ((s < 60)); then
+        HUMAN="${s}s"
+        return
+    fi
+    m=$((s / 60))
+    if ((m < 60)); then
+        HUMAN="${m}m"
+        return
+    fi
+    h=$((m / 60))
+    m=$((m % 60))
+    if ((h < 24)); then
+        printf -v HUMAN '%dh%02dm' "$h" "$m"
+        return
+    fi
+    d=$((h / 24))
+    h=$((h % 24))
+    printf -v HUMAN '%dd%02dh' "$d" "$h"
+}
+
+parse_ttl() {
+    local text=$1 number unit
+    if [[ "$text" =~ ^([0-9]+)([smhd]?)$ ]]; then
+        number=${BASH_REMATCH[1]}
+        unit=${BASH_REMATCH[2]}
+    else
+        die "invalid --ttl '$text': use 30m, 2h, 1d or plain seconds"
+    fi
+    case "$unit" in
+        "" | s) printf '%s' "$number" ;;
+        m) printf '%s' $((number * 60)) ;;
+        h) printf '%s' $((number * 3600)) ;;
+        d) printf '%s' $((number * 86400)) ;;
+    esac
+}
+
+sanitize() {
+    local s=$1
+    s=${s//$'\n'/ }
+    s=${s//$'\r'/ }
+    s=${s//$'\t'/ }
+    s=${s#"${s%%[![:space:]]*}"}
+    s=${s%"${s##*[![:space:]]}"}
+    printf '%s' "$s"
+}
+
+json_string() {
+    local s
+    s=$(sanitize "$1")
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    printf '"%s"' "$s"
+}
+
+# Leases live in the shared git dir so every worktree sees the same set.
+git_dir=$(git rev-parse --git-common-dir)
+if [[ "$git_dir" != /* && "$git_dir" != [A-Za-z]:* ]]; then
+    git_dir=$(cd "$git_dir" && pwd -P)
+fi
+lease_dir="$git_dir/amp-leases"
+lock_dir="$lease_dir/.claim-lock"
+lock_held=false
+
+# One timestamp per invocation; a claim does not need sub-second accuracy and
+# `date` is a process.
+NOW=$(now)
+
+thread=${AMP_THREAD_ID:-}
+own_token=${AMP_LEASE_TOKEN:-}
+
+release_lock() {
+    if [[ "$lock_held" == true ]]; then
+        rmdir "$lock_dir" 2>/dev/null || true
+        lock_held=false
+    fi
+}
+
+# Serializes claim: checking for overlaps and then writing the lease is not one
+# step, so two threads claiming the same paths at the same instant could both
+# pass the check. mkdir is atomic everywhere this runs, so the directory itself
+# is the guard; it is held for the few milliseconds a claim takes.
+acquire_lock() {
+    mkdir -p "$lease_dir"
+    local attempts=0 stale
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        # A claim killed between mkdir and rmdir would block every later claim,
+        # so drop the guard once it is clearly abandoned.
+        stale=$(find "$lock_dir" -maxdepth 0 -mmin +2 2>/dev/null || true)
+        if [[ -n "$stale" ]]; then
+            rmdir "$lock_dir" 2>/dev/null || true
+            continue
+        fi
+        attempts=$((attempts + 1))
+        if ((attempts >= 100)); then
+            die "another claim has held $lock_dir for 10s; remove it if nothing is claiming"
+        fi
+        sleep 0.1
+    done
+    lock_held=true
+}
+
+trap release_lock EXIT
+
+lease_file() { printf '%s/%s.lease' "$lease_dir" "$1"; }
+
+# load_lease <file> fills L_* from one read of the file, without spawning
+# anything. L_PATHS is an array.
+load_lease() {
+    L_TOKEN=""
+    L_THREAD=""
+    L_KIND=""
+    L_NOTE=""
+    L_CREATED=""
+    L_EXPIRES=""
+    L_PATHS=()
+    local line key value
+    while IFS= read -r line; do
+        key=${line%%=*}
+        value=${line#*=}
+        case "$key" in
+            token) L_TOKEN=$value ;;
+            thread) L_THREAD=$value ;;
+            kind) L_KIND=$value ;;
+            note) L_NOTE=$value ;;
+            created_at) L_CREATED=$value ;;
+            expires_at) L_EXPIRES=$value ;;
+            path) L_PATHS+=("$value") ;;
+        esac
+    done < "$1"
+}
+
+is_mine() {
+    if [[ -n "$own_token" && "$L_TOKEN" == "$own_token" ]]; then
+        return 0
+    fi
+    if [[ -n "$thread" && "$L_THREAD" == "$thread" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+describe_loaded() {
+    local age remaining
+    humanize $(( NOW - ${L_CREATED:-0} ))
+    age=$HUMAN
+    humanize $(( ${L_EXPIRES:-0} - NOW ))
+    remaining=$HUMAN
+    printf 'holder   %s\n' "$L_THREAD"
+    printf 'token    %s\n' "$L_TOKEN"
+    printf 'note     %s\n' "$L_NOTE"
+    printf 'held     %s ago, expires in %s\n' "$age" "$remaining"
+}
+
+prune_expired() {
+    local file
+    for file in "$lease_dir"/*.lease; do
+        [[ -e "$file" ]] || continue
+        load_lease "$file"
+        if (( ${L_EXPIRES:-0} <= NOW )); then
+            rm -f "$file"
+        fi
+    done
+}
+
+# Sets TOKEN instead of printing it: one fork saved per claim matters on
+# Windows, where every command substitution is a process.
+new_token() {
+    TOKEN="l-$NOW-$$-$RANDOM"
+    while [[ -e "$lease_dir/$TOKEN.lease" ]]; do
+        TOKEN="l-$NOW-$$-$RANDOM"
+    done
+}
+
+write_lease() {
+    local token=$1 kind=$2 note=$3 expires=$4 file tmp
+    shift 4
+    file="$lease_dir/$token.lease"
+    tmp="$file.tmp.$$"
+
+    {
+        printf 'token=%s\n' "$token"
+        printf 'thread=%s\n' "${thread:-$token}"
+        printf 'kind=%s\n' "$kind"
+        printf 'note=%s\n' "$note"
+        printf 'created_at=%s\n' "$NOW"
+        printf 'expires_at=%s\n' "$expires"
+        local p
+        for p in "$@"; do
+            printf 'path=%s\n' "$p"
+        done
+    } > "$tmp"
+    mv "$tmp" "$file"
+}
+
+print_json_result() {
+    local token=$1 note=$2 expires=$3
+    shift 3
+    local p first=true
+    printf '{"ok":true,"token":%s,"thread":%s,"note":%s,"expires_at":%s,"paths":[' \
+        "$(json_string "$token")" "$(json_string "${thread:-$token}")" \
+        "$(json_string "$note")" "$expires"
+    for p in "$@"; do
+        if [[ "$first" == true ]]; then first=false; else printf ','; fi
+        json_string "$p" | tr -d '\n'
+    done
+    printf ']}\n'
+}
+
+cmd_claim() {
+    local kind=work note="" ttl=7200 json=false
+    local -a inputs=()
+    while (($# > 0)); do
+        case "$1" in
+            --note) note=$(sanitize "${2:-}"); shift 2 ;;
+            --ttl) ttl=$(parse_ttl "${2:-}"); shift 2 ;;
+            --json) json=true; shift ;;
+            --) shift; while (($# > 0)); do inputs+=("$1"); shift; done ;;
+            -*) die "unknown option: $1" ;;
+            *) inputs+=("$1"); shift ;;
+        esac
+    done
+    ((${#inputs[@]} > 0)) || die "claim needs at least one path or glob"
+
+    local -a prefixes=()
+    local input
+    for input in "${inputs[@]}"; do
+        prefixes+=("$(normalize "$input")")
+    done
+
+    acquire_lock
+    prune_expired
+
+    local conflict=false file mine theirs seen=" "
+    for file in "$lease_dir"/*.lease; do
+        [[ -e "$file" ]] || continue
+        load_lease "$file"
+        [[ "$L_KIND" == "$kind" ]] || continue
+        is_mine && continue
+        for theirs in "${L_PATHS[@]}"; do
+            for mine in "${prefixes[@]}"; do
+                if overlaps "$mine" "$theirs"; then
+                    conflict=true
+                    if [[ "$seen" != *" $L_TOKEN "* ]]; then
+                        seen+="$L_TOKEN "
+                        {
+                            printf 'FAIL  %s lease refused: overlaps an active lease\n' "$kind"
+                            describe_loaded
+                            printf 'overlaps %s (theirs) and %s (yours)\n\n' "$theirs" "$mine"
+                            printf 'Ask the holder to release it, or wait for it to expire:\n'
+                            printf '  script/lease status\n'
+                        } >&2
+                    fi
+                fi
+            done
+        done
+    done
+
+    if [[ "$conflict" == true ]]; then
+        exit 1
+    fi
+
+    local expires=$(( NOW + ttl ))
+    new_token
+    local token=$TOKEN
+    write_lease "$token" "$kind" "$note" "$expires" "${prefixes[@]}"
+    release_lock
+
+    if [[ "$json" == true ]]; then
+        print_json_result "$token" "$note" "$expires" "${prefixes[@]}"
+    else
+        humanize "$ttl"
+        printf 'Claimed %s for %s as %s\n' "${prefixes[*]}" "$HUMAN" "${thread:-$token}"
+        printf 'token=%s\n' "$token"
+        printf 'Export it so later commands and the commit hook recognize it:\n'
+        printf '  export AMP_LEASE_TOKEN=%s\n' "$token"
+    fi
+}
+
+cmd_release() {
+    local target=${1:-}
+    [[ -n "$target" ]] || die "usage: script/lease release <token>|--all-mine"
+
+    if [[ "$target" == "--all-mine" ]]; then
+        local file released=0
+        for file in "$lease_dir"/*.lease; do
+            [[ -e "$file" ]] || continue
+            load_lease "$file"
+            if is_mine; then
+                rm -f "$file"
+                released=$((released + 1))
+            fi
+        done
+        if ((released == 0)); then
+            echo "No leases of this thread were active."
+        else
+            echo "Released $released lease(s)."
+        fi
+        return
+    fi
+
+    local file
+    file=$(lease_file "$target")
+    [[ -e "$file" ]] || die "no lease with token $target (see script/lease status)"
+    rm -f "$file"
+    echo "Released $target."
+}
+
+cmd_heartbeat() {
+    local token=${1:-}
+    [[ -n "$token" ]] || die "usage: script/lease heartbeat <token> [--ttl <time>]"
+    shift || true
+    local ttl=7200
+    while (($# > 0)); do
+        case "$1" in
+            --ttl) ttl=$(parse_ttl "${2:-}"); shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local file expires tmp
+    file=$(lease_file "$token")
+    [[ -e "$file" ]] || die "no lease with token $token (see script/lease status)"
+    expires=$(( NOW + ttl ))
+    tmp="$file.tmp.$$"
+    {
+        local key value
+        while IFS='=' read -r key value; do
+            case "$key" in
+                expires_at) printf 'expires_at=%s\n' "$expires" ;;
+                "") : ;;
+                *) printf '%s=%s\n' "$key" "$value" ;;
+            esac
+        done < "$file"
+    } > "$tmp"
+    mv "$tmp" "$file"
+    humanize "$ttl"
+    printf 'Extended %s by %s (expires in %s).\n' "$token" "$HUMAN" "$HUMAN"
+}
+
+cmd_build() {
+    local action=${1:-}
+    shift || true
+    case "$action" in
+        claim)
+            local note="" ttl=14400 json=false
+            while (($# > 0)); do
+                case "$1" in
+                    --note) note=$(sanitize "${2:-}"); shift 2 ;;
+                    --ttl) ttl=$(parse_ttl "${2:-}"); shift 2 ;;
+                    --json) json=true; shift ;;
+                    *) die "unknown option: $1" ;;
+                esac
+            done
+            acquire_lock
+            prune_expired
+            local file
+            for file in "$lease_dir"/*.lease; do
+                [[ -e "$file" ]] || continue
+                load_lease "$file"
+                [[ "$L_KIND" == "build" ]] || continue
+                {
+                    printf 'FAIL  the build lock is already held\n'
+                    describe_loaded
+                    printf '\nA release-fast build and packaging share target dirs, so\n'
+                    printf 'only one may run at a time. See script/lease status.\n'
+                } >&2
+                exit 1
+            done
+            local expires=$(( NOW + ttl ))
+            new_token
+            local token=$TOKEN
+            write_lease "$token" "build" "$note" "$expires"
+            release_lock
+            if [[ "$json" == true ]]; then
+                print_json_result "$token" "$note" "$expires"
+            else
+                humanize "$ttl"
+                printf 'Holding the build lock for %s as %s\n' "$HUMAN" "${thread:-$token}"
+                printf 'token=%s\n' "$token"
+                if [[ -n "$note" ]]; then
+                    printf 'note=%s\n' "$note"
+                fi
+            fi
+            ;;
+        release)
+            local file released=false
+            for file in "$lease_dir"/*.lease; do
+                [[ -e "$file" ]] || continue
+                load_lease "$file"
+                [[ "$L_KIND" == "build" ]] || continue
+                rm -f "$file"
+                released=true
+            done
+            if [[ "$released" == true ]]; then
+                echo "Build lock released."
+            else
+                echo "No build lock was held."
+            fi
+            ;;
+        *)
+            die "usage: script/lease build claim|release"
+            ;;
+    esac
+}
+
+cmd_status() {
+    local json=${1:-}
+    mkdir -p "$lease_dir"
+    prune_expired
+
+    local file found=false
+    for file in "$lease_dir"/*.lease; do
+        [[ -e "$file" ]] || continue
+        found=true
+    done
+
+    if [[ "$found" == false ]]; then
+        if [[ "$json" == "--json" ]]; then
+            printf '{"leases":[]}\n'
+        else
+            echo "No active leases."
+        fi
+        return
+    fi
+
+    if [[ "$json" == "--json" ]]; then
+        printf '{"leases":['
+        local first=true p
+        for file in "$lease_dir"/*.lease; do
+            [[ -e "$file" ]] || continue
+            load_lease "$file"
+            if [[ "$first" == true ]]; then first=false; else printf ','; fi
+            printf '{"token":%s,"thread":%s,"kind":%s,"note":%s,"created_at":%s,"expires_at":%s,"paths":[' \
+                "$(json_string "$L_TOKEN")" "$(json_string "$L_THREAD")" \
+                "$(json_string "$L_KIND")" "$(json_string "$L_NOTE")" \
+                "${L_CREATED:-0}" "${L_EXPIRES:-0}"
+            local inner=true
+            if ((${#L_PATHS[@]} > 0)); then
+                for p in "${L_PATHS[@]}"; do
+                    if [[ "$inner" == true ]]; then inner=false; else printf ','; fi
+                    json_string "$p" | tr -d '\n'
+                done
+            fi
+            printf ']}'
+        done
+        printf ']}\n'
+        return
+    fi
+
+    printf 'ACTIVE LEASES\n'
+    local p
+    for file in "$lease_dir"/*.lease; do
+        [[ -e "$file" ]] || continue
+        load_lease "$file"
+        case "$L_KIND" in
+            work) kind_label=WORK ;;
+            build) kind_label=BUILD ;;
+            *) kind_label=$L_KIND ;;
+        esac
+        printf '\n%s\n' "$kind_label"
+        describe_loaded
+        if ((${#L_PATHS[@]} > 0)); then
+            for p in "${L_PATHS[@]}"; do
+                if [[ -n "$p" ]]; then
+                    printf 'path     %s\n' "$p"
+                fi
+            done
+        fi
+    done
+}
+
+cmd_check() {
+    local mode="" range="" extra_token="" build=false
+    local -a explicit=()
+    while (($# > 0)); do
+        case "$1" in
+            --staged) mode=staged; shift ;;
+            --range) mode=range; range=${2:-}; shift 2 ;;
+            --paths) mode=paths; shift; while (($# > 0)) && [[ "$1" != --* ]]; do explicit+=("$1"); shift; done ;;
+            --token) extra_token=${2:-}; shift 2 ;;
+            --build) build=true; shift ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    [[ -d "$lease_dir" ]] || exit 0
+    prune_expired
+
+    if [[ "$build" == true ]]; then
+        local file
+        for file in "$lease_dir"/*.lease; do
+            [[ -e "$file" ]] || continue
+            load_lease "$file"
+            [[ "$L_KIND" == "build" ]] || continue
+            describe_loaded >&2
+            exit 1
+        done
+        exit 0
+    fi
+
+    [[ -n "$mode" ]] || die "usage: script/lease check --staged|--paths ...|--range ...|--build"
+
+    local -a files=()
+    local f
+    case "$mode" in
+        staged)
+            while IFS= read -r f; do
+                if [[ -n "$f" ]]; then files+=("$f"); fi
+            done < <(git diff --cached --name-only --diff-filter=ACMR)
+            ;;
+        range)
+            while IFS= read -r f; do
+                if [[ -n "$f" ]]; then files+=("$f"); fi
+            done < <(git diff --name-only "$range")
+            ;;
+        paths)
+            files=("${explicit[@]}")
+            ;;
+    esac
+    ((${#files[@]} > 0)) || exit 0
+
+    local -a mine=()
+    for f in "${files[@]}"; do
+        mine+=("$(normalize "$f")")
+    done
+
+    local conflict=false file theirs prefix seen=" "
+    for file in "$lease_dir"/*.lease; do
+        [[ -e "$file" ]] || continue
+        load_lease "$file"
+        [[ "$L_KIND" == "work" ]] || continue
+        if [[ -n "$extra_token" && "$L_TOKEN" == "$extra_token" ]]; then
+            continue
+        fi
+        is_mine && continue
+        for theirs in "${L_PATHS[@]}"; do
+            for prefix in "${mine[@]}"; do
+                if overlaps "$prefix" "$theirs"; then
+                    conflict=true
+                    if [[ "$seen" != *" $L_TOKEN "* ]]; then
+                        seen+="$L_TOKEN "
+                        {
+                            describe_loaded
+                            printf 'overlaps %s (theirs) and %s (yours)\n\n' "$theirs" "$prefix"
+                        } >&2
+                    fi
+                fi
+            done
+        done
+    done
+
+    [[ "$conflict" == true ]] || exit 0
+    exit 1
+}
+
+command=${1:-help}
+shift || true
+case "$command" in
+    help | -h | --help) help ;;
+    claim) cmd_claim "$@" ;;
+    release) cmd_release "$@" ;;
+    heartbeat) cmd_heartbeat "$@" ;;
+    status) cmd_status "$@" ;;
+    build) cmd_build "$@" ;;
+    check) cmd_check "$@" ;;
+    *) help >&2; die "unknown command: $command" ;;
+esac
