@@ -6,6 +6,7 @@ mod fallible_options;
 mod language;
 pub mod merge_from;
 mod project;
+mod repo_map;
 mod serde_helper;
 mod terminal;
 mod theme;
@@ -21,6 +22,7 @@ pub use fallible_options::*;
 pub use language::*;
 pub use merge_from::MergeFrom as MergeFromTrait;
 pub use project::*;
+pub use repo_map::*;
 use serde::de::DeserializeOwned;
 pub use serde_helper::{
     serialize_f32_with_two_decimal_places, serialize_optional_f32_with_two_decimal_places,
@@ -317,6 +319,9 @@ pub struct SettingsContent {
     /// Configuration for running the file in the editor with a single click.
     pub code_runner: Option<CodeRunnerSettingsContent>,
 
+    /// How much work the repository map does for each project.
+    pub repo_map: Option<RepoMapSettingsContent>,
+
     pub title_bar: Option<TitleBarSettingsContent>,
 
     /// Number of lines to search for modelines at the beginning and end of files.
@@ -371,7 +376,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         global_lsp_settings, image_viewer, markdown_preview, hide_mouse,
         log, line_indicator_format, outline_panel, project_panel, search_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, terminal,
-        code_runner,
+        code_runner, repo_map,
         title_bar, modeline_lines,
         instrumentation,
     },

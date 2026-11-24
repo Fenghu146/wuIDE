@@ -211,6 +211,7 @@ impl VsCodeSettings {
             preview_tabs: self.preview_tabs_settings_content(),
             project: self.project_settings_content(),
             project_panel: self.project_panel_settings_content(),
+            repo_map: None,
             session_snapshots: None,
             search_panel: self
                 .side_bar_on_right()

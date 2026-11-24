@@ -16,6 +16,7 @@ use gpui::{
 use i18n::t;
 use path::{PathStyle, rel_path::RelPath};
 use project::{Project, ProjectPath};
+use settings::Settings as _;
 use ui::prelude::*;
 use ui::{Checkbox, Tooltip};
 use util::ResultExt;
@@ -27,6 +28,7 @@ use workspace::{
 use worktree::{EntryKind, WorktreeId};
 
 use crate::conventions::{AGENTS_FILE_NAME, AGENTS_TEMPLATE};
+use crate::repo_map_settings::RepoMapSettings;
 use crate::snapshot;
 use crate::symbol_map::{self, SourceFile, SymbolLine, SymbolMap};
 
@@ -217,10 +219,10 @@ impl RepoMapPanel {
         workspace: WeakEntity<Workspace>,
         mut cx: AsyncWindowContext,
     ) -> Task<anyhow::Result<Entity<Self>>> {
-        Task::ready(workspace.update_in(&mut cx, |workspace, _window, cx| {
+        Task::ready(workspace.update_in(&mut cx, |workspace, window, cx| {
             let project = workspace.project().clone();
             let workspace_handle = cx.entity().downgrade();
-            cx.new(|cx: &mut Context<Self>| Self {
+            let panel = cx.new(|cx: &mut Context<Self>| Self {
                 workspace: workspace_handle,
                 project: project.clone(),
                 focus_handle: cx.focus_handle(),
@@ -233,7 +235,11 @@ impl RepoMapPanel {
                 active: false,
                 _refresh_task: Task::ready(()),
                 _symbol_task: Task::ready(()),
-            })
+            });
+            if RepoMapSettings::get_global(cx).prewarms() {
+                panel.update(cx, |panel, cx| panel.request_symbol_maps(window, cx));
+            }
+            panel
         }))
     }
 
@@ -356,6 +362,9 @@ impl RepoMapPanel {
     /// costs a stat per file instead of a parse per file, and an edit made
     /// while the panel was closed shows up without a manual refresh.
     fn request_symbol_maps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !RepoMapSettings::get_global(cx).builds_map() {
+            return;
+        }
         let project = self.project.clone();
         let fs = project.read(cx).fs().clone();
         let languages = project.read(cx).languages().clone();
@@ -950,8 +959,8 @@ impl Panel for RepoMapPanel {
         Box::new(ToggleFocus)
     }
 
-    fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
-        self.active
+    fn starts_open(&self, _window: &Window, cx: &App) -> bool {
+        self.active && RepoMapSettings::get_global(cx).builds_map()
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -977,6 +986,25 @@ impl EventEmitter<PanelEvent> for RepoMapPanel {}
 
 impl Render for RepoMapPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !RepoMapSettings::get_global(cx).builds_map() {
+            return v_flex()
+                .id("repo-map-off")
+                .size_full()
+                .gap_2()
+                .bg(cx.theme().colors().editor_background)
+                .mx_2()
+                .my_2()
+                .child(Label::new(t!("Repo Map is off")).size(LabelSize::Small))
+                .child(
+                    Label::new(t!(
+                        "Turn it on in Settings → Panels → Repo Map. Building a large repository takes about 15–20 seconds the first time."
+                    ))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+                )
+                .into_any_element();
+        }
+
         let rows = self.visible_rows();
         let empty = rows.is_empty();
         v_flex()
@@ -999,6 +1027,7 @@ impl Render for RepoMapPanel {
                     .enumerate()
                     .map(|(ix, row)| self.render_row(ix, &row, cx)),
             )
+            .into_any_element()
     }
 }
 
