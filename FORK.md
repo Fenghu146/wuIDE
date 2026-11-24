@@ -27,12 +27,13 @@
 
 ## 4. 图标
 
-- Windows / macOS / Linux 的图标全部换成分叉作者提供的图片：
+- Windows / macOS / Linux 的图标全部换成分叉作者提供的插画：
   - `crates/wu/resources/app-icon.png`、`app-icon@2x.png`、`app-icon-dev.png`、`app-icon-dev@2x.png`
   - `crates/wu/resources/windows/app-icon.ico`、`app-icon-dev.ico`
   - `crates/wu/resources/Document.icns`
-- 欢迎页/引导页沿用的 `assets/images/wu_icon.png` 现在是 `app-icon.png` 的逐字节副本（`sha256` 相同），旧鹿头图已删除。仓库里仍以 Wu 命名的图形资源只剩 `assets/images/wu_icon.png`、`assets/images/wu_logo.svg`、`assets/icons/wu_mark.svg`（内容均已换新）与已无代码引用的 `assets/icons/wu.svg`。
-- **来源与授权**：这套图标是作者从公开分享渠道保存的插画，来源方并未授予再分发许可。仓库因此不能作为可公开分发的软件看待：要么保持 private 自用，要么在公开之前把图标换成自己拥有权利的图（`app-icon*.png`、`windows/app-icon*.ico`、`Document.icns`、`assets/images/wu_icon.png` 这 7 个文件一起换）。
+- 欢迎页/引导页沿用的 `assets/images/wu_icon.png` 现在是 `app-icon.png` 的逐字节副本（`sha256` 相同），旧鹿头图已删除。仓库里以 Wu 命名的图形资源只剩 `assets/images/wu_icon.png`、`assets/images/wu_logo.svg`、`assets/icons/wu_mark.svg`、`assets/icons/wu.svg` 与 `assets/badge/v0.json` 内嵌的 `logoSvg`；后四个是同一份从新图标提炼的单色人物剪影，不再是鹿角 W。`assets/images/wu_logo.svg` 只被组件库预览（`crates/ui/src/components/image.rs` 的 `VectorName::WuLogo`）引用。
+- **来源与授权**：这套图标（`app-icon*.png`、`windows/app-icon*.ico`、`Document.icns`、`assets/images/wu_icon.png`，以及上面那几个剪影图形）由项目作者使用 AI 图像生成工具制作，风格参考自公开发表的作品，再由作者选稿、裁切与定稿，作为本项目的一部分按 GPL-3.0 一并分发。作者不对"风格"主张排他权利，也不在此作超出本项目许可证的授权；若有第三方认为其中某张图与其权利相冲突，请通过仓库 issue 联系，核实后会替换或移除。
+- `assets/badge/v0.json` 是 shields.io endpoint 格式的徽章定义（`label` / `message` / `logoSvg` / `logoWidth` 等），仓库内没有代码读取它，只在该文件被外部徽章链接指向时生效；其中的 `logoSvg` 同样换成了新剪影。
 
 ## 5. 自动更新指向本仓库的 release
 
@@ -68,7 +69,7 @@
 - 智能体的运行期目录也跟着 `paths::APP_NAME` 走（`acp.rs` 的 `agent_data_root` 用 `paths::APP_NAME` / `APP_NAME_LOWERCASE`，不再写死 `Wu`/`wu`），所以改名后 Pi 和 DeepSeek 的凭据与插件目录跟主档案保持一致，不会一个改了另一个没改。
 - 仍然叫 Wu 的还有：命令行里的 `wu`（安装目录里的 `bin/wu.exe` / `bin/wu` 是 `ide` 的兼容副本）、`wu://` URL scheme、crate 名、AppId 与单实例互斥体、数据目录里的 `wu-<channel>.sock` 与 `.wu_server` / `.wu_wsl_server`。发版文件名（`IDE-*.dmg`、`ide-linux-*.tar.gz`、`IDE-x86_64.exe`）与 Linux bundle 内的 `libexec/ide` 已经是 IDE；安装目录也只在升级时沿用旧的 `{autopf}\Wu`。
 - 主题与图标主题名已随 IDE 改名：`assets/themes/wu/wu.json` 里是 `IDE Dark` / `IDE Light` / `IDE Dark Translucent`，用户设置中的旧名由 `crates/theme_settings/src/settings.rs` 的 `migrate_theme_name` 和 `crates/theme/src/registry.rs` 的 `ThemeRegistry::get` 兜底迁移；图标主题是 `Symbols Dark` / `Symbols Light`（`assets/icon_themes/symbols/icon_theme.json`，`assets/settings/default.json` 默认用它们），代码内置的兜底图标主题名是 `IDE Classic`（`crates/theme/src/icon_theme.rs` 的 `DEFAULT_ICON_THEME_NAME`），`Wu Classic` / `Wu (Default)` 只作为 legacy 常量存在，由 `ThemeRegistry::get_icon_theme` 映射过来。
-- 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它与 `assets/icons/wu.svg` 的 `viewBox`（`205 1 1053 1551`）和文件结构一致，已是同一套人物剪影，不再是鹿头轮廓。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。
+- 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它和 `assets/icons/wu.svg` 内容一致，都是 `viewBox="0 0 24 24"` 的单个 `currentColor` 路径（所以 `LOGO_ASPECT` 是 1:1），只保留鲍伯短发、刘海转角、圆脸和肩线这些能认出人像的轮廓，眼睛高光、衬衫纽扣、小花等在遮罩里会糊成一团的细节都去掉了。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。
 - `README.md` / `README.zh-CN.md` / `docs/INSTALL.md` 已改成本分叉的文案：正确的下载资产名、未签名构建的处理方式与 SHA-256 核对步骤、更新机制、出站请求清单、许可证与源码获取方式，并链接回本文件。
 
 ## 已知限制
