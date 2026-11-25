@@ -1820,20 +1820,38 @@ impl workspace::TerminalProvider for TerminalProvider {
         })
     }
 
-    fn reveal_task(&self, label: &str, window: &mut Window, cx: &mut App) -> bool {
+    fn reveal_task(
+        &self,
+        label: &str,
+        workspace_panes: &[Entity<Pane>],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         let terminal_panel = self.0.clone();
-        let Some((item_index, pane, _)) = terminal_panel.update(cx, |terminal_panel, cx| {
-            terminal_panel.terminals_for_task(label, cx).pop()
-        }) else {
+        let reveal_target = terminal_panel.update(cx, |terminal_panel, cx| {
+            terminal_panel
+                .terminals_for_task(label, workspace_panes, cx)
+                .pop()
+        });
+        let Some((item_index, pane, _)) = reveal_target else {
             return false;
         };
         terminal_panel.update(cx, |terminal_panel, cx| {
             terminal_panel.activate_terminal_view(&pane, item_index, true, window, cx)
         });
         let workspace = terminal_panel.read(cx).workspace.clone();
-        workspace
-            .update(cx, |workspace, cx| workspace.focus_panel::<TerminalPanel>(window, cx))
-            .is_ok_and(|panel| panel.is_some())
+        // The caller still has the workspace loaned for this whole call, so
+        // focusing it here would lease it a second time and panic. The deferral
+        // runs at the end of the effect cycle, after that update has returned.
+        window.defer(cx, move |window, cx| {
+            workspace
+                .update(cx, |workspace, cx| workspace.focus_panel::<TerminalPanel>(window, cx))
+                .ok();
+        });
+        // Reaching this point means the lookup above found a terminal for this
+        // task, so the caller is told it was revealed; the focus follows in the
+        // deferral rather than deciding the answer.
+        true
     }
 
     fn spawn(

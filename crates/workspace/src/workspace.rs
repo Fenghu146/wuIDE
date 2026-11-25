@@ -341,7 +341,17 @@ pub trait TerminalProvider {
     /// Brings the terminal of the task with this label back into view and
     /// focuses it, for output the user has to see. Providers that cannot show
     /// a task's terminal return `false`.
-    fn reveal_task(&self, _label: &str, _window: &mut Window, _cx: &mut App) -> bool {
+    ///
+    /// `workspace_panes` is passed in for the same reason as on `kill_task`:
+    /// whoever asks already holds the workspace loaned, so looking its panes up
+    /// through an entity handle would lease it a second time.
+    fn reveal_task(
+        &self,
+        _label: &str,
+        _workspace_panes: &[Entity<Pane>],
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
         false
     }
 }
@@ -3178,7 +3188,7 @@ impl Workspace {
     pub fn reveal_task_terminal(&self, label: &str, window: &mut Window, cx: &mut App) -> bool {
         self.terminal_provider
             .as_ref()
-            .is_some_and(|provider| provider.reveal_task(label, window, cx))
+            .is_some_and(|provider| provider.reveal_task(label, self.panes(), window, cx))
     }
 
     pub fn set_debugger_provider(&mut self, provider: impl DebuggerProvider + 'static) {
