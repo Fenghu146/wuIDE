@@ -151,10 +151,12 @@ jobs:
 
   release:
     needs: [bundle_mac, bundle_linux, bundle_windows]
-    # `needs` still waits for the Linux job, so its artifacts are included when
-    # it manages to finish, but a failed Linux job must not throw away a
-    # finished macOS and Windows build the way it used to.
-    if: always() && needs.bundle_mac.result == 'success' && needs.bundle_windows.result == 'success'
+    # Every job that uploads an asset gates the release. Publishing while one of
+    # them failed ships a release that silently misses that asset, which is worse
+    # than no release at all, so keep this list in sync with the upload steps
+    # above. `always()` makes the job evaluate this instead of being skipped
+    # because a dependency failed, so the run still reports the failure.
+    if: always() && needs.bundle_mac.result == 'success' && needs.bundle_linux.result == 'success' && needs.bundle_windows.result == 'success' && needs.remote_server.result == 'success'
     runs-on: ubuntu-24.04
     # Only the publishing job needs to write; the build jobs above it run
     # third-party code and must not hold a token that can create releases.
