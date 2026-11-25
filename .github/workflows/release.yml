@@ -23,8 +23,40 @@ jobs:
       - name: Check that the changelog has entries for this version
         run: script/changelog-section "${GITHUB_REF_NAME#v}" >/dev/null
 
-  bundle_mac:
+  # B2b: every bundle used to `cargo install cargo-about` itself (2-3.7 minutes)
+  # before it could generate licenses.md. Compile it once per platform here and
+  # let the bundles restore it from the cache. Generating licenses.md stays in
+  # each bundle: whether its content is identical across platforms (B2a) is not
+  # settled yet.
+  cargo_about:
     needs: check_version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+          - runner: ubuntu-22.04
+          - runner: ubuntu-22.04-arm
+          - runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install cargo-about
+        shell: bash
+        run: script/generate-licenses --install-only
+      # A cache miss in a bundle puts that job back where it was before this job
+      # existed (generate-licenses installs cargo-about itself), so failing to
+      # save here costs time, not the release.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: cargo-about-${{ hashFiles('script/generate-licenses') }}-${{ runner.os }}-${{ runner.arch }}
+
+  bundle_mac:
+    needs: [check_version, cargo_about]
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +89,11 @@ jobs:
             echo "$MACOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$profile_path"
             echo "MACOS_PROVISIONING_PROFILE=$profile_path" >> "$GITHUB_ENV"
           fi
+      - name: Restore the prebuilt cargo-about
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: cargo-about-${{ hashFiles('script/generate-licenses') }}-${{ runner.os }}-${{ runner.arch }}
       - name: Bundle
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -83,7 +120,7 @@ jobs:
           if-no-files-found: error
 
   bundle_linux:
-    needs: check_version
+    needs: [check_version, cargo_about]
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +157,11 @@ jobs:
         run: rustup show
       - name: Use the stable release channel
         run: echo stable > crates/wu/RELEASE_CHANNEL
+      - name: Restore the prebuilt cargo-about
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: cargo-about-${{ hashFiles('script/generate-licenses') }}-${{ runner.os }}-${{ runner.arch }}
       - name: Bundle
         run: ./script/bundle-linux
       - uses: actions/upload-artifact@v4
@@ -130,7 +172,7 @@ jobs:
           if-no-files-found: error
 
   bundle_windows:
-    needs: check_version
+    needs: [check_version, cargo_about]
     runs-on: windows-2022
     timeout-minutes: 300
     env:
@@ -143,6 +185,11 @@ jobs:
       - name: Use the stable release channel
         run: Set-Content -Path crates/wu/RELEASE_CHANNEL -Value stable -NoNewline
         shell: pwsh
+      - name: Restore the prebuilt cargo-about
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: cargo-about-${{ hashFiles('script/generate-licenses') }}-${{ runner.os }}-${{ runner.arch }}
       - name: Bundle
         run: script/bundle-windows.ps1 -Architecture x86_64
         shell: pwsh

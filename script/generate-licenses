@@ -6,6 +6,14 @@ source script/lib/timeout.sh
 CARGO_ABOUT_VERSION="0.8.2"
 OUTPUT_FILE="${1:-$(pwd)/assets/licenses.md}"
 TEMPLATE_FILE="script/licenses/template.md.hbs"
+
+# CI installs cargo-about once in a job of its own and shares the binary with the
+# bundles, so they no longer each spend 2-3.7 minutes compiling it.
+if [[ "${1:-}" == "--install-only" ]]; then
+    cargo install "cargo-about@$CARGO_ABOUT_VERSION"
+    exit 0
+fi
+
 # `cargo about` can stall with nothing printed at all: 1.4.7's bundle_mac
 # (aarch64) sat on "Generating cargo licenses" for 4h55m until GitHub's
 # 300-minute job timeout cancelled the job and skipped the release, while the
