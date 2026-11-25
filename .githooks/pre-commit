@@ -31,7 +31,7 @@ put commits on each other's branch, so work in a worktree of its own:
   git worktree add ..\\<name> -b <branch> origin/main
 
 Only a hand-made commit here needs AMP_MAIN_COMMIT=1, including the one that
-finishes a conflicted merge. A clean `git merge` does not run this hook at all.
+finishes a conflicted merge. A clean \`git merge\` does not run this hook at all.
 EOF
         exit 1
     fi
