@@ -69,6 +69,11 @@ jobs:
 
   bundle_mac:
     needs: [check_version, cargo_about]
+    # cargo-about is only a speedup: if its job fails or never gets a runner, the
+    # bundle still has to run, because `generate-licenses` installs cargo-about
+    # itself on a cache miss. Gating on check_version alone keeps a broken tag or
+    # changelog from starting the builds.
+    if: ${{ !cancelled() && needs.check_version.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -139,6 +144,8 @@ jobs:
 
   bundle_linux:
     needs: [check_version, cargo_about]
+    # See bundle_mac: a cargo-about failure costs the cache, not the bundle.
+    if: ${{ !cancelled() && needs.check_version.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -191,6 +198,8 @@ jobs:
 
   bundle_windows:
     needs: [check_version, cargo_about]
+    # See bundle_mac: a cargo-about failure costs the cache, not the bundle.
+    if: ${{ !cancelled() && needs.check_version.result == 'success' }}
     runs-on: windows-2022
     timeout-minutes: 300
     env:
