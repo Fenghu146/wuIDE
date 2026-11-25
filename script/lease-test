@@ -1,30 +1,108 @@
 #!/usr/bin/env bash
 
 # Exercises script/lease and .githooks/pre-commit in a throwaway repository.
-# Usage: script/lease-test
+#
+# Usage:
+#   script/lease-test                                  # test script/lease
+#   LEASE_BIN=<path> script/lease-test                 # test one other build
+#   script/lease-test --compare <path>                 # test both, two columns
+#
+# LEASE_BIN names the implementation under test and defaults to script/lease.
+# The difference between the two matters for how the suite installs it: the
+# bash version is copied into the throwaway worktree, because it resolves the
+# repository from its own location (`cd "$(dirname "$0")/.."`). A compiled
+# replacement is reached through a shim instead, because it resolves the
+# repository from the working directory, and because .githooks/pre-commit runs
+# `$toplevel/script/lease` and must reach the same implementation under test.
 #
 # Every case prints PASS or FAIL; the exit code is non-zero if any failed.
 
 set -uo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd -P)
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/lease-test.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
 
-passed=0
-failed=0
+usage() {
+    cat <<'EOF'
+Usage: script/lease-test [--compare <path>]
+
+  (no arguments)        test script/lease
+  LEASE_BIN=<path>      test that implementation instead
+  --compare <path>      test script/lease and <path>, print two columns
+
+Exit status is non-zero if any case failed.
+EOF
+}
+
+LEASE_BIN=${LEASE_BIN:-}
+compare_bin=""
+while (($# > 0)); do
+    case "$1" in
+        --compare)
+            compare_bin=${2:-}
+            if [ -z "$compare_bin" ]; then
+                printf 'lease-test: --compare needs the path of a second implementation\n' >&2
+                exit 2
+            fi
+            shift 2 || shift
+            ;;
+        -h | --help) usage; exit 0 ;;
+        *) printf 'lease-test: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+[ -n "${LEASE_BIN:-}" ] || LEASE_BIN="$repo_root/script/lease"
+
+abspath() {
+    local p=$1
+    if [[ "$p" == /* || "$p" == [A-Za-z]:* ]]; then printf '%s' "$p"; return; fi
+    printf '%s/%s' "$PWD" "$p"
+}
+
+primary_bin=$(abspath "$LEASE_BIN")
+if [[ ! -e "$primary_bin" ]]; then
+    printf 'lease-test: implementation not found: %s\n' "$primary_bin" >&2
+    exit 2
+fi
+
+second_bin=""
+if (( ${#compare_bin} > 0 )); then
+    second_bin=$(abspath "$compare_bin")
+    if [[ ! -e "$second_bin" ]]; then
+        printf 'lease-test: implementation not found: %s\n' "$second_bin" >&2
+        exit 2
+    fi
+fi
+
+tmp=""
+trap '[ -n "$tmp" ] && rm -rf "$tmp"' EXIT
+
+# --- result collection ------------------------------------------------------
+
+CASE_DESC=()
+CASE_STATE=()
+CASE_DETAIL=()
+live=false
 
 ok() {
-    passed=$((passed + 1))
-    printf 'PASS  %s\n' "$1"
+    CASE_DESC+=("$1")
+    CASE_STATE+=(PASS)
+    CASE_DETAIL+=("")
+    if [[ "$live" == true ]]; then printf 'PASS  %s\n' "$1"; fi
+    return 0
 }
 
 no() {
-    failed=$((failed + 1))
-    printf 'FAIL  %s\n' "$1"
-    if [[ -n "${2:-}" ]]; then
-        printf '%s\n' "$2" | sed 's/^/      /'
+    local detail=${2:-}
+    CASE_DESC+=("$1")
+    CASE_STATE+=(FAIL)
+    CASE_DETAIL+=("$detail")
+    if [[ "$live" == true ]]; then
+        printf 'FAIL  %s\n' "$1"
+        if [[ -n "$detail" ]]; then
+            printf '%s\n' "$detail" | sed 's/^/      /'
+        fi
     fi
+    return 0
 }
 
 expect_ok() { # <description> <command...>
@@ -79,139 +157,234 @@ expect_not_contains() { # <description> <needle> <command...>
     fi
 }
 
-# --- throwaway repository ---------------------------------------------------
+# --- the suite --------------------------------------------------------------
 
-git init -q "$tmp/repo"
-cd "$tmp/repo"
-git config user.email lease@example.com
-git config user.name lease-test
-mkdir -p script .githooks
-cp "$repo_root/script/lease" "$repo_root/script/setup-hooks" script/
-cp "$repo_root/.githooks/pre-commit" .githooks/
-chmod +x script/lease script/setup-hooks .githooks/pre-commit
-printf 'a\n' > a.txt
-git add -A
-AMP_MAIN_COMMIT=1 git commit -qm init
-git worktree add -q "$tmp/wt" -b feat
-lease="$tmp/wt/script/lease"
+run_suite() { # <implementation>
+    local bin=$1
+    local lease token_crates token_vendor token_src
+    local race_rounds race_wrong round start codes
 
-expect_contains "setup-hooks points core.hooksPath at .githooks" \
-    ".githooks" "$tmp/wt/script/setup-hooks"
+    CASE_DESC=()
+    CASE_STATE=()
+    CASE_DETAIL=()
 
-# --- claiming ---------------------------------------------------------------
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/lease-test.XXXXXX")
 
-token_crates=$(env AMP_THREAD_ID=thread-a "$lease" claim 'crates/a/**' --note "settings work" \
-    | sed -n 's/^token=//p')
-[[ -n "$token_crates" ]] && ok "claim prints a token" || no "claim prints a token"
-
-expect_ok "a non-overlapping claim succeeds" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'docs/**'
-
-expect_fail "an overlapping file claim is refused and names the holder" "thread-a" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/src/x.rs'
-
-expect_contains "status shows the holder's note" "settings work" \
-    "$lease" status
-
-expect_fail "a claim inside someone's glob is refused" "l-" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/deep/nested/y.rs'
-
-expect_contains "claim --json emits a parseable result" '"ok":true' \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'tools/**' --json
-
-# --- releasing --------------------------------------------------------------
-
-expect_ok "release frees the paths" "$lease" release "$token_crates"
-expect_ok "the same path can be claimed after release" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/src/x.rs'
-expect_ok "release --all-mine drops that thread's leases" \
-    env AMP_THREAD_ID=thread-b "$lease" release --all-mine
-expect_ok "the dropped paths are free again" \
-    env AMP_THREAD_ID=thread-c "$lease" claim 'crates/a/src/x.rs'
-
-# --- expiry and heartbeat ---------------------------------------------------
-
-env AMP_THREAD_ID=thread-a "$lease" claim 'packages/**' --ttl 1s >/dev/null
-sleep 2
-expect_ok "an expired lease no longer blocks a claim" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'packages/p/x.rs'
-expect_not_contains "status drops the expired lease" "thread-a" "$lease" status
-
-token_vendor=$(env AMP_THREAD_ID=thread-a "$lease" claim 'vendor/**' --ttl 1s \
-    | sed -n 's/^token=//p')
-expect_ok "heartbeat extends a lease" "$lease" heartbeat "$token_vendor" --ttl 1h
-sleep 2
-expect_fail "a heartbeated lease still blocks after its original ttl" "thread-a" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'vendor/v.rs'
-
-# --- concurrent claims ------------------------------------------------------
-
-race_rounds=5
-race_wrong=0
-round=1
-while ((round <= race_rounds)); do
-    start="$tmp/race-start-$round"
-    (
-        for _ in $(seq 1 200000); do [[ -e "$start" ]] && break; done
-        AMP_THREAD_ID="racer-a-$round" "$lease" claim "race-$round/**" >/dev/null 2>&1
-        printf '%s' "$?" > "$tmp/race-a-$round"
-    ) &
-    (
-        for _ in $(seq 1 200000); do [[ -e "$start" ]] && break; done
-        AMP_THREAD_ID="racer-b-$round" "$lease" claim "race-$round/**" >/dev/null 2>&1
-        printf '%s' "$?" > "$tmp/race-b-$round"
-    ) &
-    touch "$start"
-    wait
-    codes=$(sort "$tmp/race-a-$round" "$tmp/race-b-$round" | tr '\n' ' ')
-    if [[ "$codes" != "0 1 " ]]; then
-        race_wrong=$((race_wrong + 1))
-        printf '      round %s let through exit codes: %s\n' "$round" "$codes"
+    git init -q "$tmp/repo"
+    cd "$tmp/repo" || return 1
+    git config user.email lease@example.com
+    git config user.name lease-test
+    mkdir -p script .githooks
+    cp "$repo_root/script/setup-hooks" script/
+    if [[ "$bin" == "$repo_root/script/lease" ]]; then
+        cp "$repo_root/script/lease" script/lease
+    else
+        # A compiled implementation resolves the repository from the working
+        # directory, so a shim is enough; it also keeps the path the pre-commit
+        # hook calls pointing at the implementation under test.
+        printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$bin" > script/lease
     fi
-    round=$((round + 1))
-done
-if ((race_wrong == 0)); then
-    ok "two claims for the same paths at the same instant: one wins ($race_rounds rounds)"
-else
-    no "two claims for the same paths at the same instant: one wins" \
-        "$race_wrong of $race_rounds rounds did not resolve to exactly one winner"
+    cp "$repo_root/.githooks/pre-commit" .githooks/
+    chmod +x script/lease script/setup-hooks .githooks/pre-commit
+    printf 'a\n' > a.txt
+    git add -A
+    AMP_MAIN_COMMIT=1 git commit -qm init
+    git worktree add -q "$tmp/wt" -b feat
+    lease="$tmp/wt/script/lease"
+
+    expect_contains "setup-hooks points core.hooksPath at .githooks" \
+        ".githooks" "$tmp/wt/script/setup-hooks"
+
+    # --- claiming -----------------------------------------------------------
+
+    token_crates=$(env AMP_THREAD_ID=thread-a "$lease" claim 'crates/a/**' --note "settings work" \
+        | sed -n 's/^token=//p')
+    [[ -n "$token_crates" ]] && ok "claim prints a token" || no "claim prints a token"
+
+    expect_ok "a non-overlapping claim succeeds" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'docs/**'
+
+    expect_fail "an overlapping file claim is refused and names the holder" "thread-a" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/src/x.rs'
+
+    expect_contains "status shows the holder's note" "settings work" \
+        "$lease" status
+
+    expect_fail "a claim inside someone's glob is refused" "l-" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/deep/nested/y.rs'
+
+    expect_contains "claim --json emits a parseable result" '"ok":true' \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'tools/**' --json
+
+    # --- releasing ----------------------------------------------------------
+
+    expect_ok "release frees the paths" "$lease" release "$token_crates"
+    expect_ok "the same path can be claimed after release" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'crates/a/src/x.rs'
+    expect_ok "release --all-mine drops that thread's leases" \
+        env AMP_THREAD_ID=thread-b "$lease" release --all-mine
+    expect_ok "the dropped paths are free again" \
+        env AMP_THREAD_ID=thread-c "$lease" claim 'crates/a/src/x.rs'
+
+    # --- expiry and heartbeat ------------------------------------------------
+
+    env AMP_THREAD_ID=thread-a "$lease" claim 'packages/**' --ttl 1s >/dev/null
+    sleep 2
+    expect_ok "an expired lease no longer blocks a claim" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'packages/p/x.rs'
+    expect_not_contains "status drops the expired lease" "thread-a" "$lease" status
+
+    token_vendor=$(env AMP_THREAD_ID=thread-a "$lease" claim 'vendor/**' --ttl 1s \
+        | sed -n 's/^token=//p')
+    expect_ok "heartbeat extends a lease" "$lease" heartbeat "$token_vendor" --ttl 1h
+    sleep 2
+    expect_fail "a heartbeated lease still blocks after its original ttl" "thread-a" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'vendor/v.rs'
+
+    # --- concurrent claims ---------------------------------------------------
+
+    race_rounds=5
+    race_wrong=0
+    round=1
+    while ((round <= race_rounds)); do
+        start="$tmp/race-start-$round"
+        (
+            for _ in $(seq 1 200000); do [[ -e "$start" ]] && break; done
+            AMP_THREAD_ID="racer-a-$round" "$lease" claim "race-$round/**" >/dev/null 2>&1
+            printf '%s' "$?" >"$tmp/race-a-$round"
+        ) &
+        (
+            for _ in $(seq 1 200000); do [[ -e "$start" ]] && break; done
+            AMP_THREAD_ID="racer-b-$round" "$lease" claim "race-$round/**" >/dev/null 2>&1
+            printf '%s' "$?" >"$tmp/race-b-$round"
+        ) &
+        touch "$start"
+        wait
+        codes=$(sort "$tmp/race-a-$round" "$tmp/race-b-$round" | tr '\n' ' ')
+        if [[ "$codes" != "0 1 " ]]; then
+            race_wrong=$((race_wrong + 1))
+            printf '      round %s let through exit codes: %s\n' "$round" "$codes"
+        fi
+        round=$((round + 1))
+    done
+    if ((race_wrong == 0)); then
+        ok "two claims for the same paths at the same instant: one wins ($race_rounds rounds)"
+    else
+        no "two claims for the same paths at the same instant: one wins" \
+            "$race_wrong of $race_rounds rounds did not resolve to exactly one winner"
+    fi
+
+    # --- build lock ----------------------------------------------------------
+
+    expect_ok "the build lock can be taken" "$lease" build claim
+    expect_fail "a second build claim is refused and says how long it has been held" \
+        "the build lock is already held" "$lease" build claim
+    expect_contains "the build lock does not block path claims" "Claimed" \
+        env AMP_THREAD_ID=thread-b "$lease" claim 'elsewhere/**'
+    expect_ok "the build lock is released" "$lease" build release
+    expect_ok "the build lock can be taken again" "$lease" build claim
+    "$lease" build release >/dev/null
+
+    # --- pre-commit ----------------------------------------------------------
+
+    printf 'main-checkout edit\n' >>a.txt
+    git add a.txt
+    expect_fail "a commit in the shared main checkout is refused" "shared main checkout" \
+        git commit -qm dirty
+    expect_ok "AMP_MAIN_COMMIT=1 allows a commit there" \
+        env AMP_MAIN_COMMIT=1 git commit -qm merge
+
+    cd "$tmp/wt" || return 1
+    mkdir -p src
+    printf 'work\n' >src/x.txt
+    token_src=$(env AMP_THREAD_ID=thread-x "$lease" claim 'src/**' --note "still editing" \
+        | sed -n 's/^token=//p')
+    git add src/x.txt
+    expect_fail "a commit touching another thread's lease is refused" \
+        "another thread holds a lease" env AMP_THREAD_ID=thread-me git commit -qm leased
+    expect_fail "the refusal points at script/lease status" "script/lease status" \
+        env AMP_THREAD_ID=thread-me git commit -qm leased
+    "$lease" release "$token_src" >/dev/null
+    expect_ok "the commit goes through after the lease is released" \
+        env AMP_THREAD_ID=thread-me git commit -qm leased
+
+    cd "$repo_root" || return 1
+    rm -rf "$tmp"
+    tmp=""
+}
+
+# --- drivers ----------------------------------------------------------------
+
+label_for() {
+    basename "$1"
+}
+
+if (( ${#second_bin} > 0 )); then
+    live=false
+
+    run_suite "$primary_bin"
+    A_DESC=("${CASE_DESC[@]}")
+    A_STATE=("${CASE_STATE[@]}")
+    A_DETAIL=("${CASE_DETAIL[@]}")
+
+    run_suite "$second_bin"
+    B_DESC=("${CASE_DESC[@]}")
+    B_STATE=("${CASE_STATE[@]}")
+    B_DETAIL=("${CASE_DETAIL[@]}")
+
+    a_label=$(label_for "$primary_bin")
+    b_label=$(label_for "$second_bin")
+
+    printf '%s\n' "--------------------------------------------------------------------------------"
+    printf '%-4s %-56s %-8s %-8s\n' "#" "case" "$a_label" "$b_label"
+    printf '%s\n' "--------------------------------------------------------------------------------"
+
+    cases=${#A_DESC[@]}
+    (( ${#B_DESC[@]} > cases )) && cases=${#B_DESC[@]}
+
+    mismatches=0
+    for ((i = 0; i < cases; i++)); do
+        ad=${A_DESC[$i]:-<missing>}
+        bd=${B_DESC[$i]:-<missing>}
+        as=${A_STATE[$i]:-MISSING}
+        bs=${B_STATE[$i]:-MISSING}
+        printf '%-4d %-56s %-8s %-8s\n' "$((i + 1))" "$ad" "$as" "$bs"
+        [[ "$as" == "$bs" ]] || mismatches=$((mismatches + 1))
+        if [[ "$as" == FAIL ]]; then printf '       %s: %s\n' "$a_label" "${A_DETAIL[$i]}"; fi
+        if [[ "$bs" == FAIL ]]; then printf '       %s: %s\n' "$b_label" "${B_DETAIL[$i]}"; fi
+    done
+
+    a_pass=0
+    a_fail=0
+    for s in "${A_STATE[@]}"; do
+        if [[ "$s" == PASS ]]; then a_pass=$((a_pass + 1)); else a_fail=$((a_fail + 1)); fi
+    done
+    b_pass=0
+    b_fail=0
+    for s in "${B_STATE[@]}"; do
+        if [[ "$s" == PASS ]]; then b_pass=$((b_pass + 1)); else b_fail=$((b_fail + 1)); fi
+    done
+
+    printf '%s\n' "--------------------------------------------------------------------------------"
+    printf '%-4s %-56s %-8s %-8s\n' "" "total" "$a_pass/$cases" "$b_pass/$cases"
+    printf '\n%s: %d passed, %d failed\n' "$a_label" "$a_pass" "$a_fail"
+    printf '%s: %d passed, %d failed\n' "$b_label" "$b_pass" "$b_fail"
+    if ((mismatches > 0)); then
+        printf '%d case(s) differ between the two implementations\n' "$mismatches"
+    fi
+    ((a_fail == 0 && b_fail == 0 && mismatches == 0))
+    exit $?
 fi
 
-# --- build lock -------------------------------------------------------------
+live=true
+run_suite "$primary_bin"
+live=false
 
-expect_ok "the build lock can be taken" "$lease" build claim
-expect_fail "a second build claim is refused and says how long it has been held" \
-    "the build lock is already held" "$lease" build claim
-expect_contains "the build lock does not block path claims" "Claimed" \
-    env AMP_THREAD_ID=thread-b "$lease" claim 'elsewhere/**'
-expect_ok "the build lock is released" "$lease" build release
-expect_ok "the build lock can be taken again" "$lease" build claim
-"$lease" build release >/dev/null
-
-# --- pre-commit -------------------------------------------------------------
-
-printf 'main-checkout edit\n' >> a.txt
-git add a.txt
-expect_fail "a commit in the shared main checkout is refused" "shared main checkout" \
-    git commit -qm dirty
-expect_ok "AMP_MAIN_COMMIT=1 allows a commit there" \
-    env AMP_MAIN_COMMIT=1 git commit -qm merge
-
-cd "$tmp/wt"
-mkdir -p src
-printf 'work\n' > src/x.txt
-token_src=$(env AMP_THREAD_ID=thread-x "$lease" claim 'src/**' --note "still editing" \
-    | sed -n 's/^token=//p')
-git add src/x.txt
-expect_fail "a commit touching another thread's lease is refused" \
-    "another thread holds a lease" env AMP_THREAD_ID=thread-me git commit -qm leased
-expect_fail "the refusal points at script/lease status" "script/lease status" \
-    env AMP_THREAD_ID=thread-me git commit -qm leased
-"$lease" release "$token_src" >/dev/null
-expect_ok "the commit goes through after the lease is released" \
-    env AMP_THREAD_ID=thread-me git commit -qm leased
-
-# --- summary ----------------------------------------------------------------
+passed=0
+failed=0
+for s in "${CASE_STATE[@]}"; do
+    if [[ "$s" == PASS ]]; then passed=$((passed + 1)); else failed=$((failed + 1)); fi
+done
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))
