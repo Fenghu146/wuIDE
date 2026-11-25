@@ -101,9 +101,9 @@ use workspace::{
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use wu_actions::{
-    About, AddDiagnosticsToChat, AddSelectionToChat, AskAgentAboutSelection, DebugCurrentFile,
-    FixDiagnosticsWithAgent, OpenBrowser, OpenDocs, OpenProjectTasks, OpenServerSettings,
-    OpenSettingsFile, OpenWuUrl, Quit, RunCurrentFile, StopCurrentFile,
+    About, AddDiagnosticsToChat, AddSelectionToChat, AskAgentAboutSelection, CompileCurrentFile,
+    DebugCurrentFile, FixDiagnosticsWithAgent, OpenBrowser, OpenDocs, OpenProjectTasks,
+    OpenServerSettings, OpenSettingsFile, OpenWuUrl, Quit, RunCurrentFile, StopCurrentFile,
 };
 
 /// Where the fork keeps its documentation: the repository's `docs` directory.
@@ -696,6 +696,15 @@ fn register_actions(
                 if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
                     editor.update(cx, |editor, cx| {
                         editor.run_current_file(&RunCurrentFile, window, cx)
+                    });
+                }
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace, _: &CompileCurrentFile, window, cx| {
+                if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
+                    editor.update(cx, |editor, cx| {
+                        editor.compile_current_file(&CompileCurrentFile, window, cx)
                     });
                 }
             },

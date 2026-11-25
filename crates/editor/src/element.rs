@@ -674,6 +674,7 @@ impl EditorElement {
         register_action(editor, window, Editor::spawn_nearest_task);
         register_action(editor, window, Editor::run_current_file);
         register_action(editor, window, Editor::run_current_file_with_command);
+        register_action(editor, window, Editor::compile_current_file);
         register_action(editor, window, Editor::stop_current_file);
         register_action(editor, window, Editor::debug_current_file);
         register_action(editor, window, Editor::open_selections_in_multibuffer);

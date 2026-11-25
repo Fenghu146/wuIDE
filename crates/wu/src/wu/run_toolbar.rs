@@ -15,7 +15,7 @@ use ui::{ButtonStyle, IconButton, IconName, IconSize, Tooltip, prelude::*};
 use workspace::{
     ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView, Workspace, item::ItemHandle,
 };
-use wu_actions::{DebugCurrentFile, RunCurrentFile, StopCurrentFile};
+use wu_actions::{CompileCurrentFile, DebugCurrentFile, RunCurrentFile, StopCurrentFile};
 pub struct RunToolbar {
     active_item: Option<Box<dyn ItemHandle>>,
     /// Redraws the toolbar when the active editor's run state changes, so Stop
@@ -44,19 +44,22 @@ impl Render for RunToolbar {
             return div().into_any_element();
         };
 
-        let (can_run, can_debug, is_running, debug_blocked) = editor.update(cx, |editor, cx| {
-            (
-                editor.can_run_current_file(cx),
-                editor.can_debug_current_file(cx),
-                editor.code_run_is_active(),
-                editor.code_debug_unavailable_reason(cx),
-            )
-        });
+        let (can_run, can_compile, can_debug, is_running, debug_blocked) =
+            editor.update(cx, |editor, cx| {
+                (
+                    editor.can_run_current_file(cx),
+                    editor.can_compile_current_file(cx),
+                    editor.can_debug_current_file(cx),
+                    editor.code_run_is_active(),
+                    editor.code_debug_unavailable_reason(cx),
+                )
+            });
         let focus_handle = editor.read(cx).focus_handle(cx);
 
         // A right-aligned toolbar lays its children out in reverse, so the
-        // debug button is listed first to end up rightmost.
-        let mut controls = Vec::with_capacity(3);
+        // debug button is listed first to end up rightmost, and compile comes
+        // after run to sit on its left.
+        let mut controls = Vec::with_capacity(4);
 
         if can_debug {
             let reason = debug_blocked;
@@ -126,10 +129,40 @@ impl Render for RunToolbar {
                 IconButton::new("run-toolbar-run", IconName::PlayFilled)
                     .icon_size(IconSize::Small)
                     .style(ButtonStyle::Subtle)
+                    .tooltip({
+                        let focus_handle = focus_handle.clone();
+                        move |_window, cx| {
+                            Tooltip::for_action_in(
+                                t!("Run Current File"),
+                                &RunCurrentFile,
+                                &focus_handle,
+                                cx,
+                            )
+                        }
+                    })
+                    .on_click({
+                        let editor = editor.downgrade();
+                        move |_, window, cx| {
+                            editor
+                                .update(cx, |editor, cx| {
+                                    editor.run_current_file(&RunCurrentFile, window, cx)
+                                })
+                                .ok();
+                        }
+                    })
+                    .into_any_element(),
+            );
+        }
+
+        if can_compile {
+            controls.push(
+                IconButton::new("run-toolbar-compile", IconName::Build)
+                    .icon_size(IconSize::Small)
+                    .style(ButtonStyle::Subtle)
                     .tooltip(move |_window, cx| {
                         Tooltip::for_action_in(
-                            t!("Run Current File"),
-                            &RunCurrentFile,
+                            t!("Compile Current File"),
+                            &CompileCurrentFile,
                             &focus_handle,
                             cx,
                         )
@@ -139,7 +172,7 @@ impl Render for RunToolbar {
                         move |_, window, cx| {
                             editor
                                 .update(cx, |editor, cx| {
-                                    editor.run_current_file(&RunCurrentFile, window, cx)
+                                    editor.compile_current_file(&CompileCurrentFile, window, cx)
                                 })
                                 .ok();
                         }

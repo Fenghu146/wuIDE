@@ -17,7 +17,7 @@ use std::{
 
 use code_runner::{
     CodeRunnerSettings, CommandSource, DebugPlan, Program, RunError, RunPlan, RunRequest, RunStep,
-    scan_directory,
+    StepKind, scan_directory,
 };
 use gpui::{
     App, AsyncWindowContext, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
@@ -27,7 +27,10 @@ use i18n::t;
 use menu::{Cancel, Confirm};
 use project::{TaskSourceKind, WorktreeId};
 use settings::{Settings, SettingsLocation};
-use task::{DebugScenario, SaveStrategy, SharedTaskContext, Shell, TaskContext, TaskTemplate};
+use task::{
+    DebugScenario, HideStrategy, RevealStrategy, SaveStrategy, SharedTaskContext, Shell, TaskContext,
+    TaskTemplate,
+};
 use ui::{AlertModal, Button, Color, Icon, IconName, Label, LabelSize, prelude::*};
 use ui_input::InputField;
 use util::{ResultExt as _, rel_path::RelPath};
@@ -35,7 +38,9 @@ use workspace::{
     Item as _, ModalView, Toast, item::SaveOptions, notifications::NotificationId,
     tasks::ScheduledTaskResult,
 };
-use wu_actions::{DebugCurrentFile, RunCurrentFile, RunCurrentFileWithCommand, StopCurrentFile};
+use wu_actions::{
+    CompileCurrentFile, DebugCurrentFile, RunCurrentFile, RunCurrentFileWithCommand, StopCurrentFile,
+};
 
 use crate::Editor;
 
@@ -80,6 +85,7 @@ pub struct ActiveCodeRun {
 /// What the last step of a plan is for.
 enum PlanGoal {
     Run,
+    Compile,
     Debug {
         adapter: SharedString,
         label: SharedString,
@@ -87,6 +93,16 @@ enum PlanGoal {
         buffer: Option<Entity<language::Buffer>>,
         program: Program,
     },
+}
+
+/// Whether a step's terminal shows itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StepPresentation {
+    /// Opened and focused, the way a run's program is.
+    Visible,
+    /// The build of a run: it runs out of the way, and only a failure brings
+    /// its terminal into view.
+    Background,
 }
 
 /// The plan a step chain belongs to, so the chain can continue after each
@@ -99,9 +115,10 @@ struct PlanInFlight {
 }
 
 /// What a run started from the toolbar, the menu or a keybinding is for.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum CodePlanGoal {
     Run,
+    Compile,
     Debug,
 }
 
@@ -114,6 +131,16 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.start_code_plan(CodePlanGoal::Run, window, cx);
+    }
+
+    /// Builds the file in this editor without starting it.
+    pub fn compile_current_file(
+        &mut self,
+        _: &CompileCurrentFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_code_plan(CodePlanGoal::Compile, window, cx);
     }
 
     /// Builds with debug symbols and starts a debug session.
@@ -153,7 +180,10 @@ impl Editor {
     }
 
     fn start_code_plan(&mut self, goal: CodePlanGoal, window: &mut Window, cx: &mut Context<Self>) {
-        let debug = matches!(goal, CodePlanGoal::Debug);
+        if !self.code_runner_enabled(cx) {
+            return;
+        }
+        let debug = goal == CodePlanGoal::Debug;
         let Some(target) = self.code_run_target(cx) else {
             self.show_code_runner_message(
                 t!("This file is not in a project, so there is nothing to run. Open the folder that holds it."),
@@ -179,14 +209,14 @@ impl Editor {
         // A plan edited in the run dialog sticks to the file until it is
         // edited again; everything else is resolved after saving, so a `main`
         // that was just typed is part of the scan.
-        let reused = (!debug)
+        let reused = (goal == CodePlanGoal::Run)
             .then(|| self.last_run_for(&target))
             .flatten()
             .filter(|plan| plan.source == CommandSource::Edited);
 
         let worktree_id = target.worktree_id;
         self.save_before_running(window, cx, move |editor, window, cx| {
-            let (plan, debug_plan) = match resolve_for(editor, &target, debug, reused, cx) {
+            let (plan, debug_plan) = match resolve_for(editor, &target, goal, reused, cx) {
                 Ok(plan) => plan,
                 Err(message) => {
                     editor.show_code_runner_message(message, cx);
@@ -206,9 +236,14 @@ impl Editor {
                     buffer: editor.buffer().read(cx).as_singleton(),
                     program,
                 },
-                None => PlanGoal::Run,
+                None if debug => PlanGoal::Run,
+                None => PlanGoal::Compile,
             };
-            editor.last_run = Some((target.file.clone(), plan.clone()));
+            // Compiling keeps the run dialog's plan for running, so it is not
+            // remembered as the plan this file runs.
+            if !matches!(goal, PlanGoal::Compile) {
+                editor.last_run = Some((target.file.clone(), plan.clone()));
+            }
             editor.start_plan(plan, worktree_id, goal, window, cx);
         });
     }
@@ -251,10 +286,23 @@ impl Editor {
         };
         in_flight.next_step += 1;
 
+        // A run builds out of sight and only shows the program: the build's
+        // terminal would otherwise sit next to it saying nothing the user asked
+        // for. Compiling and debugging are about the build, so they show it.
+        let presentation = match &in_flight.goal {
+            PlanGoal::Run if step.kind != StepKind::Run => StepPresentation::Background,
+            PlanGoal::Run | PlanGoal::Compile | PlanGoal::Debug { .. } => StepPresentation::Visible,
+        };
+        let label = step.label.clone();
+
         let editor = cx.entity().downgrade();
         self.run_step(
             step,
+            presentation,
             move |result, cx| {
+                let failed_out_of_sight =
+                    presentation == StepPresentation::Background
+                        && result != ScheduledTaskResult::Success;
                 editor
                     .update_in(cx, |editor, window, cx| {
                         if result == ScheduledTaskResult::Success {
@@ -262,6 +310,9 @@ impl Editor {
                         } else {
                             editor.code_run = None;
                             cx.notify();
+                            if failed_out_of_sight {
+                                editor.reveal_step_terminal(&label, window, cx);
+                            }
                         }
                     })
                     .ok();
@@ -269,6 +320,20 @@ impl Editor {
             window,
             cx,
         );
+    }
+
+    /// Brings the terminal of a step that failed while running out of sight
+    /// back into view, because otherwise the run stops with no reason on
+    /// screen.
+    fn reveal_step_terminal(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((workspace, _)) = self.workspace.clone() else {
+            return;
+        };
+        workspace
+            .update(cx, |workspace, cx| {
+                workspace.reveal_task_terminal(label, window, cx);
+            })
+            .ok();
     }
 
     fn finish_plan(
@@ -300,6 +365,21 @@ impl Editor {
 
         self.code_run = None;
         cx.notify();
+
+        // A compile that reached this point succeeded: the terminal it built
+        // in keeps the output, and a toast says it is done.
+        if matches!(in_flight.goal, PlanGoal::Compile) {
+            let label = in_flight
+                .plan
+                .steps
+                .iter()
+                .rev()
+                .find(|step| step.kind != StepKind::Run)
+                .map(|step| step.label.clone())
+                .unwrap_or_else(|| in_flight.plan.label());
+            self.show_code_runner_message(t!("✓ {label}", label = label), cx);
+            return;
+        }
 
         let PlanGoal::Debug {
             adapter,
@@ -406,6 +486,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.code_runner_enabled(cx) {
+            return;
+        }
         let Some(target) = self.code_run_target(cx) else {
             self.show_code_runner_message(
                 t!("This file is not in a project, so there is nothing to run. Open the folder that holds it."),
@@ -444,25 +527,51 @@ impl Editor {
     /// Whether this file type has a run command, which decides whether the
     /// run button shows.
     pub fn can_run_current_file(&self, cx: &App) -> bool {
-        self.code_run_target(cx)
-            .and_then(|target| code_runner::language_id_for_path(&target.file))
-            .is_some_and(|language| {
-                self.settings_for_active_file(cx)
-                    .run_case(&language)
-                    .is_some()
-            })
+        self.code_runner_enabled(cx)
+            && self
+                .code_run_target(cx)
+                .and_then(|target| code_runner::language_id_for_path(&target.file))
+                .is_some_and(|language| {
+                    self.settings_for_active_file(cx)
+                        .run_case(&language)
+                        .is_some()
+                })
+    }
+
+    /// Whether this file type is built in a step of its own, which decides
+    /// whether the compile button shows. A configured command that both builds
+    /// and runs is one step, so there is nothing to compile separately.
+    pub fn can_compile_current_file(&self, cx: &App) -> bool {
+        self.code_runner_enabled(cx)
+            && self
+                .code_run_target(cx)
+                .and_then(|target| code_runner::language_id_for_path(&target.file))
+                .is_some_and(|language| {
+                    matches!(
+                        self.settings_for_active_file(cx).run_case(&language),
+                        Some(code_runner::RunCase::CppFamily { .. })
+                    )
+                })
     }
 
     /// Whether this file type has a debug plan, which decides whether the
     /// debug button shows.
     pub fn can_debug_current_file(&self, cx: &App) -> bool {
-        self.code_run_target(cx)
-            .and_then(|target| code_runner::language_id_for_path(&target.file))
-            .is_some_and(|language| {
-                self.settings_for_active_file(cx)
-                    .debug_entry(&language)
-                    .is_some()
-            })
+        self.code_runner_enabled(cx)
+            && self
+                .code_run_target(cx)
+                .and_then(|target| code_runner::language_id_for_path(&target.file))
+                .is_some_and(|language| {
+                    self.settings_for_active_file(cx)
+                        .debug_entry(&language)
+                        .is_some()
+                })
+    }
+
+    /// Whether the code runner is turned on for this file, which is what hides
+    /// its buttons and ignores its commands.
+    fn code_runner_enabled(&self, cx: &App) -> bool {
+        self.settings_for_active_file(cx).is_enabled()
     }
 
     fn code_run_target(&self, cx: &App) -> Option<CodeRunTarget> {
@@ -551,6 +660,7 @@ impl Editor {
     fn run_step(
         &mut self,
         step: RunStep,
+        presentation: StepPresentation,
         on_complete: impl FnOnce(ScheduledTaskResult, &mut AsyncWindowContext) + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -570,6 +680,13 @@ impl Editor {
             cwd: Some(cwd.clone()),
             ..TaskContext::default()
         };
+        // A background step neither opens the panel nor takes the focus, and a
+        // build that succeeds leaves no tab behind; a failure keeps its tab so
+        // the output is still there when it is brought into view.
+        let (reveal, hide) = match presentation {
+            StepPresentation::Visible => (RevealStrategy::Always, HideStrategy::Never),
+            StepPresentation::Background => (RevealStrategy::Never, HideStrategy::OnSuccess),
+        };
         let template = TaskTemplate {
             label: step.label,
             command: step.command_line,
@@ -577,6 +694,8 @@ impl Editor {
             save: SaveStrategy::None,
             use_new_terminal: false,
             allow_concurrent_runs: false,
+            reveal,
+            hide,
             show_summary: true,
             show_command: true,
             shell: Shell::System,
@@ -635,11 +754,12 @@ impl Editor {
 struct CodeRunNotification;
 
 /// Resolves what to run for a target: the plan plus, when debugging, the
-/// session that follows its build.
+/// session that follows its build. Compiling keeps the build steps of the run
+/// plan and leaves the program out.
 fn resolve_for(
     editor: &Editor,
     target: &CodeRunTarget,
-    debug: bool,
+    goal: CodePlanGoal,
     reused: Option<RunPlan>,
     cx: &App,
 ) -> Result<(RunPlan, Option<DebugPlan>), SharedString> {
@@ -651,14 +771,22 @@ fn resolve_for(
     };
     let settings = editor.code_runner_settings(target, cx);
     let request = target.request(&language);
-    if debug {
-        code_runner::resolve_debug(&request, settings)
+    match goal {
+        CodePlanGoal::Debug => code_runner::resolve_debug(&request, settings)
             .map(|plan| (plan.build.clone(), Some(plan)))
-            .map_err(|error| run_error_message(&error))
-    } else {
-        code_runner::resolve(&request, settings)
+            .map_err(|error| run_error_message(&error)),
+        CodePlanGoal::Compile => code_runner::resolve(&request, settings)
+            .map(|mut plan| {
+                // Compiling stops after the build steps: a CMake binary is only
+                // looked for when the program is about to start.
+                plan.steps.retain(|step| step.kind != StepKind::Run);
+                plan.pending_binary = None;
+                (plan, None)
+            })
+            .map_err(|error| run_error_message(&error)),
+        CodePlanGoal::Run => code_runner::resolve(&request, settings)
             .map(|plan| (plan, None))
-            .map_err(|error| run_error_message(&error))
+            .map_err(|error| run_error_message(&error)),
     }
 }
 

@@ -83,6 +83,8 @@ actions!(
         FixDiagnosticsWithAgent,
         /// Runs the file in the editor with the command configured for its language.
         RunCurrentFile,
+        /// Builds the file in the editor without running it.
+        CompileCurrentFile,
         /// Opens the run dialog to edit the command before running the file.
         RunCurrentFileWithCommand,
         /// Stops the program the code runner started.

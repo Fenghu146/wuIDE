@@ -295,6 +295,7 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
             disabled: false,
             window_menu: false,
             items: vec![
+                MenuItem::action(t!("Compile Current File"), wu_actions::CompileCurrentFile),
                 MenuItem::action(t!("Run Current File"), wu_actions::RunCurrentFile),
                 MenuItem::action(t!("Debug Current File"), wu_actions::DebugCurrentFile),
                 MenuItem::action(t!("Stop Running Code"), wu_actions::StopCurrentFile),

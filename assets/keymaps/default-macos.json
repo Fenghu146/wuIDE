@@ -554,6 +554,8 @@
       // The Code Runner extension's shortcuts, kept as they are everywhere.
       "ctrl-alt-n": "wu::RunCurrentFile",
       "ctrl-alt-m": "wu::StopCurrentFile",
+      // Compiles the file without running it, on the key VS Code's build uses.
+      "cmd-shift-b": "wu::CompileCurrentFile",
     },
   },
   {

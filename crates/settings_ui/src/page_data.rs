@@ -61,6 +61,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         window_and_layout_page(),
         panels_page(),
         debugger_page(),
+        code_runner_page(),
         terminal_page(),
         version_control_page(),
         agent_chat_page(),
@@ -6316,6 +6317,36 @@ fn debugger_page() -> SettingsPage {
     SettingsPage {
         title: n!("Debugger"),
         items: concat_sections![general_section()],
+    }
+}
+
+fn code_runner_page() -> SettingsPage {
+    fn runner_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(n!("Run and Debug")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Enable Code Runner"),
+                description: n!(
+                    "Show the run, debug and compile buttons and answer their key bindings. Turned off, the run and debug entry points are hidden and their commands do nothing, while the configured commands are kept."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("code_runner.enabled"),
+                    pick: |settings_content| {
+                        settings_content.code_runner.as_ref()?.enabled.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.code_runner.get_or_insert_default().enabled = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
+    SettingsPage {
+        title: n!("Code Runner"),
+        items: concat_sections![runner_section()],
     }
 }
 

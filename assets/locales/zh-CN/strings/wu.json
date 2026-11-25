@@ -17,6 +17,7 @@
   "Column Git Blame": "Git 逐行追溯栏",
   "Command Palette...": "命令面板…",
   "Commit": "提交",
+  "Compile Current File": "编译当前文件",
   "Continue": "继续",
   "Copy": "复制",
   "Copy and Trim": "复制并去除缩进",
@@ -185,5 +186,6 @@
   "ide:// links will now open in {app_name}.": "ide:// 链接现在会在 {app_name} 中打开。",
   "inotify_init returned {error}\n\nThis may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux": "inotify_init 返回了 {error}\n\n这可能是由于系统对 inotify 实例数量的限制。排查方法请参阅：https://zed.dev/docs/linux",
   "navigation|Back": "后退",
+  "✓ {label}": "✓ 编译完成：{label}",
   "{keystroke} to open in a split": "{keystroke} 可在拆分窗格中打开"
 }

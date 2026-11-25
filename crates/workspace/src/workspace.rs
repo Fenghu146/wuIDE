@@ -337,6 +337,13 @@ pub trait TerminalProvider {
     fn kill_task(&self, _label: &str, _workspace: &Workspace, _cx: &mut App) -> bool {
         false
     }
+
+    /// Brings the terminal of the task with this label back into view and
+    /// focuses it, for output the user has to see. Providers that cannot show
+    /// a task's terminal return `false`.
+    fn reveal_task(&self, _label: &str, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
 }
 
 pub trait DebuggerProvider {
@@ -3164,6 +3171,14 @@ impl Workspace {
         self.terminal_provider
             .as_ref()
             .is_some_and(|provider| provider.kill_task(label, self, cx))
+    }
+
+    /// Brings the terminal of the task with this label into view, such as the
+    /// build that failed before a run gave up, and says whether there was one.
+    pub fn reveal_task_terminal(&self, label: &str, window: &mut Window, cx: &mut App) -> bool {
+        self.terminal_provider
+            .as_ref()
+            .is_some_and(|provider| provider.reveal_task(label, window, cx))
     }
 
     pub fn set_debugger_provider(&mut self, provider: impl DebuggerProvider + 'static) {

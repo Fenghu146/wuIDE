@@ -1820,6 +1820,22 @@ impl workspace::TerminalProvider for TerminalProvider {
         })
     }
 
+    fn reveal_task(&self, label: &str, window: &mut Window, cx: &mut App) -> bool {
+        let terminal_panel = self.0.clone();
+        let Some((item_index, pane, _)) = terminal_panel.update(cx, |terminal_panel, cx| {
+            terminal_panel.terminals_for_task(label, cx).pop()
+        }) else {
+            return false;
+        };
+        terminal_panel.update(cx, |terminal_panel, cx| {
+            terminal_panel.activate_terminal_view(&pane, item_index, true, window, cx)
+        });
+        let workspace = terminal_panel.read(cx).workspace.clone();
+        workspace
+            .update(cx, |workspace, cx| workspace.focus_panel::<TerminalPanel>(window, cx))
+            .is_ok_and(|panel| panel.is_some())
+    }
+
     fn spawn(
         &self,
         task: SpawnInTerminal,

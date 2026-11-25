@@ -760,6 +760,7 @@
   "Whether parameter hints should be shown.\n\nDefault: true": "是否显示参数提示。\n\n默认值：true",
   "Whether sticky scroll is enabled.\n\nDefault: false": "是否启用粘性滚动。\n\n默认值：false",
   "Whether the breakpoints should be reused across WuIDE sessions.\n\nDefault: true": "是否在多次 WuIDE 会话之间保留断点。\n\n默认值：true",
+  "Whether running, debugging and compiling the file in the editor are\navailable: the buttons on the editor tab, the Run menu entries and their\nkey bindings.\n\nTurned off, the run and debug entry points are hidden and their commands\ndo nothing, while `executor_map` and `debug_map` are kept as they are.\n\nDefault: true": "是否在编辑器中运行、调试和编译文件：编辑器标签页上的按钮、「运行」菜单项及其快捷键。\n\n关闭后运行与调试入口隐藏、命令不再响应，`executor_map` 和 `debug_map` 配置原样保留。\n\n默认值：true",
   "Whether the cursor blinks in the editor.\n\nDefault: true": "编辑器中的光标是否闪烁。\n\n默认值：true",
   "Whether the editor search results will loop\n\nDefault: true": "编辑器搜索结果是否循环\n\n默认值：true",
   "Whether the editor will scroll beyond the last line.\n\nDefault: one_page": "编辑器是否可以滚动到最后一行之后。\n\n默认值：one_page",

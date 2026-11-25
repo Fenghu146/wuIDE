@@ -19,6 +19,10 @@
     "description": "取消进行中的 ETW 跟踪会话，不保存。",
     "name": "取消 ETW 跟踪"
   },
+  "wu::CompileCurrentFile": {
+    "description": "用 code_runner 的计划编译编辑器里的文件，不运行。",
+    "name": "编译当前文件"
+  },
   "wu::CopySystemSpecsIntoClipboard": {
     "description": "将系统信息复制到剪贴板，用于提交问题报告。",
     "name": "复制系统信息到剪贴板"
