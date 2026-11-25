@@ -4,6 +4,18 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+## 1.5.0 - 2026-11-26
+
+- `script/lease` is a Go program now: claiming is 8–9× faster and no longer needs bash, which on Windows meant WSL and a path it could not parse. It also fixes a silent widening — `claim crates/diagnostics` without a trailing slash used to claim all of `crates/`, because the path was never stat'ed.
+- The pre-commit hook's refusal message quoted `git merge`, and an unquoted heredoc ran it: every refused commit executed `git merge` on a stale `main`. The text is escaped, and `script/hook-test` fails when a hook runs a git subcommand it does not need.
+- The repository-map MCP server is type-checked (`@ts-check` + JSDoc, `strict`). A renamed snapshot field now fails the pre-merge check instead of rendering a page that silently drops it; `script/check-mcp-types` only warns, and prints `skipped: tsc unavailable` when the compiler cannot be fetched.
+- License generation runs under a watchdog (1200s, `LICENSES_TIMEOUT_SECONDS` overrides) and the crates are fetched as their own visible step. 1.4.7's macOS aarch64 job sat on `cargo about` for five hours until the job timed out; it now fails in twenty minutes, naming the step.
+- A What's New page shows release notes inside the app in the interface language. Chinese notes live in `CHANGELOG.zh.md`: a version with no Chinese section falls back to English and says so, and a test keeps both files from drifting on version, date and entry count.
+- Chinese error messages from `cl.exe` are written as UTF-8, so the terminal shows 语法错误 instead of mojibake. The console output encoding is set once, in the same prefix used by build, run and debug.
+- Run, build and debug labels, the terminal task summary, agent turn errors and relative timestamps now follow the interface language — 3,768 Chinese strings in total. English output is unchanged.
+- A diagnostic can be translated in place: click 译成中文, the message turns Chinese where it stands, and 原文 / 译文 switches back. It reuses the one-shot model channel behind commit messages, so no chat session is opened. Off by default (`diagnostics.translate_with_model`); a failed translation shows one line where the message was.
+- Compile is its own button (`ctrl-shift-b`, `cmd-shift-b` on macOS), and Run builds out of sight: a failed build brings its terminal back, a successful one keeps the build terminal and opens the program. `code_runner.enabled` hides the run, debug and compile entries while keeping the configured maps.
+- The release workflow builds the remote server in its own matrix job, installs cargo-about once, and folds the editor and CLI into one cargo invocation. Linux binaries get ICF and an rpath; macOS hides Rust exports. The release gate covers every job that uploads an asset, `workflow_dispatch` can run the pipeline without publishing, and a stale numbered `/Volumes/IDE 1` mount is detached before the DMG is built.
 
 ## 1.4.7 - 2026-11-24
 

@@ -1,6 +1,19 @@
 # 更新说明
 
-这里只收录最近三个版本的中文说明，供应用内的「更新说明」页面使用；GitHub 上的发行说明仍然是英文。某个版本没有中文说明时，应用内会显示英文原文，并在标题下注明。
+这里只收录最近四个版本的中文说明，供应用内的「更新说明」页面使用；GitHub 上的发行说明仍然是英文。某个版本没有中文说明时，应用内会显示英文原文，并在标题下注明。
+
+## 1.5.0 - 2026-11-26
+
+- `script/lease` 改成 Go 程序：claim 快 8–9 倍，也不再依赖 bash（在 Windows 上那意味着 WSL 和一个它解析不了的路径）。同时修掉一处静默放宽：`claim crates/diagnostics`（没有结尾斜杠）以前会占住整个 `crates/`，因为路径从未被 stat 过。
+- pre-commit 的拒绝提示里引用了 `git merge`，而未加引号的 heredoc 把它执行了：每次被拒绝的提交都会在一个过期的 `main` 上跑一次 `git merge`。文本已转义，`script/hook-test` 会在钩子跑了不需要的 git 子命令时失败。
+- 仓库地图的 MCP server 现在有类型检查（`@ts-check` + JSDoc，`strict`）。快照字段改名会让合并前检查失败，而不是渲染出一份悄悄少了那个字段的页面；`script/check-mcp-types` 只提示，编译器拿不到时打印 `skipped: tsc unavailable`。
+- 许可证生成放进看门狗（1200 秒，可用 `LICENSES_TIMEOUT_SECONDS` 覆盖），crate 取件也变成单独一步、有进度。1.4.7 的 macOS aarch64 任务在 `cargo about` 上卡了五小时直到任务超时；现在二十分钟内失败，而且报错会点名是哪一步。
+- 应用内有 What's New 页，按界面语言显示发版说明。中文说明放在 `CHANGELOG.zh.md`：某个版本没有中文节就回退英文并注明，另有测试防止两份文件在版本、日期和条目数上漂移。
+- `cl.exe` 的中文报错按 UTF-8 写出，终端里显示的是「语法错误」而不是乱码。控制台输出编码只设一次，构建、运行和调试共用同一个前缀。
+- 运行、构建、调试的标签，终端任务小结，agent 轮次报错和相对时间现在跟随界面语言，中文词条共 3,768 条。英文输出不变。
+- 诊断可以就地翻译：点「译成中文」，消息在原位变成中文，末尾可在「原文 / 译文」之间切换。它复用生成 commit message 的一次性模型通道，不会开一个对话。默认关闭（`diagnostics.translate_with_model`）；翻译失败时在同一位置显示一行说明。
+- Compile 独立成按钮（`ctrl-shift-b`，macOS 上是 `cmd-shift-b`），Run 在后台构建：构建失败会把终端提回前台，成功则留下构建终端并运行程序。`code_runner.enabled` 关掉后隐藏运行、调试和编译入口，但保留已配置的映射。
+- 发布流水线把 remote server 拆成独立矩阵任务，cargo-about 只装一次，编辑器与 CLI 合成一次 cargo 调用。Linux 二进制启用 ICF 并写入 rpath；macOS 隐藏 Rust 导出符号。发布门禁覆盖每个上传资产的任务，`workflow_dispatch` 可以在不发布的前提下跑完整条流水线，打 DMG 前会先摘掉残留的 `/Volumes/IDE N` 挂载。
 
 ## 1.4.7 - 2026-11-24
 
