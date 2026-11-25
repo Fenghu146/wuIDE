@@ -176,28 +176,86 @@ func exit(code int) {
 	os.Exit(code)
 }
 
-// resolveLeaseDir finds the shared git dir once, the same way the shell version
-// does: `git rev-parse --git-common-dir`, which every worktree answers with the
-// main checkout's .git, so all worktrees share one lease set.
+// resolveLeaseDir finds the shared git dir and the lease directory beside it.
+//
+// It reads the repository layout itself instead of running `git rev-parse
+// --git-common-dir`, which cost about 0.2s of process start on Windows and was
+// most of what a status or claim spent. The rules are the ones git documents:
+// walk up from the working directory, first .git wins; a directory is the git
+// dir, a file names it, and a linked worktree's git dir has a commondir file
+// naming the git dir every worktree shares.
 func resolveLeaseDir() error {
-	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
-	cmd.Stderr = io.Discard
-	out, err := cmd.Output()
+	gitDir, err := findCommonGitDir()
 	if err != nil {
-		return fmt.Errorf("not in a git repository (git rev-parse --git-common-dir failed)")
-	}
-	gitDir := strings.TrimRight(string(out), "\r\n")
-	if gitDir == "" {
-		return fmt.Errorf("git rev-parse --git-common-dir printed nothing")
-	}
-	if !isAbsolute(gitDir) {
-		if resolved, err := physicalPath(gitDir); err == nil {
-			gitDir = resolved
-		}
+		return err
 	}
 	leaseDir = gitDir + "/amp-leases"
 	lockDir = leaseDir + "/.claim-lock"
 	return nil
+}
+
+func findCommonGitDir() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for dir := cwd; ; {
+		entry := filepath.Join(dir, ".git")
+		info, statErr := os.Stat(entry)
+		switch {
+		case statErr == nil && info.IsDir():
+			return physicalPath(entry)
+		case statErr == nil:
+			named, err := readGitDirFile(entry, dir)
+			if err != nil {
+				return "", err
+			}
+			return readCommonDir(named)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("not in a git repository: no .git in %s or any parent directory", cwd)
+		}
+		dir = parent
+	}
+}
+
+// readGitDirFile reads a linked worktree's .git file, which holds a single
+// "gitdir: <path>" line. A relative path is relative to the directory holding
+// the file.
+func readGitDirFile(path, dir string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot read %s: %v", path, err)
+	}
+	text := strings.TrimSpace(string(data))
+	const prefix = "gitdir:"
+	if len(text) < len(prefix) || !strings.EqualFold(text[:len(prefix)], prefix) {
+		return "", fmt.Errorf("%s is not a git worktree file", path)
+	}
+	target := strings.TrimSpace(text[len(prefix):])
+	if target == "" {
+		return "", fmt.Errorf("%s names no git directory", path)
+	}
+	if !isAbsolute(target) {
+		target = filepath.Join(dir, target)
+	}
+	return target, nil
+}
+
+// readCommonDir resolves a git dir to the one all worktrees share. A linked
+// worktree's own git dir holds that name in a commondir file.
+func readCommonDir(gitDir string) (string, error) {
+	if data, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		value := strings.TrimSpace(string(data))
+		if value != "" {
+			if !isAbsolute(value) {
+				value = filepath.Join(gitDir, value)
+			}
+			gitDir = value
+		}
+	}
+	return physicalPath(gitDir)
 }
 
 // isAbsolute mirrors the shell test [[ "$p" == /* || "$p" == [A-Za-z]:* ]].
@@ -212,16 +270,17 @@ func isAbsolute(p string) bool {
 	return false
 }
 
-// physicalPath is the shell's `cd "$dir" && pwd -P`.
+// physicalPath is the shell's `cd "$dir" && pwd -P`, with forward slashes so a
+// path we print looks like the one git prints.
 func physicalPath(p string) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
+		abs = resolved
 	}
-	return abs, nil
+	return filepath.ToSlash(filepath.Clean(abs)), nil
 }
 
 // normalize turns a path or glob into a directory prefix ending in /, or ./ for
