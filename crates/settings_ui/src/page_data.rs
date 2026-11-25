@@ -132,7 +132,7 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 title: n!("Accessible Layout (Screen Readers)"),
                 description: n!(
-                    "Only changes how the interface is laid out: menus stay expanded and controls stay reachable from the keyboard. It does not expose the interface to a screen reader. To do that, launch IDE with ZED_EXPERIMENTAL_A11Y=1 and restart."
+                    "Only changes how the interface is laid out: menus stay expanded and controls stay reachable from the keyboard. It does not expose the interface to a screen reader. To do that, launch WuIDE with ZED_EXPERIMENTAL_A11Y=1 and restart."
                 ),
                 field: Box::new(SettingField {
                     json_path: Some("accessible_mode"),
@@ -147,7 +147,7 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::ActionLink(ActionLink {
                 title: n!("Screen Reader Support"),
                 description: Some(n!(
-                    "Copies a command that starts this build with accessibility support turned on. Quit IDE first, then run it from a terminal."
+                    "Copies a command that starts this build with accessibility support turned on. Quit WuIDE first, then run it from a terminal."
                 )),
                 button_text: n!("Copy Launch Command"),
                 on_click: Arc::new(|settings_window, _window, cx| {
