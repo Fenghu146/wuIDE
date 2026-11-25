@@ -74,6 +74,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
         run: rustup show
+      # 实验装置（待验证后启用）：先在 macos-dmg.yml 里用 workflow_dispatch 跑一次
+      # 看命中率，再打开这里。两个 arch 的图例各自一份缓存。注意 caches 7 天不用
+      # 就会被清掉，月更的 release 很可能永远命中不了。
+      # - uses: Swatinem/rust-cache@v2
+      #   with:
+      #     key: ${{ matrix.arch }}
       - name: Install lld
         run: brew install lld
       - name: Use the stable release channel
@@ -117,6 +123,15 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}-dsym
           path: target/${{ matrix.arch }}-apple-darwin/release/IDE.dSYM.zip
+          if-no-files-found: error
+      # 实验装置：licenses.md 现在各平台各自生成。三份都传上来，跑一次 release
+      # 后手动 diff；证明一致（B2a 的前提）才能考虑只在一个平台生成。
+      - name: Keep licenses.md for a cross-platform comparison
+        run: cp assets/licenses.md target/licenses-macos-${{ matrix.arch }}.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licenses-macos-${{ matrix.arch }}
+          path: target/licenses-macos-${{ matrix.arch }}.md
           if-no-files-found: error
 
   bundle_linux:
@@ -170,6 +185,14 @@ jobs:
           path: |
             target/release/ide-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
+      # 实验装置，见 bundle_mac 的同名步骤。
+      - name: Keep licenses.md for a cross-platform comparison
+        run: cp assets/licenses.md target/licenses-linux-${{ matrix.arch }}.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licenses-linux-${{ matrix.arch }}
+          path: target/licenses-linux-${{ matrix.arch }}.md
+          if-no-files-found: error
 
   bundle_windows:
     needs: [check_version, cargo_about]
@@ -198,6 +221,15 @@ jobs:
           name: windows-x86_64
           path: |
             target/IDE-x86_64.exe
+          if-no-files-found: error
+      # 实验装置，见 bundle_mac 的同名步骤。
+      - name: Keep licenses.md for a cross-platform comparison
+        run: Copy-Item assets/licenses.md target/licenses-windows-x86_64.md
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licenses-windows-x86_64
+          path: target/licenses-windows-x86_64.md
           if-no-files-found: error
 
   # Each bundle used to compile the remote server serially after the editor: on
@@ -296,8 +328,12 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Keep debug symbols out of the release assets
-        run: find artifacts -name '*.dSYM.zip' -delete
+      - name: Keep build-only files out of the release assets
+        run: |
+          find artifacts -name '*.dSYM.zip' -delete
+          # The licenses-* artifacts only exist to compare licenses.md across
+          # platforms; they are not release assets.
+          find artifacts -name 'licenses-*.md' -delete
       - name: Write the release body
         run: |
           {

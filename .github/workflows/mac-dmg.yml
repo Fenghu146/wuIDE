@@ -23,6 +23,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
         run: rustup show
+      # 实验装置：先在手动触发的 workflow 里量 rust-cache 的命中率，确认值得再
+      # 打开 release.yml 里注释掉的那一份。两个 arch 各自一份缓存。
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
       - name: Install lld
         run: brew install lld
       - name: Use the stable release channel
