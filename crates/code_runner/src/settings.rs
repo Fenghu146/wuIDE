@@ -25,6 +25,7 @@ pub struct CodeRunnerSettings {
     run_entries: HashMap<String, RunEntry>,
     debug_entries: HashMap<String, DebugEntry>,
     is_windows: bool,
+    enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +119,21 @@ impl CodeRunnerSettings {
             run_entries,
             debug_entries,
             is_windows,
+            enabled: true,
         }
+    }
+
+    /// Turns the entry points off without touching the maps, which is what
+    /// `code_runner.enabled: false` means: the configuration is kept, and
+    /// nothing runs or builds.
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Whether running, debugging and compiling are available at all.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     /// How a language runs, and where that choice came from.
@@ -202,6 +217,7 @@ impl Settings for CodeRunnerSettings {
             .collect::<HashMap<_, _>>();
 
         Self::new(&run_map, &debug_map, is_windows)
+            .with_enabled(content.enabled.unwrap_or(true))
     }
 }
 
@@ -324,6 +340,28 @@ mod tests {
             }),
             Some(CommandSource::BuiltIn)
         );
+    }
+
+    #[test]
+    fn turning_the_runner_off_keeps_the_configured_maps() {
+        let settings = CodeRunnerSettings::new(
+            &[("python".to_owned(), "python -X dev main.py".to_owned())]
+                .into_iter()
+                .collect(),
+            &HashMap::default(),
+            false,
+        )
+        .with_enabled(false);
+
+        assert!(!settings.is_enabled());
+        assert_eq!(
+            settings.run_case("python"),
+            Some(RunCase::Command {
+                template: "python -X dev main.py",
+                source: CommandSource::Settings
+            })
+        );
+        assert!(settings.debug_entry("cpp").is_some());
     }
 
     #[test]

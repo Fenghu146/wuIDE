@@ -9,6 +9,16 @@ use settings_macros::{MergeFrom, with_fallible_options};
 #[with_fallible_options]
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct CodeRunnerSettingsContent {
+    /// Whether running, debugging and compiling the file in the editor are
+    /// available: the buttons on the editor tab, the Run menu entries and their
+    /// key bindings.
+    ///
+    /// Turned off, the run and debug entry points are hidden and their commands
+    /// do nothing, while `executor_map` and `debug_map` are kept as they are.
+    ///
+    /// Default: true
+    pub enabled: Option<bool>,
+
     /// One shell command line per language, used by "Run Current File".
     ///
     /// The command is handed to the terminal's shell as-is, after `$ZED_*` task

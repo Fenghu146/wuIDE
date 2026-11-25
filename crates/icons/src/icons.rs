@@ -68,6 +68,7 @@ pub enum IconName {
     Book,
     Box,
     BoxOpen,
+    Build,
     CaseSensitive,
     Chat,
     Check,

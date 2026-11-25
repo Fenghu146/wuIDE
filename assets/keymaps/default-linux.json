@@ -525,6 +525,8 @@
       // The same as ctrl-f5 for people used to the Code Runner extension.
       "ctrl-alt-n": "wu::RunCurrentFile",
       "ctrl-alt-m": "wu::StopCurrentFile",
+      // Compiles the file without running it, on the key VS Code's build uses.
+      "ctrl-shift-b": "wu::CompileCurrentFile",
       "ctrl-f4": "workspace::CloseActiveDock",
     },
   },

@@ -1684,6 +1684,10 @@
   },
   // Settings specific to running and debugging the file in the editor
   "code_runner": {
+    // Whether the run, debug and compile buttons, their menu entries and their
+    // key bindings are available. Turned off, the entry points are hidden and
+    // their commands do nothing; the configured commands below are kept.
+    "enabled": true,
     // One shell command line per language, used by "Run Current File"
     // (`ctrl-f5`) and the run button on the editor tab. `$ZED_FILE`,
     // `$ZED_FILENAME`, `$ZED_DIRNAME`, `$ZED_STEM`, `$ZED_WORKTREE_ROOT` and
