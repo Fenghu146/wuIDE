@@ -373,7 +373,7 @@ pub fn resolve(
         })?;
     let is_windows = settings.is_windows();
 
-    match entry {
+    let plan = match entry {
         RunCase::Command { template, source } => {
             // The built-in TypeScript command strips types but cannot run JSX,
             // so say that instead of starting Node on a file it will reject. A
@@ -385,31 +385,34 @@ pub fn resolve(
                 return Err(RunError::TsxNeedsTransform);
             }
             let cwd = file_directory(request);
-            single_command_plan(request, &language, template, source, cwd, is_windows)
+            single_command_plan(request, &language, template, source, cwd, is_windows)?
         }
         RunCase::CppFamily { source } => {
             if let Some(cmake_root) = request.cmake_root {
                 // A command the user pointed at CMake replaces the built-in
                 // configure-and-build plan, as it did before the plan existed.
                 if let Some((template, template_source)) = settings.command("cmake") {
-                    return single_command_plan(
+                    single_command_plan(
                         request,
                         &language,
                         template,
                         template_source,
                         cmake_root.to_path_buf(),
                         is_windows,
-                    );
+                    )?
+                } else {
+                    cmake_plan(request, &language, cmake_root, source, is_windows)?
                 }
-                cmake_plan(request, &language, cmake_root, source, is_windows)
             } else {
-                compile_plan(request, &language, source, is_windows)
+                compile_plan(request, &language, source, is_windows)?
             }
         }
-        RunCase::Rust { source } => rust_plan(request, &language, source, is_windows),
-        RunCase::Go { source } => go_plan(request, &language, source, is_windows),
-        RunCase::Java { source } => java_plan(request, &language, source, is_windows),
-    }
+        RunCase::Rust { source } => rust_plan(request, &language, source, is_windows)?,
+        RunCase::Go { source } => go_plan(request, &language, source, is_windows)?,
+        RunCase::Java { source } => java_plan(request, &language, source, is_windows)?,
+    };
+
+    Ok(with_utf8_steps(plan, is_windows))
 }
 
 /// Picks the debug build for a file and the binary the session should launch.
@@ -450,7 +453,7 @@ pub fn resolve_debug(
         return Ok(DebugPlan {
             language,
             filename: file_name(request.file),
-            build: plan,
+            build: with_utf8_steps(plan, is_windows),
             program: Program::Cmake(binary),
             adapter: entry.adapter.clone(),
         });
@@ -515,47 +518,69 @@ pub fn resolve_debug(
     Ok(DebugPlan {
         filename: file_name(request.file),
         language: language.clone(),
-        build: RunPlan {
-            language,
-            filename: file_name(request.file),
-            root: cwd.clone(),
-            steps: vec![RunStep {
-                kind: StepKind::Build,
-                label: format!("build {}", file_name(request.file)),
-                command_line: build_line,
-                cwd,
-            }],
-            pending_binary: None,
-            source: entry.source,
-            note: None,
-        },
+        build: with_utf8_steps(
+            RunPlan {
+                language,
+                filename: file_name(request.file),
+                root: cwd.clone(),
+                steps: vec![RunStep {
+                    kind: StepKind::Build,
+                    label: format!("build {}", file_name(request.file)),
+                    command_line: build_line,
+                    cwd,
+                }],
+                pending_binary: None,
+                source: entry.source,
+                note: None,
+            },
+            is_windows,
+        ),
         program: Program::Path(program),
         adapter: entry.adapter.clone(),
     })
 }
 
-/// What a Windows run step does before it starts the program: PowerShell decodes
-/// a child process's stdout with `[Console]::OutputEncoding`, and .NET takes that
-/// from the console's code page the first time it needs it, which is 936 on a
-/// Chinese Windows. A program that writes UTF-8 then reaches the terminal as GBK
-/// mojibake — `张三` arrives as `寮犱笁` — because the terminal only renders
-/// UTF-8. Assigning the property is the only fix that lands in time: running
-/// `chcp 65001` first does not, since .NET caches the encoding it started with.
+/// What every Windows step does before it runs its own command: it puts the
+/// console output code page into UTF-8.
+///
+/// The terminal only renders UTF-8, and a Windows console starts on the system
+/// code page, which is 936 on a Chinese Windows. Both a compiler and a program
+/// the runner starts write *through* that console, so their Chinese text would
+/// reach the terminal as bytes it cannot decode — `cl.exe` prints its localized
+/// messages with the console code page, and on 936 they arrive as GBK. Assigning
+/// the property sets that code page to 65001 (`GetConsoleOutputCP` reads 936
+/// before the assignment and 65001 after it), and children inherit it, so the
+/// same `cl.exe` writes `语法错误` as UTF-8 instead and the terminal reads it.
+///
+/// Run steps need the assignment for a second reason: PowerShell decodes what it
+/// reads back from a child with this encoding, and .NET takes that from the code
+/// page it cached when it started, so a `chcp 65001` in the same command line is
+/// too late for the decoding. `$OutputEncoding` is not part of this: it decides
+/// how PowerShell encodes text it sends to a child's stdin, and measured against
+/// `cl.exe` it changes nothing about the bytes the compiler writes.
 const WINDOWS_UTF8_OUTPUT: &str =
     "try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; ";
 
-/// Puts a Windows program behind [`WINDOWS_UTF8_OUTPUT`].
-///
-/// Do not add it to build steps: a compiler on a Chinese system writes its
-/// messages in GBK, so decoding those as UTF-8 would garble them. Build steps
-/// keep the console's own code page, which is what the messages were written
-/// for.
-fn with_utf8_program_output(command_line: String, is_windows: bool) -> String {
+/// Puts a Windows command line behind [`WINDOWS_UTF8_OUTPUT`].
+fn with_utf8_output(command_line: String, is_windows: bool) -> String {
     if is_windows {
         format!("{WINDOWS_UTF8_OUTPUT}{command_line}")
     } else {
         command_line
     }
+}
+
+/// Puts every step of a plan behind [`WINDOWS_UTF8_OUTPUT`].
+///
+/// Build and run steps both go through here, so a compiler writes UTF-8 for the
+/// same reason a program does, and a step added later cannot miss the prefix.
+fn with_utf8_steps(mut plan: RunPlan, is_windows: bool) -> RunPlan {
+    if is_windows {
+        for step in &mut plan.steps {
+            step.command_line.insert_str(0, WINDOWS_UTF8_OUTPUT);
+        }
+    }
+    plan
 }
 
 /// A plan that is one command line the user configured, such as `python "$ZED_FILENAME"`.
@@ -578,7 +603,7 @@ fn single_command_plan(
         steps: vec![RunStep {
             kind: StepKind::Run,
             label: format!("run {filename}"),
-            command_line: with_utf8_program_output(command_line, is_windows),
+            command_line,
             cwd,
         }],
         filename,
@@ -652,7 +677,7 @@ fn compile_plan(
             RunStep {
                 kind: StepKind::Run,
                 label: format!("run {filename}"),
-                command_line: with_utf8_program_output(run_line, is_windows),
+                command_line: run_line,
                 cwd: directory,
             },
         ],
@@ -970,7 +995,7 @@ pub fn cmake_run_step(
     Ok(RunStep {
         kind: StepKind::Run,
         label: format!("run {}", project_name(project_root)),
-        command_line: with_utf8_program_output(run_program_line(&program, is_windows), is_windows),
+        command_line: with_utf8_output(run_program_line(&program, is_windows), is_windows),
         cwd: project_root.to_path_buf(),
     })
 }
@@ -1354,10 +1379,10 @@ mod tests {
         directory
     }
 
-    /// A Windows run line as the plan must build it: the UTF-8 setting, then the
-    /// command. A step that stops asking for UTF-8 output fails the comparisons
-    /// that use this.
-    fn windows_run_line(command: &str) -> String {
+    /// A Windows step's command line as the plan must build it: the console set
+    /// to UTF-8, then the command. A step that stops asking for UTF-8 output
+    /// fails the comparisons that use this.
+    fn windows_line(command: &str) -> String {
         format!("{WINDOWS_UTF8_OUTPUT}{command}")
     }
 
@@ -1383,13 +1408,13 @@ mod tests {
                 RunStep {
                     kind: StepKind::Build,
                     label: "build main.cpp".to_owned(),
-                    command_line: r#"g++ -std=c++17 "main.cpp" -o "main.exe""#.to_owned(),
+                    command_line: windows_line(r#"g++ -std=c++17 "main.cpp" -o "main.exe""#),
                     cwd: root.to_path_buf(),
                 },
                 RunStep {
                     kind: StepKind::Run,
                     label: "run main.cpp".to_owned(),
-                    command_line: windows_run_line(r#"& ".\main.exe""#),
+                    command_line: windows_line(r#"& ".\main.exe""#),
                     cwd: root.to_path_buf(),
                 },
             ]
@@ -1400,7 +1425,7 @@ mod tests {
 
     #[test]
     fn a_windows_run_step_asks_for_utf8_output_before_it_starts_the_program() {
-        // PowerShell decodes a child's stdout with the console code page (936 on
+        // PowerShell decodes a child's output with the console code page (936 on
         // a Chinese Windows), so a UTF-8 program would reach the terminal as GBK
         // mojibake unless the run step sets the encoding itself first.
         let root = Path::new(r"C:\work");
@@ -1423,12 +1448,66 @@ mod tests {
                 .command_line,
             r#"try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; & ".\main.exe""#
         );
+    }
+
+    #[test]
+    fn a_windows_build_step_asks_for_utf8_output_before_it_compiles() {
+        // cl.exe renders its messages in the console output code page, so on a
+        // Chinese Windows it answers a syntax error with GBK bytes the terminal
+        // cannot decode. The build step puts the console into 65001 first, which
+        // children inherit, so the compiler writes UTF-8 itself and the message
+        // — including any Chinese path in it — reads normally.
+        let root = Path::new(r"C:\work");
+        let file = root.join("main.cpp");
+        let plan = resolve(
+            &request(
+                &file,
+                root,
+                directory_sources(&["main.cpp"], &["main.cpp"], root),
+                None,
+                false,
+            ),
+            &settings(&[], true),
+        )
+        .expect("cpp always has a plan");
+
+        assert_eq!(
+            plan.steps[0].command_line,
+            r#"try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; g++ -std=c++17 "main.cpp" -o "main.exe""#
+        );
+        assert_eq!(plan.steps[0].kind, StepKind::Build);
+
+        // A debug build compiles with the same prefix, because its output is the
+        // compiler's output too.
+        let debug = resolve_debug(
+            &request(
+                &file,
+                root,
+                directory_sources(&["main.cpp"], &["main.cpp"], root),
+                None,
+                false,
+            ),
+            &settings(&[], true),
+        )
+        .expect("cpp has a debug plan");
         assert!(
-            !plan.steps[0]
+            debug.build.steps[0]
                 .command_line
-                .contains("[Console]::OutputEncoding"),
-            "the build step keeps the console's own code page: {}",
-            plan.steps[0].command_line
+                .starts_with(WINDOWS_UTF8_OUTPUT),
+            "the debug build asks for UTF-8 output: {}",
+            debug.build.steps[0].command_line
+        );
+
+        // A command the user configured in `code_runner.executor_map` is a step
+        // too, so it gets the same prefix as the built-in plans.
+        let plan = resolve(
+            &request(&file, root, DirectorySources::default(), None, false),
+            &settings(&[("cpp", "cl /nologo $ZED_FILENAME")], true),
+        )
+        .expect("the configured cpp command is used");
+        assert_eq!(
+            plan.steps[0].command_line,
+            r#"try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new()}catch{}; cl /nologo main.cpp"#
         );
     }
 
@@ -1625,7 +1704,7 @@ mod tests {
         assert_eq!(step.cwd, project);
         assert_eq!(
             step.command_line,
-            windows_run_line(&format!(r#"& "{}""#, binary.display()))
+            windows_line(&format!(r#"& "{}""#, binary.display()))
         );
         std::fs::remove_dir_all(&project).ok();
     }
@@ -1792,7 +1871,7 @@ mod tests {
 
         assert_eq!(
             debug.build.steps[0].command_line,
-            r#"g++ -std=c++17 -g -O0 "class.cpp" "main.cpp" -o "Union_Find.dbg.exe""#
+            windows_line(r#"g++ -std=c++17 -g -O0 "class.cpp" "main.cpp" -o "Union_Find.dbg.exe""#)
         );
         assert_eq!(
             debug.program,
@@ -1822,7 +1901,7 @@ mod tests {
 
         assert_eq!(
             debug.build.steps[0].command_line,
-            r#"g++ -std=c++17 -g -O0 "my file.cpp" -o "my file.dbg.exe""#
+            windows_line(r#"g++ -std=c++17 -g -O0 "my file.cpp" -o "my file.dbg.exe""#)
         );
         assert_eq!(
             debug.program,
@@ -2025,7 +2104,7 @@ mod tests {
                 .map(|step| step.command_line.clone())
                 .collect::<Vec<_>>(),
             vec![
-                r#"g++ -std=c++17 "a`$b.cpp" -o "a`$b.exe""#.to_owned(),
+                windows_line(r#"g++ -std=c++17 "a`$b.cpp" -o "a`$b.exe""#),
                 format!("{WINDOWS_UTF8_OUTPUT}& \".\\a`$b.exe\"")
             ]
         );
@@ -2045,11 +2124,14 @@ mod tests {
         assert_eq!(
             plan.steps
                 .iter()
-                .map(|step| (step.kind, step.command_line.as_str()))
+                .map(|step| (step.kind, step.command_line.clone()))
                 .collect::<Vec<_>>(),
             vec![
-                (StepKind::Build, r#"rustc "hello.rs" -o "hello.exe""#),
-                (StepKind::Run, r#"& ".\hello.exe""#),
+                (
+                    StepKind::Build,
+                    windows_line(r#"rustc "hello.rs" -o "hello.exe""#)
+                ),
+                (StepKind::Run, windows_line(r#"& ".\hello.exe""#)),
             ]
         );
         assert!(
@@ -2076,7 +2158,10 @@ mod tests {
         .expect("a crate binary resolves");
 
         assert_eq!(plan.steps.len(), 1);
-        assert_eq!(plan.steps[0].command_line, "cargo run --bin tool");
+        assert_eq!(
+            plan.steps[0].command_line,
+            windows_line("cargo run --bin tool")
+        );
         assert_eq!(plan.note, None);
 
         std::fs::remove_dir_all(&project).ok();
@@ -2098,7 +2183,10 @@ mod tests {
         )
         .expect("a manifest binary resolves");
 
-        assert_eq!(plan.steps[0].command_line, "cargo run --bin tool");
+        assert_eq!(
+            plan.steps[0].command_line,
+            windows_line("cargo run --bin tool")
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }
@@ -2116,7 +2204,7 @@ mod tests {
         )
         .expect("a crate file falls back to the default target");
 
-        assert_eq!(plan.steps[0].command_line, "cargo run");
+        assert_eq!(plan.steps[0].command_line, windows_line("cargo run"));
         assert!(
             plan.note
                 .as_deref()
@@ -2131,7 +2219,7 @@ mod tests {
             &settings(&[], true),
         )
         .expect("the default target resolves");
-        assert_eq!(plan.steps[0].command_line, "cargo run");
+        assert_eq!(plan.steps[0].command_line, windows_line("cargo run"));
         assert_eq!(plan.note, None, "main.rs is the default target");
 
         std::fs::remove_dir_all(&project).ok();
@@ -2176,7 +2264,10 @@ mod tests {
 
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(plan.steps[0].label, "run main.go");
-        assert_eq!(plan.steps[0].command_line, r#"go run "C:\work\main.go""#);
+        assert_eq!(
+            plan.steps[0].command_line,
+            windows_line(r#"go run "C:\work\main.go""#)
+        );
     }
 
     #[test]
@@ -2218,14 +2309,17 @@ mod tests {
         assert_eq!(
             plan.steps
                 .iter()
-                .map(|step| (step.kind, step.command_line.as_str()))
+                .map(|step| (step.kind, step.command_line.clone()))
                 .collect::<Vec<_>>(),
             vec![
                 (
                     StepKind::Build,
-                    r#"javac -d "C:\work\out" "Main.java""#
+                    windows_line(r#"javac -d "C:\work\out" "Main.java""#)
                 ),
-                (StepKind::Run, r#"java -cp "C:\work\out" "Main""#),
+                (
+                    StepKind::Run,
+                    windows_line(r#"java -cp "C:\work\out" "Main""#)
+                ),
             ]
         );
     }

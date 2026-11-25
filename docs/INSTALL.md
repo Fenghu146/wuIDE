@@ -111,12 +111,10 @@ Pi's isolated home is seeded from `~/.pi/agent` on every launch: `auth.json`, `m
 
 ## Program output in the terminal
 
-The terminal renders UTF-8, so on Windows the step that starts a program first sets `[Console]::OutputEncoding` to UTF-8. Otherwise PowerShell decodes the program's output with the console's code page — 936 on a Chinese system — and UTF-8 text arrives as GBK mojibake (`张三` as `寮犱笁`). Running `chcp 65001` beforehand does not help, because .NET caches the encoding it started with.
+The terminal renders UTF-8, and a Windows console starts on the system code page — 936 on a Chinese system — so every Windows step, build or run, sets `[Console]::OutputEncoding` to UTF-8 before it runs its own command. Assigning that property moves the console output code page to 65001, and whatever the step starts inherits it: a program writes UTF-8, and a compiler that localizes its messages writes them as UTF-8 too. That is how MSVC's Chinese errors reach the terminal as `语法错误: 缺少“;”` instead of GBK bytes it cannot decode. For a UTF-8 program the same setting is what stops `张三` from arriving as GBK mojibake (`寮犱笁`). Switching the code page with `chcp 65001` alone is not enough for the program whose output PowerShell decodes, because .NET takes the code page it started with; the property is what lands in time.
 
 That leaves one thing the editor cannot decide for you: a program that writes something other than UTF-8.
 
 - **g++, Cargo, Python and Node** write UTF-8 and need nothing.
 - **MSVC with GBK source files** prints garbled Chinese, because its string literals and its output are GBK bytes. Compile with `/utf-8` so the program speaks UTF-8 too.
 - **A program that has to write GBK** — to a legacy consumer, say — is not supported in this terminal. Nothing here detects an encoding from the bytes, because guessing would corrupt the UTF-8 output that works today; write to a file or run that program in another terminal.
-
-Build steps keep the console's own code page, so compiler messages that were written for it still read correctly.
