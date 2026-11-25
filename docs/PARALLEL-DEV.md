@@ -175,7 +175,17 @@ git status --short
 ./script/pre-merge-check --release  # 发版/打包前
 ```
 
-十项检查，逐条打印 PASS / FAIL / WARN。**只有 FAIL 影响退出码**，否则一个永远红的门禁最后会被所有人忽略。区分标准是"它会不会让当前这次操作出错"：
+**必须用 Git Bash 调用。** 这台机上裸 `bash` 解析到 WSL（`/usr/bin/bash`），worktree 被挂到 `/mnt/d/...`；而 worktree 的 `.git` 文件里写的是 `gitdir: D:/wuIDE-main/wuIDE-main/.git/worktrees/<name>`，WSL 里的 Linux git 把这个 Windows 路径当成相对路径，第一条 git 命令就报：
+
+```text
+fatal: not a git repository: /mnt/d/<worktree>/D:/wuIDE-main/wuIDE-main/.git/worktrees/<name>
+```
+
+这读起来像"脚本坏了"，其实只是 shell 选错了。显式调用 Git Bash 即可（PowerShell 里引号路径要加 `&`）：`& "C:\Program Files\Git\bin\bash.exe" script/pre-merge-check`，或者直接开 Git Bash 跑 `./script/pre-merge-check`。WSL 里还多一层问题：第 7 项用 `ps -A` 列进程，看到的是 Linux 的进程表，永远发现不了 Windows 上正在跑的 `cargo`/`rustc`。
+
+注意这个坑只在 `pre-merge-check` 上出现：`script/check-mcp-types` 两种 bash 下都能跑（它只要 node/npx 加相对路径），所以别拿"类型检查能跑"推断"门禁也能跑"。
+
+十一项检查，逐条打印 PASS / FAIL / WARN。**只有 FAIL 影响退出码**，否则一个永远红的门禁最后会被所有人忽略。区分标准是"它会不会让当前这次操作出错"：
 
 | 检查 | 类别 | 失败意味着 |
 | --- | --- | --- |
@@ -189,6 +199,7 @@ git status --short
 | 没有正在跑的 `cargo`/`rustc` | 提示 | 不影响这次合并，但会共用 target dir、拖慢自觉的发版 |
 | build 锁空闲 | 提示（`--release` 时**阻塞**） | 有人正在做重构建，此刻发版会抢同一个 target dir |
 | 提交钩子已启用 | 提示 | `core.hooksPath` 不是 `.githooks`，上面的两道提交拦截不会运行 |
+| 仓库地图 MCP server 类型检查（`script/check-mcp-types`） | 提示 | 快照字段与 server 读的字段对不上；拿不到编译器时只打印 `skipped: tsc unavailable`，不算失败 |
 
 `--release` 还会把残留 worktree 的清理命令逐条打印出来（`git worktree remove "<path>"  # <branch>`），省得手抄。
 
