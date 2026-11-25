@@ -1,0 +1,24 @@
+{
+  // Type-only check for the bundled repository map server: `server.js` is
+  // shipped as-is (`script/bundle-*` copies this directory into the installer),
+  // so nothing here is compiled. This config exists so `tsc --noEmit` can read
+  // the `// @ts-check` and JSDoc annotations in `server.js` and pin the shape of
+  // the snapshots the IDE writes.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "commonjs",
+    // `@types/node` ships inside crates/wu/resources/agents/node_modules, which
+    // TypeScript finds by walking up from this file; nothing is installed.
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "files": ["server.js", "server.test.js"]
+}

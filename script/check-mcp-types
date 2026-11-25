@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Type-checks the bundled repository map MCP server.
+#
+# `server.js` ships as-is — `script/bundle-*` copies `crates/wu/resources/agents`
+# into the installer — so nothing here is compiled and no build step gains a
+# dependency. `tsc --noEmit` only reads the `// @ts-check` and JSDoc annotations
+# in `wu-repo-map/*.js`, which is what keeps the snapshot fields the server reads
+# in step with the ones `repo_wiki` writes and with the shared test fixture.
+#
+# This is not part of CI or `script/pre-merge-check`: run it when you touch the
+# server, the fixtures, or the snapshot writers on either side.
+#
+# `typescript` comes from the npx cache and `@types/node` from the checkout's own
+# `crates/wu/resources/agents/node_modules`, which TypeScript reaches by walking
+# up from `tsconfig.json`. Nothing is installed into the repository, because that
+# tree is copied into the installer verbatim.
+set -euo pipefail
+
+TYPESCRIPT_VERSION=7.0.2
+
+cd "$(dirname "$0")/../crates/wu/resources/agents/mcp/wu-repo-map"
+exec npx --yes -p "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json
