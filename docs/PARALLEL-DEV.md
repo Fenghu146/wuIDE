@@ -143,6 +143,23 @@ script/setup-hooks      # 设置 core.hooksPath=.githooks，整个 clone 共享
 
 **钩子是 worktree 里的文件**，不是全局安装的东西：`core.hooksPath` 只是配置，`.githooks/pre-commit` 必须在这个 worktree 的检出里存在且可执行。从一个还没有 `.githooks` 的旧分支（比如本分支合入之前的 `main`）开出来的 worktree，提交时**不会有任何拦截，也不会有任何提示**。`pre-merge-check` 的第 10 项会区分这两种情况：配置没开，还是配置开了但当前 worktree 里没有钩子。
 
+### 钩子里的文本不要被 shell 展开
+
+`.githooks/pre-commit` 里那句 "A clean `git merge` does not run this hook at all"
+曾经让钩子在**每次拒绝提交时真的执行一次 `git merge`**：那段消息用的是未加引号的
+`cat >&2 <<EOF`，而 heredoc 默认会做命令替换，正文里的反引号就被当成命令跑了。
+本地 `main` 落后 `origin/main` 时，一次被拒的提交会顺手把 `main` 快进——这正是
+"主检出只做合并、合并由人决定"要防的事，而且完全静默。
+
+规则：**heredoc 的正文里要出现代码、命令或 `$()` 时，用引号版本 `<<'EOF'`。**
+如果正文同时还需要展开某个变量（这段消息要展开 `$toplevel`），就把反引号转义成 `\``，
+而不是为了躲开命令替换索性取消引号版本——那会把变量也变成字面量。
+
+`script/hook-test` 盯着这一类：它把假的 `git` 放到 PATH 最前面，**直接运行钩子**并记录
+每一次调用，断言没有 `merge`、也没有白名单之外的子命令（白名单目前是 `rev-parse`
+和 `worktree`）。注意假 git 只有直接运行钩子时才生效：真提交时 git 会把自带的目录
+前置到 PATH，假的 `git` 根本轮不到——所以这条测试不是靠"提交一次"来做的。
+
 ## 提交前
 
 ```sh

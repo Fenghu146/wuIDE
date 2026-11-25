@@ -31,15 +31,29 @@ put commits on each other's branch, so work in a worktree of its own:
   git worktree add ..\\<name> -b <branch> origin/main
 
 Only a hand-made commit here needs AMP_MAIN_COMMIT=1, including the one that
-finishes a conflicted merge. A clean `git merge` does not run this hook at all.
+finishes a conflicted merge. A clean \`git merge\` does not run this hook at all.
 EOF
         exit 1
     fi
     exit 0
 fi
 
-lease="$toplevel/script/lease"
-if [[ ! -x "$lease" ]]; then
+# Prefer the compiled lease tool that script/setup-hooks builds into the shared
+# git dir. The shell version stays as the fallback, but the fallback is said out
+# loud: it costs about a second per commit, and it depends on a bash that can
+# see this working tree.
+lease=""
+git_dir=$(git rev-parse --git-common-dir)
+if [[ "$git_dir" != /* && "$git_dir" != [A-Za-z]:* ]]; then
+    git_dir=$(cd "$git_dir" && pwd -P)
+fi
+if [[ -x "$git_dir/amp-bin/wulease.exe" ]]; then
+    lease="$git_dir/amp-bin/wulease.exe"
+elif [[ -x "$toplevel/script/lease" ]]; then
+    lease="$toplevel/script/lease"
+    echo "pre-commit: using script/lease; run script/setup-hooks to build the compiled lease tool" >&2
+fi
+if [[ -z "$lease" ]]; then
     exit 0
 fi
 
