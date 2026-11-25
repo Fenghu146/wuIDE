@@ -360,6 +360,24 @@ function download_git() {
     rm -rf "$tmp_dir"
 }
 
+# A failed or interrupted run leaves its image mounted as /Volumes/IDE (or as
+# "/Volumes/IDE 1" when that name was taken), and hdiutil then refuses to create
+# the next image with "Resource busy". Detach only the volume this script is
+# about to mount: the name comes from the app bundle, so nothing else matches.
+function detach_stale_dmg_volumes() {
+    local wanted=$1
+    local volume name
+    for volume in "/Volumes/${wanted}"*; do
+        [[ -e "${volume}" ]] || continue
+        name="$(diskutil info -plist "${volume}" 2>/dev/null | plutil -extract VolumeName raw -o - - 2>/dev/null || true)"
+        [[ "${name}" == "${wanted}" ]] || continue
+        echo "Detaching stale volume ${volume}"
+        if ! hdiutil detach "${volume}" 2>&1; then
+            echo "warning: could not detach ${volume}; continuing anyway" >&2
+        fi
+    done
+}
+
 function sign_app_binaries() {
     rm -rf "${app_path}/Contents/Frameworks"
     mkdir -p "${app_path}/Contents/Frameworks"
@@ -440,7 +458,18 @@ function sign_app_binaries() {
         ln -s /Applications ${dmg_source_directory}
 
         echo "Creating final DMG at ${dmg_file_path} using ${dmg_source_directory}"
-        hdiutil create -volname "$(basename "$app_path" .app)" -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"
+        dmg_volume_name="$(basename "$app_path" .app)"
+        detach_stale_dmg_volumes "${dmg_volume_name}"
+        if ! hdiutil create -volname "${dmg_volume_name}" -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"; then
+            # A volume can come back while the image is being built, so clear
+            # the mounts again before the one retry.
+            echo "hdiutil create failed; detaching stale ${dmg_volume_name} volumes and retrying once" >&2
+            detach_stale_dmg_volumes "${dmg_volume_name}"
+            if ! hdiutil create -volname "${dmg_volume_name}" -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"; then
+                echo "error: could not create ${dmg_file_path}" >&2
+                exit 1
+            fi
+        fi
 
         # If someone runs this bundle script locally, a symlink will be placed in `dmg_source_directory`.
         # This symlink causes CPU issues with Zed if the Zed codebase is the project being worked on, so we simply remove it for now.
