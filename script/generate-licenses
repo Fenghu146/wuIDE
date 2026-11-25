@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+source script/lib/timeout.sh
 
 CARGO_ABOUT_VERSION="0.8.2"
 OUTPUT_FILE="${1:-$(pwd)/assets/licenses.md}"
 TEMPLATE_FILE="script/licenses/template.md.hbs"
-# `cargo about` gathers licenses through `cargo metadata`, which fetches the
-# lockfile's git dependencies with its output captured: when that fetch stalls,
-# nothing is printed at all. 1.4.7's bundle_mac (aarch64) sat on "Generating
-# cargo licenses" for 4h55m until GitHub's 300-minute job timeout cancelled the
-# job and skipped the release, while the other four platforms finished the same
-# step from the same lockfile. Bound it, so a stalled fetch fails the job in 20
-# minutes with a line that says so instead of burning the whole job timeout.
-LICENSES_TIMEOUT_SECONDS="${LICENSES_TIMEOUT_SECONDS:-1200}"
+# `cargo about` can stall with nothing printed at all: 1.4.7's bundle_mac
+# (aarch64) sat on "Generating cargo licenses" for 4h55m until GitHub's
+# 300-minute job timeout cancelled the job and skipped the release, while the
+# other four platforms finished the same step from the same lockfile. The
+# bundlers fetch the crates first (see `prefetch_crates`), so a stall here is
+# cargo-about itself; bound it so that fails the job in 20 minutes with a line
+# that says so instead of burning the whole job timeout.
+licenses_timeout_seconds="${LICENSES_TIMEOUT_SECONDS:-1200}"
 
 fail_on_stderr() {
     local tmpfile=$(mktemp)
@@ -21,38 +22,6 @@ fail_on_stderr() {
     [ -s "$tmpfile" ] && rc=1
     rm "$tmpfile"
     return $rc
-}
-
-# Run "$@" in its own process group and kill the group once it has outlived the
-# limit, so a stalled `cargo about` and the `cargo` it started both die and the
-# script fails. `timeout(1)` is not on every runner (macOS ships none), so this
-# stays in bash. `set -m` gives the background job a process group of its own.
-run_bounded() {
-    local limit="$1"
-    shift
-    local pid watchdog
-    local rc=0
-    set -m
-    "$@" &
-    pid=$!
-    set +m
-    (
-        local waited=0
-        while [ "$waited" -lt "$limit" ] && kill -0 "$pid" 2>/dev/null; do
-            sleep 5
-            waited=$((waited + 5))
-        done
-        kill -0 "$pid" 2>/dev/null || exit 0
-        printf 'licenses generation stalled; see the cargo about output above (killed after %ss)\n' "$limit" >&2
-        kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-        sleep 5
-        kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
-    ) &
-    watchdog=$!
-    wait "$pid" || rc=$?
-    kill "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
-    return "$rc"
 }
 
 echo -n "" >"$OUTPUT_FILE"
@@ -78,7 +47,7 @@ echo "Generating cargo licenses"
 if [ -z "${ALLOW_MISSING_LICENSES-}" ]; then FAIL_FLAG=--fail; else FAIL_FLAG=""; fi
 if [ -z "${ALLOW_MISSING_LICENSES-}" ]; then WRAPPER=fail_on_stderr; else WRAPPER=""; fi
 set -x
-run_bounded "$LICENSES_TIMEOUT_SECONDS" $WRAPPER cargo about generate \
+run_with_timeout "$licenses_timeout_seconds" "licenses generation stalled; see the cargo about output above (killed after ${licenses_timeout_seconds}s)" $WRAPPER cargo about generate \
     $FAIL_FLAG \
     -c script/licenses/zed-licenses.toml \
     "$TEMPLATE_FILE" >>"$OUTPUT_FILE"
