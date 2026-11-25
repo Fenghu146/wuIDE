@@ -360,17 +360,39 @@ function download_git() {
     rm -rf "$tmp_dir"
 }
 
-# A failed or interrupted run leaves its image mounted as /Volumes/IDE (or as
-# "/Volumes/IDE 1" when that name was taken), and hdiutil then refuses to create
-# the next image with "Resource busy". Detach only the volume this script is
-# about to mount: the name comes from the app bundle, so nothing else matches.
+# A failed or interrupted run leaves its image mounted as /Volumes/IDE, and
+# hdiutil then refuses to create the next image with "Resource busy". Detach
+# only the volume this script is about to mount: the name comes from the app
+# bundle, so nothing else matches.
+#
+# A second copy of the same volume becomes "/Volumes/IDE 1", and depending on
+# the macOS version its volume name keeps the plain name or gains the numeric
+# suffix, so both spellings count as stale. "IDEfoo" or "IDE backpack" do not.
+function is_stale_dmg_volume_name() {
+    local wanted=$1
+    local name=$2
+    local suffix
+    if [[ "${name}" == "${wanted}" ]]; then
+        return 0
+    fi
+    if [[ "${name}" == "${wanted} "* ]]; then
+        suffix="${name#"${wanted} "}"
+        if [[ -n "${suffix}" && "${suffix}" != *[!0-9]* ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 function detach_stale_dmg_volumes() {
     local wanted=$1
     local volume name
     for volume in "/Volumes/${wanted}"*; do
         [[ -e "${volume}" ]] || continue
         name="$(diskutil info -plist "${volume}" 2>/dev/null | plutil -extract VolumeName raw -o - - 2>/dev/null || true)"
-        [[ "${name}" == "${wanted}" ]] || continue
+        if ! is_stale_dmg_volume_name "${wanted}" "${name}"; then
+            continue
+        fi
         echo "Detaching stale volume ${volume}"
         if ! hdiutil detach "${volume}" 2>&1; then
             echo "warning: could not detach ${volume}; continuing anyway" >&2
