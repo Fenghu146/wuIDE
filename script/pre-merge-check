@@ -48,6 +48,21 @@ if [[ "$current_branch" == "HEAD" ]]; then
     current_branch="detached HEAD"
 fi
 
+# The compiled lease tool that script/setup-hooks builds into the shared git dir
+# is preferred; the shell version is the fallback, and the fallback says so
+# rather than running a second slower without a word.
+lease=""
+git_dir=$(git rev-parse --git-common-dir)
+if [[ "$git_dir" != /* && "$git_dir" != [A-Za-z]:* ]]; then
+    git_dir=$(cd "$git_dir" && pwd -P)
+fi
+if [[ -x "$git_dir/amp-bin/wulease.exe" ]]; then
+    lease="$git_dir/amp-bin/wulease.exe"
+elif [[ -x "$current/script/lease" ]]; then
+    lease="$current/script/lease"
+    printf 'note: using script/lease; run script/setup-hooks to build the compiled lease tool\n' >&2
+fi
+
 if [[ "$release" == true ]]; then
     echo "Release mode: the disk check blocks as well."
 fi
@@ -255,9 +270,8 @@ fi
 section 8 "no lease covers the files this branch changes"
 # Blocking: a lease says its holder is still editing those paths, so merging
 # them now splits their work in two.
-lease="$current/script/lease"
-if [[ ! -x "$lease" ]]; then
-    note "script/lease is missing; cannot check leases"
+if [[ -z "$lease" ]]; then
+    note "no lease tool available; cannot check leases"
 elif ! git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null; then
     note "origin/main is unknown here; nothing to compare against"
 else
@@ -277,8 +291,8 @@ section 9 "the build lock is free"
 # Blocking with --release: a release build must not share target dirs with a
 # run someone started. Advisory otherwise, where no build is being made here.
 build_state=""
-if [[ ! -x "$lease" ]]; then
-    note "script/lease is missing; cannot check the build lock"
+if [[ -z "$lease" ]]; then
+    note "no lease tool available; cannot check the build lock"
 elif build_state=$("$lease" check --build 2>&1); then
     pass "nobody holds it"
 elif [[ "$release" == true ]]; then

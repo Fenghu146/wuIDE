@@ -3,6 +3,10 @@
 # Points this clone at the repository's hooks, so the main-checkout guard and
 # the lease check actually run before a commit.
 # Usage: script/setup-hooks
+#
+# Also builds the compiled lease tool into the shared git dir, which the hooks
+# prefer over the shell version. The binary lives outside the working tree on
+# purpose: it is a per-machine build product, not something to commit.
 
 set -euo pipefail
 
@@ -22,3 +26,24 @@ for hook in .githooks/*; do
     printf ' %s' "$(basename "$hook")"
 done
 printf '\n'
+
+# One binary per clone, in the git dir every worktree shares, so a worktree
+# added later finds it without building again.
+git_dir=$(git rev-parse --git-common-dir)
+if [[ "$git_dir" != /* && "$git_dir" != [A-Za-z]:* ]]; then
+    git_dir=$(cd "$git_dir" && pwd -P)
+fi
+lease_bin="$git_dir/amp-bin/wulease.exe"
+
+if [[ ! -d script/lease-go ]]; then
+    printf 'No script/lease-go here; hooks use script/lease.\n'
+elif ! command -v go >/dev/null 2>&1; then
+    printf 'Go is not on PATH; hooks use script/lease instead.\n'
+    printf 'Install Go and rerun this script to switch to the compiled lease tool.\n'
+elif ! mkdir -p "$git_dir/amp-bin"; then
+    printf 'warning: cannot create %s; hooks use script/lease\n' "$git_dir/amp-bin" >&2
+elif (cd script/lease-go && go build -o "$lease_bin" .); then
+    printf 'Built %s\n' "$lease_bin"
+else
+    printf 'warning: the Go build failed; hooks use script/lease\n' >&2
+fi

@@ -180,9 +180,12 @@ run_suite() { # <implementation>
         cp "$repo_root/script/lease" script/lease
     else
         # A compiled implementation resolves the repository from the working
-        # directory, so a shim is enough; it also keeps the path the pre-commit
-        # hook calls pointing at the implementation under test.
+        # directory, so a shim is enough for the direct calls below.
         printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$bin" > script/lease
+        # Also put it where the hooks look first, so the commits at the end of
+        # the suite exercise the preferred path rather than the fallback.
+        mkdir -p .git/amp-bin
+        cp "$bin" .git/amp-bin/wulease.exe
     fi
     cp "$repo_root/.githooks/pre-commit" .githooks/
     chmod +x script/lease script/setup-hooks .githooks/pre-commit
