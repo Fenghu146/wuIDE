@@ -17,7 +17,8 @@ pub use agent_panel::{AgentPanel, open_chat_with_prompt};
 pub use chat_panel::ChatPanel;
 pub use chat_view::ChatView;
 pub use commit_message::{
-    commit_message_agent_label, commit_message_menu, generate_commit_message,
+    OneShotFailure, commit_message_agent_label, commit_message_menu, generate_commit_message,
+    run_prompt_once,
 };
 pub use editor_bridge::{
     add_diagnostics_to_chat, add_selection_to_chat, ask_about_selection, fix_diagnostics,

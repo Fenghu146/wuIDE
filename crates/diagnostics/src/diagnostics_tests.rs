@@ -9,14 +9,16 @@ use editor::{
         editor_test_context::EditorTestContext,
     },
 };
-use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px, size};
+use gpui::{App, Modifiers, Task, TestAppContext, VisualTestContext, point, px, size};
 use indoc::indoc;
-use language::{BufferId, Diagnostic, DiagnosticEntryRef, DiagnosticSourceKind, Rope};
+use language::{
+    BufferId, Diagnostic, DiagnosticEntryRef, DiagnosticSourceKind, LanguageRegistry, Rope,
+};
 use lsp::LanguageServerId;
 use pretty_assertions::assert_eq;
 use project::{
     FakeFs,
-    project_settings::{GoToDiagnosticSeverity, GoToDiagnosticSeverityFilter},
+    project_settings::{GoToDiagnosticSeverity, GoToDiagnosticSeverityFilter, ProjectSettings},
 };
 use rand::{Rng, rngs::StdRng, seq::IteratorRandom as _};
 use serde_json::json;
@@ -27,6 +29,10 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     str::FromStr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 use unindent::Unindent as _;
 use util::{RandomCharIter, path, post_inc, rel_path::rel_path};
@@ -3144,4 +3150,492 @@ fn random_lsp_diagnostic(
         data: None,
         ..Default::default()
     }
+}
+
+struct CountingTranslator {
+    reply: String,
+    requests: Arc<AtomicUsize>,
+}
+
+impl translation::DiagnosticTranslator for CountingTranslator {
+    fn translate(
+        &self,
+        _prompt: String,
+        _cwd: PathBuf,
+        _languages: Arc<LanguageRegistry>,
+        _cx: &mut App,
+    ) -> Task<std::result::Result<String, translation::TranslationFailure>> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        Task::ready(Ok(self.reply.clone()))
+    }
+}
+
+struct FailingTranslator;
+
+impl translation::DiagnosticTranslator for FailingTranslator {
+    fn translate(
+        &self,
+        _prompt: String,
+        _cwd: PathBuf,
+        _languages: Arc<LanguageRegistry>,
+        _cx: &mut App,
+    ) -> Task<std::result::Result<String, translation::TranslationFailure>> {
+        Task::ready(Err(translation::TranslationFailure::NoModel))
+    }
+}
+
+fn translation_request() -> translation::TranslationRequest {
+    translation::TranslationRequest {
+        message: "use of undeclared identifier 'x'".to_owned(),
+        language: Some("c".to_owned()),
+        code: "int main() {\n  x = 1;\n}".to_owned(),
+        path: Some("src/main.c".to_owned()),
+        line: 2,
+    }
+}
+
+fn translation_id(buffer: u64) -> translation::TranslationId {
+    translation::TranslationId {
+        buffer_id: BufferId::new(buffer).unwrap(),
+        group_id: 0,
+        index: 0,
+    }
+}
+
+fn translated_diagnostic(id: translation::TranslationId) -> Vec<translation::TranslationChunk> {
+    vec![translation::TranslationChunk {
+        message: "use of undeclared identifier 'x'".to_owned(),
+        rest: " (clangd)".to_owned(),
+        diagnostic: Some(id),
+    }]
+}
+
+fn test_languages(cx: &mut TestAppContext) -> Arc<LanguageRegistry> {
+    cx.update(|cx| Arc::new(LanguageRegistry::test(cx.background_executor().clone())))
+}
+
+#[gpui::test]
+async fn test_diagnostic_translation_shows_progress_then_the_translated_text(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+    let reply = "使用了未声明的标识符 ‘x’";
+    let requests = Arc::new(AtomicUsize::new(0));
+    cx.update(|cx| {
+        translation::set_translator(
+            CountingTranslator {
+                reply: reply.to_owned(),
+                requests: requests.clone(),
+            },
+            cx,
+        )
+    });
+    let translations = cx.update(|cx| translation::translations(cx).expect("translation store"));
+    let languages = test_languages(cx);
+    let id = translation_id(1);
+    let chunks = translated_diagnostic(id);
+
+    cx.update(|cx| {
+        translations.update(cx, |translations, cx| {
+            translations.translate(
+                id,
+                translation_request(),
+                false,
+                PathBuf::from("/tmp"),
+                languages,
+                cx,
+            )
+        })
+    });
+
+    let source = cx.update(|cx| translations.read(cx).source(&chunks, true));
+    assert!(
+        source.contains(i18n::t!("Translating…").as_ref()),
+        "the click should ask for patience in place:\n{source}"
+    );
+    assert!(!source.contains(reply), "{source}");
+
+    cx.executor().run_until_parked();
+
+    let source = cx.update(|cx| translations.read(cx).source(&chunks, true));
+    assert!(
+        source.contains(reply),
+        "the translation replaces the message:\n{source}"
+    );
+    assert!(
+        source.contains(i18n::t!("Original").as_ref()),
+        "the original stays one click away:\n{source}"
+    );
+    assert!(
+        source.contains("file://#diagnostic-original-1-0-0"),
+        "{source}"
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[gpui::test]
+async fn test_diagnostic_translation_is_asked_for_once(cx: &mut TestAppContext) {
+    init_test(cx);
+    let reply = "使用了未声明的标识符 ‘x’";
+    let requests = Arc::new(AtomicUsize::new(0));
+    cx.update(|cx| {
+        translation::set_translator(
+            CountingTranslator {
+                reply: reply.to_owned(),
+                requests: requests.clone(),
+            },
+            cx,
+        )
+    });
+    let translations = cx.update(|cx| translation::translations(cx).expect("translation store"));
+    let languages = test_languages(cx);
+
+    let first = translation_id(1);
+    cx.update(|cx| {
+        translations.update(cx, |translations, cx| {
+            translations.translate(
+                first,
+                translation_request(),
+                false,
+                PathBuf::from("/tmp"),
+                languages.clone(),
+                cx,
+            )
+        })
+    });
+    cx.executor().run_until_parked();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    // Same message, same code, same language: the second diagnostic shows the
+    // answer without asking the model again.
+    let second = translation_id(2);
+    cx.update(|cx| {
+        translations.update(cx, |translations, cx| {
+            translations.translate(
+                second,
+                translation_request(),
+                false,
+                PathBuf::from("/tmp"),
+                languages,
+                cx,
+            )
+        })
+    });
+    let chunks = translated_diagnostic(second);
+    let source = cx.update(|cx| translations.read(cx).source(&chunks, true));
+    assert!(source.contains(reply), "{source}");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    // Translating again on request is the way past the cache.
+    cx.update(|cx| {
+        translations.update(cx, |translations, cx| {
+            translations.translate(
+                second,
+                translation_request(),
+                true,
+                PathBuf::from("/tmp"),
+                Arc::new(LanguageRegistry::test(cx.background_executor().clone())),
+                cx,
+            )
+        })
+    });
+    cx.executor().run_until_parked();
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[gpui::test]
+async fn test_diagnostic_translation_failure_is_shown_in_place(cx: &mut TestAppContext) {
+    init_test(cx);
+    cx.update(|cx| translation::set_translator(FailingTranslator, cx));
+    let translations = cx.update(|cx| translation::translations(cx).expect("translation store"));
+    let languages = test_languages(cx);
+    let id = translation_id(1);
+    let chunks = translated_diagnostic(id);
+
+    cx.update(|cx| {
+        translations.update(cx, |translations, cx| {
+            translations.translate(
+                id,
+                translation_request(),
+                false,
+                PathBuf::from("/tmp"),
+                languages,
+                cx,
+            )
+        })
+    });
+    cx.executor().run_until_parked();
+
+    let source = cx.update(|cx| translations.read(cx).source(&chunks, true));
+    assert!(
+        source.starts_with(&format!("{}{}", chunks[0].message, chunks[0].rest)),
+        "{source}"
+    );
+    assert!(
+        source.contains(i18n::t!("Translation failed: no model configured").as_ref()),
+        "the failure replaces the progress line where it happened:\n{source}"
+    );
+    assert!(
+        source.contains("file://#diagnostic-retranslate-1-0-0"),
+        "a failed translation can be retried in place:\n{source}"
+    );
+}
+
+#[gpui::test]
+async fn test_diagnostic_translation_button_follows_the_setting(cx: &mut TestAppContext) {
+    init_test(cx);
+    let buffer_id = BufferId::new(9).unwrap();
+    let diagnostic = Diagnostic {
+        message: "implicit declaration of function 'foo'".into(),
+        group_id: 0,
+        is_primary: true,
+        ..Default::default()
+    };
+    let group = || {
+        vec![DiagnosticEntryRef {
+            range: text::Point::new(2, 4)..text::Point::new(2, 7),
+            diagnostic: &diagnostic,
+        }]
+    };
+    let render = |cx: &mut App| {
+        let blocks = diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
+            group(),
+            buffer_id,
+            None,
+            None,
+            None,
+            cx,
+        );
+        blocks
+            .into_iter()
+            .next()
+            .expect("one diagnostic block")
+            .markdown
+    };
+
+    let markdown = cx.update(|cx| {
+        assert!(
+            !ProjectSettings::get_global(cx)
+                .diagnostics
+                .translate_with_model,
+            "translating spends the user's quota, so it is off by default"
+        );
+        render(cx)
+    });
+    let source = cx.update(|cx| markdown.read(cx).source().to_string());
+    assert!(
+        !source.contains("file://#diagnostic-translate-"),
+        "no translate link while the setting is off:\n{source}"
+    );
+
+    cx.update(|cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings
+                    .diagnostics
+                    .get_or_insert_default()
+                    .translate_with_model = Some(true);
+            });
+        });
+    });
+    cx.executor().run_until_parked();
+
+    let markdown = cx.update(|cx| render(cx));
+    let source = cx.update(|cx| markdown.read(cx).source().to_string());
+    assert!(
+        source.contains("file://#diagnostic-translate-9-0-0"),
+        "the setting adds the link to the existing diagnostic:\n{source}"
+    );
+
+    // The block is not rebuilt when a translation arrives, so the link has to
+    // rewrite the markdown entity that is already on screen.
+    let reply = "隐式声明了函数 ‘foo’";
+    cx.update(|cx| {
+        translation::set_translator(
+            CountingTranslator {
+                reply: reply.to_owned(),
+                requests: Arc::new(AtomicUsize::new(0)),
+            },
+            cx,
+        )
+    });
+    let translations = cx.update(|cx| translation::translations(cx).expect("translation store"));
+    let languages = test_languages(cx);
+    cx.update(|cx| {
+        translations.update(cx, |translations, cx| {
+            translations.translate(
+                translation_id(9),
+                translation_request(),
+                false,
+                PathBuf::from("/tmp"),
+                languages,
+                cx,
+            )
+        })
+    });
+    cx.executor().run_until_parked();
+
+    let source = cx.update(|cx| markdown.read(cx).source().to_string());
+    assert!(
+        source.contains(reply),
+        "the translation lands in the block that was already rendered:\n{source}"
+    );
+}
+
+struct CapturingTranslator {
+    prompts: Arc<Mutex<Vec<String>>>,
+    reply: String,
+}
+
+impl translation::DiagnosticTranslator for CapturingTranslator {
+    fn translate(
+        &self,
+        prompt: String,
+        _cwd: PathBuf,
+        _languages: Arc<LanguageRegistry>,
+        _cx: &mut App,
+    ) -> Task<std::result::Result<String, translation::TranslationFailure>> {
+        self.prompts.lock().expect("prompt log").push(prompt);
+        Task::ready(Ok(self.reply.clone()))
+    }
+}
+
+#[gpui::test]
+async fn test_diagnostic_translation_click_sends_the_message_and_nearby_lines_only(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx);
+    let mut cx = EditorLspTestContext::new_rust(Default::default(), cx).await;
+    cx.set_state(indoc! {"
+        ˇline0
+        line1
+        line2
+        line3
+        line4
+        line5
+        line6
+        line7
+        line8
+    "});
+    let range = cx.lsp_range(indoc! {"
+        line0
+        line1
+        line2
+        line3
+        «line4»
+        line5
+        line6
+        line7
+        line8
+    "});
+    let lsp_store =
+        cx.update_editor(|editor, _, cx| editor.project().unwrap().read(cx).lsp_store());
+    cx.update(|_, cx| {
+        lsp_store.update(cx, |lsp_store, cx| {
+            lsp_store
+                .update_diagnostics(
+                    LanguageServerId(0),
+                    lsp::PublishDiagnosticsParams {
+                        uri: lsp::Uri::from_file_path(path!("/root/dir/file.rs")).unwrap(),
+                        version: None,
+                        diagnostics: vec![lsp::Diagnostic {
+                            range,
+                            severity: Some(lsp::DiagnosticSeverity::ERROR),
+                            message: lsp::DiagnosticMessage::from("unused variable `x`"),
+                            ..Default::default()
+                        }],
+                    },
+                    None,
+                    DiagnosticSourceKind::Pushed,
+                    &[],
+                    cx,
+                )
+                .expect("publishing a diagnostic");
+        });
+    });
+    cx.executor().run_until_parked();
+
+    cx.update(|_, cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings
+                    .diagnostics
+                    .get_or_insert_default()
+                    .translate_with_model = Some(true);
+            });
+        });
+    });
+    cx.executor().run_until_parked();
+
+    let reply = "未使用的变量 `x`";
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    cx.update(|_, cx| {
+        translation::set_translator(
+            CapturingTranslator {
+                prompts: prompts.clone(),
+                reply: reply.to_owned(),
+            },
+            cx,
+        )
+    });
+
+    let (buffer_id, group_id, markdown, source) = cx.update_editor(|editor, window, cx| {
+        let buffer_snapshot = editor.snapshot(window, cx).buffer_snapshot().clone();
+        let buffer_id = buffer_snapshot
+            .all_buffer_ids()
+            .next()
+            .expect("one buffer in the editor");
+        let group_id = buffer_snapshot
+            .diagnostics_in_range::<Point>(Point::zero()..buffer_snapshot.max_point())
+            .next()
+            .expect("the published diagnostic")
+            .diagnostic
+            .group_id;
+        let group = buffer_snapshot
+            .diagnostic_group(buffer_id, group_id)
+            .collect::<Vec<_>>();
+        let markdown = diagnostic_renderer::DiagnosticRenderer::diagnostic_blocks_for_group(
+            group, buffer_id, None, None, None, cx,
+        )
+        .into_iter()
+        .next()
+        .expect("one diagnostic block")
+        .markdown;
+        let source = markdown.read(cx).source().to_string();
+        (buffer_id, group_id, markdown, source)
+    });
+
+    let start = source
+        .find("file://#diagnostic-translate-")
+        .unwrap_or_else(|| panic!("no translate link in:\n{source}"));
+    let end = start + source[start..].find(')').expect("link end");
+    let (action, id) = translation::parse_link(&source[start..end]).expect("a translation link");
+    assert_eq!(id.buffer_id, buffer_id);
+    assert_eq!(id.group_id, group_id);
+    assert_eq!(
+        action,
+        translation::TranslationAction::Translate { force: false }
+    );
+
+    cx.update_editor(|editor, _, cx| translation::handle_link(editor, action, id, cx));
+    cx.executor().run_until_parked();
+
+    let prompts = prompts.lock().expect("prompt log");
+    assert_eq!(prompts.len(), 1, "one click is one request");
+    let prompt = &prompts[0];
+    assert!(prompt.contains("unused variable `x`"), "{prompt}");
+    assert!(prompt.contains("line1"), "three lines before:\n{prompt}");
+    assert!(prompt.contains("line7"), "three lines after:\n{prompt}");
+    assert!(!prompt.contains("line0"), "no further up:\n{prompt}");
+    assert!(!prompt.contains("line8"), "no further down:\n{prompt}");
+    assert!(
+        prompt.contains("Language: Rust"),
+        "the language is named:\n{prompt}"
+    );
+
+    let source = cx.update(|_, cx| markdown.read(cx).source().to_string());
+    assert!(
+        source.contains(reply),
+        "the answer lands in the block that was already on screen:\n{source}"
+    );
 }
