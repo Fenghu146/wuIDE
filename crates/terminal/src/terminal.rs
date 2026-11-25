@@ -8,6 +8,7 @@ pub mod terminal_settings;
 use anyhow::Context as _;
 use anyhow::{Result, bail};
 use futures_lite::future::yield_now;
+use i18n::t;
 use log::trace;
 
 use futures::{
@@ -3285,7 +3286,16 @@ fn task_summary(task: &TaskState, exit_status: Option<ExitStatus>) -> (bool, Str
         .full_label
         .replace("\r\n", "\r")
         .replace('\n', "\r");
-    let task_label = |suffix: &str| format!("{TASK_DELIMITER}Task `{escaped_full_label}` {suffix}");
+    let task_label = |status: i18n::SharedString| {
+        format!(
+            "{TASK_DELIMITER}{}",
+            t!(
+                "Task `{label}` {status}",
+                label = escaped_full_label,
+                status = status
+            )
+        )
+    };
     let (success, task_line) = match exit_status {
         Some(status) => {
             let code = status.code();
@@ -3295,26 +3305,33 @@ fn task_summary(task: &TaskState, exit_status: Option<ExitStatus>) -> (bool, Str
             let signal: Option<i32> = None;
 
             match (code, signal) {
-                (Some(0), _) => (true, task_label("finished successfully")),
+                (Some(0), _) => (true, task_label(t!("finished successfully"))),
                 (Some(code), _) => (
                     false,
-                    task_label(&format!("finished with exit code: {code}")),
+                    task_label(
+                        t!("finished with exit code: {code}", code = code),
+                    ),
                 ),
                 (None, Some(signal)) => (
                     false,
-                    task_label(&format!("terminated by signal: {signal}")),
+                    task_label(
+                        t!("terminated by signal: {signal}", signal = signal),
+                    ),
                 ),
-                (None, None) => (false, task_label("finished")),
+                (None, None) => (false, task_label(t!("finished"))),
             }
         }
-        None => (false, task_label("finished")),
+        None => (false, task_label(t!("finished"))),
     };
     let escaped_command_label = task
         .spawned_task
         .command_label
         .replace("\r\n", "\r")
         .replace('\n', "\r");
-    let command_line = format!("{TASK_DELIMITER}Command: {escaped_command_label}");
+    let command_line = format!(
+        "{TASK_DELIMITER}{}",
+        t!("Command: {command}", command = escaped_command_label)
+    );
     (success, task_line, command_line)
 }
 
