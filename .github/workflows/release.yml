@@ -3,6 +3,16 @@ on:
   push:
     tags:
       - v*
+  # A dispatch run builds and uploads every artifact without publishing, so a
+  # change to this workflow can be checked with a real run before a tag does it.
+  # `skip_release` defaults to true and only means something together with a tag
+  # ref; a branch ref never publishes.
+  workflow_dispatch:
+    inputs:
+      skip_release:
+        description: Build the release artifacts and keep them in the run instead of publishing them
+        type: boolean
+        default: true
 permissions:
   contents: read
 env:
@@ -14,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check that the tag matches the crate version
+        if: github.event_name == 'push'
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/wu/Cargo.toml | head -1)
           if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
@@ -21,6 +32,7 @@ jobs:
             exit 1
           fi
       - name: Check that the changelog has entries for this version
+        if: github.event_name == 'push'
         run: script/changelog-section "${GITHUB_REF_NAME#v}" >/dev/null
 
   # B2b: every bundle used to `cargo install cargo-about` itself (2-3.7 minutes)
@@ -124,15 +136,6 @@ jobs:
           name: macos-${{ matrix.arch }}-dsym
           path: target/${{ matrix.arch }}-apple-darwin/release/IDE.dSYM.zip
           if-no-files-found: error
-      # 实验装置：licenses.md 现在各平台各自生成。三份都传上来，跑一次 release
-      # 后手动 diff；证明一致（B2a 的前提）才能考虑只在一个平台生成。
-      - name: Keep licenses.md for a cross-platform comparison
-        run: cp assets/licenses.md target/licenses-macos-${{ matrix.arch }}.md
-      - uses: actions/upload-artifact@v4
-        with:
-          name: licenses-macos-${{ matrix.arch }}
-          path: target/licenses-macos-${{ matrix.arch }}.md
-          if-no-files-found: error
 
   bundle_linux:
     needs: [check_version, cargo_about]
@@ -185,14 +188,6 @@ jobs:
           path: |
             target/release/ide-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
-      # 实验装置，见 bundle_mac 的同名步骤。
-      - name: Keep licenses.md for a cross-platform comparison
-        run: cp assets/licenses.md target/licenses-linux-${{ matrix.arch }}.md
-      - uses: actions/upload-artifact@v4
-        with:
-          name: licenses-linux-${{ matrix.arch }}
-          path: target/licenses-linux-${{ matrix.arch }}.md
-          if-no-files-found: error
 
   bundle_windows:
     needs: [check_version, cargo_about]
@@ -221,15 +216,6 @@ jobs:
           name: windows-x86_64
           path: |
             target/IDE-x86_64.exe
-          if-no-files-found: error
-      # 实验装置，见 bundle_mac 的同名步骤。
-      - name: Keep licenses.md for a cross-platform comparison
-        run: Copy-Item assets/licenses.md target/licenses-windows-x86_64.md
-        shell: pwsh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: licenses-windows-x86_64
-          path: target/licenses-windows-x86_64.md
           if-no-files-found: error
 
   # Each bundle used to compile the remote server serially after the editor: on
@@ -320,6 +306,11 @@ jobs:
     # third-party code and must not hold a token that can create releases.
     permissions:
       contents: write
+    env:
+      # A `workflow_dispatch` run is a dry run: `skip_release` defaults to true,
+      # and even with it off the job publishes only from a tag ref, so building a
+      # branch can never create a release or a tag.
+      PUBLISH: ${{ (github.event_name == 'push' || startsWith(github.ref, 'refs/tags/')) && inputs.skip_release != true }}
     steps:
       - uses: actions/checkout@v4
       - name: Fetch tags for the changelog link
@@ -328,13 +319,12 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Keep build-only files out of the release assets
-        run: |
-          find artifacts -name '*.dSYM.zip' -delete
-          # The licenses-* artifacts only exist to compare licenses.md across
-          # platforms; they are not release assets.
-          find artifacts -name 'licenses-*.md' -delete
+      - name: Keep debug symbols out of the release assets
+        run: find artifacts -name '*.dSYM.zip' -delete
+      - name: List the assets that would be published
+        run: find artifacts -type f -printf '%10s  %p\n' | sort -k2
       - name: Write the release body
+        if: env.PUBLISH == 'true'
         run: |
           {
             cat .github/release/body.md
@@ -349,6 +339,7 @@ jobs:
             fi
           } > release-body.md
       - name: Create the GitHub release
+        if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@v2
         with:
           name: WuIDE ${{ github.ref_name }}
