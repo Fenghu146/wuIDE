@@ -153,6 +153,11 @@ function build_remote_server() {
     fi
 
     sign_binary "target/${target_triple}/${target_dir}/remote_server"
+    if [[ $can_code_sign = true || $self_signed = true ]]; then
+        # Clients download this file, not the app bundle, so check the signature
+        # that ships instead of the one inside the .dmg.
+        /usr/bin/codesign --verify --strict --verbose=2 "target/${target_triple}/${target_dir}/remote_server"
+    fi
     gzip -f --stdout --best "target/${target_triple}/${target_dir}/remote_server" > target/wu-remote-server-macos-$arch_suffix.gz
 }
 
