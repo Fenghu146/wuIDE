@@ -335,12 +335,25 @@ function BuildInstaller {
     }
 }
 
+# CI builds remote_server in a job of its own and skips it in the bundle with
+# WU_SKIP_REMOTE_SERVER=1; that job passes WU_REMOTE_SERVER_ONLY=1, which builds
+# nothing but the remote server. By default a local bundle still produces both.
+if ($env:WU_REMOTE_SERVER_ONLY) {
+    Push-Location $workspace
+    rustup target add $target
+    BuildRemoteServer
+    Pop-Location
+    exit 0
+}
+
 Push-Location $workspace
 PrepareForBundle
 GenerateLicenses
 AssembleLicenseFiles
 BuildWuAndItsFriends
-BuildRemoteServer
+if (-not $env:WU_SKIP_REMOTE_SERVER) {
+    BuildRemoteServer
+}
 MakeAppx
 DownloadAMDGpuServices
 DownloadConpty

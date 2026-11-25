@@ -71,9 +71,6 @@ export ZED_BUNDLE=true
 export CARGO_BUNDLE_SKIP_BUILD=true
 
 cargo_bundle_version=$(cargo -q bundle --help 2>&1 | head -n 1 || echo "")
-if [ "$cargo_bundle_version" != "cargo-bundle v0.6.1-zed" ]; then
-    cargo install cargo-bundle --git https://github.com/zed-industries/cargo-bundle.git --branch zed-deploy
-fi
 
 # Deal with versions of macOS that don't include libstdc++ headers
 export CXXFLAGS="-stdlib=libc++"
@@ -95,6 +92,86 @@ else
     exit 1
 fi
 
+# Imports the signing certificate into a temporary keychain, and decides whether
+# the bundle is signed and notarized, self-signed, or left alone.
+function setup_signing() {
+    if [[ -n "${MACOS_CERTIFICATE:-}" && -n "${MACOS_CERTIFICATE_PASSWORD:-}" ]]; then
+        if [[ -n "${APPLE_NOTARIZATION_KEY:-}" && -n "${APPLE_NOTARIZATION_KEY_ID:-}" && -n "${APPLE_NOTARIZATION_ISSUER_ID:-}" ]]; then
+            can_code_sign=true
+
+            if [[ -z "$APPLE_NOTARIZATION_TEAM" ]]; then
+                echo "APPLE_NOTARIZATION_TEAM must be set when code signing is enabled"
+                exit 1
+            fi
+        else
+            self_signed=true
+            echo "No notarization credentials, so the bundle is signed with \"${IDENTITY}\" and not notarized"
+        fi
+
+        echo "Setting up keychain for code signing..."
+        security create-keychain -p "$MACOS_CERTIFICATE_PASSWORD" zed.keychain || echo ""
+        security default-keychain -s zed.keychain
+        security unlock-keychain -p "$MACOS_CERTIFICATE_PASSWORD" zed.keychain
+        # Calling set-keychain-settings without `-t` disables the auto-lock timeout
+        security set-keychain-settings zed.keychain
+        echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/zed-certificate.p12
+        security import /tmp/zed-certificate.p12 -k zed.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        rm /tmp/zed-certificate.p12
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CERTIFICATE_PASSWORD" zed.keychain
+
+        function cleanup() {
+            echo "Cleaning up keychain"
+            security default-keychain -s login.keychain
+            security delete-keychain zed.keychain
+        }
+
+        trap cleanup EXIT
+    fi
+}
+
+function sign_binary() {
+    local binary_path=$1
+
+    if [[ $can_code_sign = true ]]; then
+        echo "Code signing executable $binary_path"
+        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${binary_path}" -v
+    elif [[ $self_signed = true ]]; then
+        echo "Code signing executable $binary_path with a self-signed certificate"
+        /usr/bin/codesign --force --timestamp=none --sign "$IDENTITY" "${binary_path}" -v
+    fi
+}
+
+# Builds the standalone remote_server binary that clients download. It keeps its
+# own cargo invocation so feature unification with the editor cannot change the
+# dynamic libraries it links. CI builds it in a job of its own and skips it here
+# with WU_SKIP_REMOTE_SERVER=1; WU_REMOTE_SERVER_ONLY=1 builds nothing else.
+function build_remote_server() {
+    cargo --config .cargo/bundle-config.toml build ${build_flag} ${remote_server_features} ${extra_features} --package remote_server --target $target_triple
+
+    if [[ "$target_dir" = "release" && "$local_install" != true ]]; then
+        strip -x "target/${target_triple}/${target_dir}/remote_server"
+    fi
+
+    sign_binary "target/${target_triple}/${target_dir}/remote_server"
+    if [[ $can_code_sign = true || $self_signed = true ]]; then
+        # Clients download this file, not the app bundle, so check the signature
+        # that ships instead of the one inside the .dmg.
+        /usr/bin/codesign --verify --strict --verbose=2 "target/${target_triple}/${target_dir}/remote_server"
+    fi
+    gzip -f --stdout --best "target/${target_triple}/${target_dir}/remote_server" > target/wu-remote-server-macos-$arch_suffix.gz
+}
+
+if [[ -n "${WU_REMOTE_SERVER_ONLY:-}" ]]; then
+    setup_signing
+    rustup target add "$target_triple"
+    build_remote_server
+    exit 0
+fi
+
+if [ "$cargo_bundle_version" != "cargo-bundle v0.6.1-zed" ]; then
+    cargo install cargo-bundle --git https://github.com/zed-industries/cargo-bundle.git --branch zed-deploy
+fi
+
 # Generate the licenses first, so they can be baked into the binaries
 if [[ -z "${WU_SKIP_LICENSES:-}" ]]; then
     # Fetch the crates as their own step, so the fetch cargo-about would do
@@ -109,15 +186,18 @@ rustup target add $target_triple
 script/fetch-node "${target_triple}"
 
 echo "Compiling wu binaries"
-if [[ "$target_dir" = "release" ]]; then
-    cargo --config .cargo/bundle-config.toml rustc ${build_flag} ${extra_features} --package wu --bin IDE --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
-    cargo --config .cargo/bundle-config.toml build ${build_flag} --package cli --target $target_triple
-else
-    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} ${extra_features} --package wu --package cli --target $target_triple
+# `cargo rustc` forwards extra rustc arguments to one target only, which used to
+# keep `cli` in an invocation of its own, recompiling part of the graph under a
+# different feature set (1.8-4.1 minutes). The link flag rides on RUSTFLAGS for a
+# single invocation of both packages, the way the Windows bundle builds them.
+# RUSTFLAGS replaces .cargo/config.toml's rustflags wholesale, so repeat what
+# `[build]` and `[target.aarch64-apple-darwin]` set there.
+bundle_rustflags="-C symbol-mangling-version=v0 --cfg tokio_unstable -C link-arg=-Wl,-unexported_symbol,__R*"
+if [[ "$target_triple" = "aarch64-apple-darwin" ]]; then
+    bundle_rustflags+=" -C link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"
 fi
-# Build remote_server in separate invocation to prevent feature unification from other crates
-# from influencing dynamic libraries required by it.
-cargo --config .cargo/bundle-config.toml build ${build_flag} ${remote_server_features} ${extra_features} --package remote_server --target $target_triple
+RUSTFLAGS="${RUSTFLAGS:-}${RUSTFLAGS:+ }${bundle_rustflags}" \
+    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} ${extra_features} --package wu --package cli --target $target_triple
 
 echo "Creating application bundle"
 pushd crates/wu
@@ -230,38 +310,7 @@ else
     echo "cargo::warning=Missing ${document_icon_source}; macOS document icons may not appear in Finder."
 fi
 
-if [[ -n "${MACOS_CERTIFICATE:-}" && -n "${MACOS_CERTIFICATE_PASSWORD:-}" ]]; then
-    if [[ -n "${APPLE_NOTARIZATION_KEY:-}" && -n "${APPLE_NOTARIZATION_KEY_ID:-}" && -n "${APPLE_NOTARIZATION_ISSUER_ID:-}" ]]; then
-        can_code_sign=true
-
-        if [[ -z "$APPLE_NOTARIZATION_TEAM" ]]; then
-            echo "APPLE_NOTARIZATION_TEAM must be set when code signing is enabled"
-            exit 1
-        fi
-    else
-        self_signed=true
-        echo "No notarization credentials, so the bundle is signed with \"${IDENTITY}\" and not notarized"
-    fi
-
-    echo "Setting up keychain for code signing..."
-    security create-keychain -p "$MACOS_CERTIFICATE_PASSWORD" zed.keychain || echo ""
-    security default-keychain -s zed.keychain
-    security unlock-keychain -p "$MACOS_CERTIFICATE_PASSWORD" zed.keychain
-    # Calling set-keychain-settings without `-t` disables the auto-lock timeout
-    security set-keychain-settings zed.keychain
-    echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/zed-certificate.p12
-    security import /tmp/zed-certificate.p12 -k zed.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-    rm /tmp/zed-certificate.p12
-    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CERTIFICATE_PASSWORD" zed.keychain
-
-    function cleanup() {
-        echo "Cleaning up keychain"
-        security default-keychain -s login.keychain
-        security delete-keychain zed.keychain
-    }
-
-    trap cleanup EXIT
-fi
+setup_signing
 
 GIT_VERSION="v2.43.3"
 GIT_VERSION_SHA="fa29823"
@@ -309,6 +358,46 @@ function download_git() {
 
     mv "${tmp_dir}/git" "${target_binary}"
     rm -rf "$tmp_dir"
+}
+
+# A failed or interrupted run leaves its image mounted as /Volumes/IDE, and
+# hdiutil then refuses to create the next image with "Resource busy". Detach
+# only the volume this script is about to mount: the name comes from the app
+# bundle, so nothing else matches.
+#
+# A second copy of the same volume becomes "/Volumes/IDE 1", and depending on
+# the macOS version its volume name keeps the plain name or gains the numeric
+# suffix, so both spellings count as stale. "IDEfoo" or "IDE backpack" do not.
+function is_stale_dmg_volume_name() {
+    local wanted=$1
+    local name=$2
+    local suffix
+    if [[ "${name}" == "${wanted}" ]]; then
+        return 0
+    fi
+    if [[ "${name}" == "${wanted} "* ]]; then
+        suffix="${name#"${wanted} "}"
+        if [[ -n "${suffix}" && "${suffix}" != *[!0-9]* ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+function detach_stale_dmg_volumes() {
+    local wanted=$1
+    local volume name
+    for volume in "/Volumes/${wanted}"*; do
+        [[ -e "${volume}" ]] || continue
+        name="$(diskutil info -plist "${volume}" 2>/dev/null | plutil -extract VolumeName raw -o - - 2>/dev/null || true)"
+        if ! is_stale_dmg_volume_name "${wanted}" "${name}"; then
+            continue
+        fi
+        echo "Detaching stale volume ${volume}"
+        if ! hdiutil detach "${volume}" 2>&1; then
+            echo "warning: could not detach ${volume}; continuing anyway" >&2
+        fi
+    done
 }
 
 function sign_app_binaries() {
@@ -391,7 +480,18 @@ function sign_app_binaries() {
         ln -s /Applications ${dmg_source_directory}
 
         echo "Creating final DMG at ${dmg_file_path} using ${dmg_source_directory}"
-        hdiutil create -volname "$(basename "$app_path" .app)" -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"
+        dmg_volume_name="$(basename "$app_path" .app)"
+        detach_stale_dmg_volumes "${dmg_volume_name}"
+        if ! hdiutil create -volname "${dmg_volume_name}" -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"; then
+            # A volume can come back while the image is being built, so clear
+            # the mounts again before the one retry.
+            echo "hdiutil create failed; detaching stale ${dmg_volume_name} volumes and retrying once" >&2
+            detach_stale_dmg_volumes "${dmg_volume_name}"
+            if ! hdiutil create -volname "${dmg_volume_name}" -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"; then
+                echo "error: could not create ${dmg_file_path}" >&2
+                exit 1
+            fi
+        fi
 
         # If someone runs this bundle script locally, a symlink will be placed in `dmg_source_directory`.
         # This symlink causes CPU issues with Zed if the Zed codebase is the project being worked on, so we simply remove it for now.
@@ -413,19 +513,6 @@ function sign_app_binaries() {
     fi
 }
 
-function sign_binary() {
-    local binary_path=$1
-
-    if [[ $can_code_sign = true ]]; then
-        echo "Code signing executable $binary_path"
-        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${binary_path}" -v
-    elif [[ $self_signed = true ]]; then
-        echo "Code signing executable $binary_path with a self-signed certificate"
-        /usr/bin/codesign --force --timestamp=none --sign "$IDENTITY" "${binary_path}" -v
-    fi
-}
-
-
 cp target/${target_triple}/${target_dir}/IDE "${app_path}/Contents/MacOS/IDE"
 cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
 
@@ -444,10 +531,10 @@ fi
 
 if [[ "$target_dir" = "release" && "$local_install" != true ]]; then
     strip -x "${app_path}/Contents/MacOS/IDE" "${app_path}/Contents/MacOS/cli"
-    strip -x "target/${target_triple}/${target_dir}/remote_server"
 fi
 
 sign_app_binaries
 
-sign_binary "target/$target_triple/release/remote_server"
-gzip -f --stdout --best target/$target_triple/release/remote_server > target/wu-remote-server-macos-$arch_suffix.gz
+if [[ -z "${WU_SKIP_REMOTE_SERVER:-}" ]]; then
+    build_remote_server
+fi
