@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use path::rel_path::RelPath;
+use repo_wiki::snapshot::SNAPSHOT_VERSION;
 use repo_wiki::symbol_map::{
     BuildStats, FileSymbols, MAX_REPO_MAP_CHARS, RepoMapOptions, SymbolEntry, SymbolMap,
 };
@@ -157,6 +158,11 @@ fn the_fixture_states_the_ordering_the_ide_prints() {
         "the fixture's order note must be the one WuIDE writes"
     );
     assert_eq!(doc["max_chars"].as_u64(), Some(MAX_REPO_MAP_CHARS as u64));
+    assert_eq!(
+        doc["version"].as_u64(),
+        Some(SNAPSHOT_VERSION as u64),
+        "the fixture's version must be the one snapshot.rs writes"
+    );
 }
 
 #[test]
