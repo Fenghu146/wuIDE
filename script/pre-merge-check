@@ -347,6 +347,34 @@ else
     fi
 fi
 
+section 12 "the newest release has Chinese notes"
+# Advisory, and only meaningful with --release: the in-app notes fall back to
+# English and say so, so a missing translation never breaks a build. Warning
+# here rather than failing release.yml puts it in front of whoever tags while
+# there is still time to translate, instead of hours into a tag build.
+newest_version() {
+    awk '/^## / && $2 != "Unreleased" { print $2 }' "$1" |
+        sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
+
+english_newest=$(newest_version .github/release/CHANGELOG.md)
+chinese_newest=""
+if [[ -f .github/release/CHANGELOG.zh.md ]]; then
+    chinese_newest=$(newest_version .github/release/CHANGELOG.zh.md)
+fi
+
+if [[ "$release" != true ]]; then
+    note "only checked with --release, before a tag"
+elif [[ -z "$english_newest" ]]; then
+    warn "cannot read the newest version from .github/release/CHANGELOG.md"
+elif [[ "$chinese_newest" == "$english_newest" ]]; then
+    pass "CHANGELOG.zh.md covers $english_newest"
+else
+    warn "CHANGELOG.zh.md is missing $english_newest; add it before tagging"
+    note "The What's New page falls back to English and says so, so this costs"
+    note "readability rather than correctness; translate it while you still can."
+fi
+
 printf '\n'
 if ((blocked)); then
     echo "Blocking problems above; do not merge, tag, or release until they are fixed." >&2

@@ -185,6 +185,8 @@ git status --short
 
 个别取值故意保留英文时，写进同文件里的 `UNTRANSLATED_SETTING_VALUES` 白名单，而不是让测试红。
 
+应用内的更新说明还多一层：`.github/release/CHANGELOG.zh.md` 只放最近几个版本的中文译文，英文文件决定有哪些版本、顺序和日期，中文文件里有同名 `## <version> - <date>` 节时才替换条目；缺某个版本时，应用内显示英文原文并注明"此版本暂无中文说明"（英文界面不出现）。`cargo test -p auto_update_ui` 比对两份嵌入文件的版本存在性、日期和条目数——**条目数一致由测试保证，顺序与语义的一致性靠人工翻译时对齐**。`./script/pre-merge-check --release` 会在打 tag 前提示最新版本是否已经有中文节。
+
 ## 合并前
 
 ```sh
@@ -202,7 +204,7 @@ fatal: not a git repository: /mnt/d/<worktree>/D:/wuIDE-main/wuIDE-main/.git/wor
 
 注意这个坑只在 `pre-merge-check` 上出现：`script/check-mcp-types` 两种 bash 下都能跑（它只要 node/npx 加相对路径），所以别拿"类型检查能跑"推断"门禁也能跑"。
 
-十一项检查，逐条打印 PASS / FAIL / WARN。**只有 FAIL 影响退出码**，否则一个永远红的门禁最后会被所有人忽略。区分标准是"它会不会让当前这次操作出错"：
+十二项检查，逐条打印 PASS / FAIL / WARN。**只有 FAIL 影响退出码**，否则一个永远红的门禁最后会被所有人忽略。区分标准是"它会不会让当前这次操作出错"：
 
 | 检查 | 类别 | 失败意味着 |
 | --- | --- | --- |
@@ -217,6 +219,7 @@ fatal: not a git repository: /mnt/d/<worktree>/D:/wuIDE-main/wuIDE-main/.git/wor
 | build 锁空闲 | 提示（`--release` 时**阻塞**） | 有人正在做重构建，此刻发版会抢同一个 target dir |
 | 提交钩子已启用 | 提示 | `core.hooksPath` 不是 `.githooks`，上面的两道提交拦截不会运行 |
 | 仓库地图 MCP server 类型检查（`script/check-mcp-types`） | 提示 | 快照字段与 server 读的字段对不上；拿不到编译器时只打印 `skipped: tsc unavailable`，不算失败 |
+| 最新版本有中文说明 | 提示（仅 `--release`） | `.github/release/CHANGELOG.zh.md` 还没有最新版本的中文节；应用内会回退英文并注明，构建照样正确，但打 tag 之前补上更好 |
 
 `--release` 还会把残留 worktree 的清理命令逐条打印出来（`git worktree remove "<path>"  # <branch>`），省得手抄。
 
