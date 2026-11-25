@@ -7,6 +7,16 @@ All notable user-facing changes to Wu are listed here, newest first.
 - Running a file on Windows no longer shows its Chinese output as GBK mojibake: the run step sets `[Console]::OutputEncoding` to UTF-8 before it starts the program, because PowerShell otherwise decodes the program's output with the console's code page; `chcp 65001` beforehand cannot fix it since .NET caches the encoding it started with.
 - A run step now expects UTF-8 output, so a program that writes GBK — typically MSVC built from GBK source files — shows garbled Chinese; compile it with `/utf-8`. Build steps keep the console's own code page, so compiler messages still read correctly.
 
+## 1.4.7 - 2026-11-24
+
+- **Stop** no longer ends the whole application. Clicking it used to abort the process and take any unsaved work with it: the terminal panel read the workspace and the editor while they were already being updated, and a panic inside a window callback cannot unwind on Windows, so the process died. Both sites now pass down what they already have.
+- Program output in the terminal is decoded as UTF-8 on Windows, so a program printing Chinese no longer shows `鐮庡簥 30`. Programs that print GBK — an MSVC build without `/utf-8` — are the known exception, and the setting's description and `docs/INSTALL.md` say so.
+- **Compile** is its own button now (`Ctrl-Shift-B`), and **Run** opens a single terminal: the build happens out of sight and only appears when it fails. `code_runner.enabled` hides the run, debug and compile entries without discarding `executor_map`.
+- A `$` or a backtick in a file name is no longer expanded by the shell, so `a$b.py` opens instead of running `a.py`. Rust runs the binary for the current file (`cargo run --bin`) or compiles a lone `.rs` with `rustc`; Go and Java have default commands; a `.tsx` file says it needs a transform instead of failing at run time.
+- The repository map has three modes and defaults to **Basic**: it builds when you open its panel or ask an agent for it, and never adds a digest to a chat. **Off** builds nothing, and **Full** restores the old behaviour of building a project on open.
+- Chats can be archived, grouped by project, and renamed. Once more than 30 unarchived chats exist, the ones untouched for 30 days are archived automatically, with an undo line under the list. Titles come from the first message; an optional smart title asks your configured model for one and never replaces a name you typed.
+- The repository map settings had no Chinese descriptions while the settings page showed them, which the release's translation gate would have caught.
+
 ## 1.4.6 - 2026-11-24
 
 - Run, Debug and Stop are now separate buttons in the editor's top-right toolbar, in the **Run** menu and in the status bar, instead of sitting on the file tab; `F5` debugs, `Ctrl-F5` or `Ctrl-Alt-N` runs the current file, and `Ctrl-Alt-M` stops it.

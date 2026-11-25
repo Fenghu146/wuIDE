@@ -32,6 +32,10 @@ jobs:
     # Intel builds are cross-compiled on the Apple Silicon runner.
     runs-on: macos-15
     timeout-minutes: 300
+    env:
+      # Three jobs keeps the release build inside the runner's memory while
+      # still using most of its cores.
+      CARGO_BUILD_JOBS: "3"
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -92,6 +96,7 @@ jobs:
     env:
       CC: clang
       CXX: clang++
+      CARGO_BUILD_JOBS: "4"
     steps:
       - uses: actions/checkout@v4
       # The release profile builds with `lto = "thin"` and `codegen-units = 1`,
