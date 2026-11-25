@@ -144,18 +144,19 @@ func help(w io.Writer) {
   check --build
       Internal: exit non-zero while the build lock is held.
 
-Paths are compared after being reduced to a directory prefix:
+Paths are held as a directory or as one exact file:
 
-  crates/code_runner/**          -> crates/code_runner/
+  crates/code_runner/**          -> crates/code_runner/   (a glob keeps its directory)
   crates/settings_ui/src/*.rs    -> crates/settings_ui/src/
-  crates/settings_ui/src/a.rs    -> crates/settings_ui/src/
-  docs/x.md                      -> docs/
+  crates/settings_ui/src/        -> crates/settings_ui/src/
+  crates/diagnostics             -> crates/diagnostics/   (no slash, but a directory on disk)
+  crates/settings_ui/src/a.rs    -> crates/settings_ui/src/a.rs
+  docs/x.md                      -> docs/x.md
   **/*.rs                        -> ./  (the whole repository)
 
-Two leases overlap when one prefix contains the other, so a claim on a file
-reserves its whole directory. This is a conservative approximation: adjacent
-files in one directory report a conflict even though they could be edited in
-parallel. It over-reports; it does not miss a collision.
+Two leases overlap when one covers the other: a directory covers everything
+below it, a file covers only itself. Two files in the same directory therefore
+do not conflict, while a claim on that directory blocks both.
 
 Identity comes from AMP_THREAD_ID. `+"`claim`"+` prints its token, and exporting it
 as AMP_LEASE_TOKEN lets heartbeat, release and the pre-commit hook tell your
@@ -283,10 +284,15 @@ func physicalPath(p string) (string, error) {
 	return filepath.ToSlash(filepath.Clean(abs)), nil
 }
 
-// normalize turns a path or glob into a directory prefix ending in /, or ./ for
-// the repository root. A plain path that is not marked as a directory may be a
-// file, so it reserves its parent directory too: over-reporting beats missing
-// one.
+// normalize turns a path or glob into what a lease holds: a directory ending
+// in /, or the exact path of one file. A glob keeps the directory it starts in.
+//
+// A plain path without a trailing slash used to be treated as a file and
+// collapsed onto its parent directory, so `claim crates/diagnostics` reserved
+// all of `crates/` and blocked threads that had nothing to do with it. The path
+// is now stat'ed: if it names a directory on disk it is that directory, and
+// otherwise it is exactly that file. The stat is relative to the directory the
+// tool runs in, which is the repository root for the hooks.
 func normalize(raw string) string {
 	raw = strings.ReplaceAll(raw, "\\", "/")
 	raw = strings.TrimPrefix(raw, "./")
@@ -307,33 +313,40 @@ func normalize(raw string) string {
 		b.WriteString("/")
 		count++
 	}
-	prefix := b.String()
-
-	if count == len(parts) && !isDir {
-		// ${prefix%*/} then ${prefix%/*}/
-		prefix = strings.TrimSuffix(prefix, "/")
-		if i := strings.LastIndex(prefix, "/"); i >= 0 {
-			prefix = prefix[:i] + "/"
-		} else {
-			prefix = prefix + "/"
-		}
-		if prefix == "" || prefix == "/" {
-			prefix = "./"
-		}
-	}
-	if prefix == "" {
+	if b.Len() == 0 {
 		return "./"
 	}
-	return prefix
+	prefix := b.String()
+
+	// A glob says nothing about the names below the directory it starts in.
+	if count < len(parts) || isDir {
+		return prefix
+	}
+	if info, err := os.Stat(raw); err == nil && info.IsDir() {
+		return prefix
+	}
+	return raw
 }
 
-// overlaps reports whether one prefix contains the other. Prefixes end in /, so
-// sibling directories do not collide.
+// overlaps reports whether two leases can touch the same path. A directory
+// covers everything below it; a file covers only itself, so two files in one
+// directory do not conflict while a claim on their directory does.
 func overlaps(a, b string) bool {
 	if a == "./" || b == "./" {
 		return true
 	}
-	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+	aDir := strings.HasSuffix(a, "/")
+	bDir := strings.HasSuffix(b, "/")
+	switch {
+	case aDir && bDir:
+		return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+	case aDir:
+		return strings.HasPrefix(b, a)
+	case bDir:
+		return strings.HasPrefix(a, b)
+	default:
+		return a == b
+	}
 }
 
 func humanize(s int64) string {

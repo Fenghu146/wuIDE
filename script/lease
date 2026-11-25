@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# LEGACY. The commit hook and script/pre-merge-check run the compiled Go port
+# (script/lease-go, built to .git/amp-bin/wulease.exe by script/setup-hooks) and
+# only fall back to this script when that binary is missing. The two have
+# drifted: normalize() here still collapses a plain path onto its parent
+# directory, so `claim crates/diagnostics` reserves all of crates/, which the Go
+# port no longer does. Change script/lease-go/main.go, not this file.
+#
 # Coordinates threads that touch the same paths.
 # Usage: script/lease <command> [args]; `script/lease help` lists the commands.
 #

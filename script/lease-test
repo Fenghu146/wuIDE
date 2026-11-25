@@ -50,7 +50,21 @@ while (($# > 0)); do
     esac
 done
 
-[ -n "${LEASE_BIN:-}" ] || LEASE_BIN="$repo_root/script/lease"
+if [[ -z "${LEASE_BIN:-}" ]]; then
+    # Test the implementation the hooks actually run. `script/setup-hooks` builds
+    # the Go port into the shared git dir and .githooks/pre-commit prefers it, so
+    # a bare run has to exercise that binary instead of the legacy shell script
+    # it replaced. An explicit LEASE_BIN still wins, for one-off builds.
+    git_common_dir=$(git -C "$repo_root" rev-parse --git-common-dir 2>/dev/null || true)
+    if [[ -n "$git_common_dir" && "$git_common_dir" != /* && "$git_common_dir" != [A-Za-z]:* ]]; then
+        git_common_dir="$repo_root/$git_common_dir"
+    fi
+    if [[ -n "$git_common_dir" && -x "$git_common_dir/amp-bin/wulease.exe" ]]; then
+        LEASE_BIN="$git_common_dir/amp-bin/wulease.exe"
+    else
+        LEASE_BIN="$repo_root/script/lease"
+    fi
+fi
 
 abspath() {
     local p=$1
@@ -228,6 +242,34 @@ run_suite() { # <implementation>
         env AMP_THREAD_ID=thread-b "$lease" release --all-mine
     expect_ok "the dropped paths are free again" \
         env AMP_THREAD_ID=thread-c "$lease" claim 'crates/a/src/x.rs'
+
+    # --- a literal path is the thing it names --------------------------------
+
+    mkdir -p crates/diagnostics
+    : >crates/diagnostics/main.rs
+    : >crates/diagnostics/other.rs
+
+    out=$(env AMP_THREAD_ID=thread-d "$lease" claim 'crates/diagnostics' 2>&1) || true
+    if [[ "$out" == *"Claimed crates/diagnostics/ for "* ]]; then
+        ok "a directory named without a trailing slash is claimed as that directory"
+    else
+        no "a directory named without a trailing slash is claimed as that directory" "$out"
+    fi
+    token_diag=$(printf '%s\n' "$out" | sed -n 's/^token=//p')
+    if [[ -n "$token_diag" ]]; then "$lease" release "$token_diag" >/dev/null; fi
+
+    out=$(env AMP_THREAD_ID=thread-d "$lease" claim 'crates/diagnostics/main.rs' 2>&1) || true
+    if [[ "$out" == *"Claimed crates/diagnostics/main.rs for "* ]]; then
+        ok "a file is claimed by its own path, not by its directory"
+    else
+        no "a file is claimed by its own path, not by its directory" "$out"
+    fi
+    expect_ok "another file in the same directory stays free" \
+        env AMP_THREAD_ID=thread-e "$lease" claim 'crates/diagnostics/other.rs'
+    expect_fail "the same file is refused" "thread-d" \
+        env AMP_THREAD_ID=thread-e "$lease" claim 'crates/diagnostics/main.rs'
+    expect_fail "the directory that holds a claimed file is refused" "thread-d" \
+        env AMP_THREAD_ID=thread-e "$lease" claim 'crates/diagnostics/'
 
     # --- expiry and heartbeat ------------------------------------------------
 
