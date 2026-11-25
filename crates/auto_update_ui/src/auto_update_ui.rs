@@ -18,6 +18,10 @@ use workspace::{
 };
 use wu_actions::ShowUpdateNotification;
 
+mod whats_new;
+
+pub use whats_new::{ShowWhatsNew, WhatsNew};
+
 actions!(
     auto_update,
     [
