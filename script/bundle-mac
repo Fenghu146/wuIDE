@@ -181,12 +181,18 @@ rustup target add $target_triple
 script/fetch-node "${target_triple}"
 
 echo "Compiling wu binaries"
-if [[ "$target_dir" = "release" ]]; then
-    cargo --config .cargo/bundle-config.toml rustc ${build_flag} ${extra_features} --package wu --bin IDE --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
-    cargo --config .cargo/bundle-config.toml build ${build_flag} --package cli --target $target_triple
-else
-    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} ${extra_features} --package wu --package cli --target $target_triple
+# `cargo rustc` forwards extra rustc arguments to one target only, which used to
+# keep `cli` in an invocation of its own, recompiling part of the graph under a
+# different feature set (1.8-4.1 minutes). The link flag rides on RUSTFLAGS for a
+# single invocation of both packages, the way the Windows bundle builds them.
+# RUSTFLAGS replaces .cargo/config.toml's rustflags wholesale, so repeat what
+# `[build]` and `[target.aarch64-apple-darwin]` set there.
+bundle_rustflags="-C symbol-mangling-version=v0 --cfg tokio_unstable -C link-arg=-Wl,-unexported_symbol,__R*"
+if [[ "$target_triple" = "aarch64-apple-darwin" ]]; then
+    bundle_rustflags+=" -C link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"
 fi
+RUSTFLAGS="${RUSTFLAGS:-}${RUSTFLAGS:+ }${bundle_rustflags}" \
+    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} ${extra_features} --package wu --package cli --target $target_triple
 
 echo "Creating application bundle"
 pushd crates/wu
