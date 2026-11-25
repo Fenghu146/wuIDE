@@ -1,15 +1,22 @@
 // Run with `node --test server.test.js` from this directory. Cargo does not run
 // these, but they pin the messages an agent sees when `symbols` cannot answer.
+//
+// `@ts-check` makes `tsc` read the annotations below; `script/check-mcp-types`
+// runs it. The one that earns its keep is the `SnapshotDocV2` annotation on the
+// shared fixture: it is what turns a field renamed in either language into a
+// type error.
+// @ts-check
 "use strict";
 
 const assert = require("node:assert/strict");
-const { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
-const { dirname, join } = require("node:path");
+const { join } = require("node:path");
 const { after, test } = require("node:test");
 
 const {
   DEFAULT_ORDER,
+  SNAPSHOT_VERSION,
   omittedPathLimit,
   renderDiagnostics,
   renderRepoMap,
@@ -26,11 +33,26 @@ after(() => {
   rmSync(workdir, { recursive: true, force: true });
 });
 
+// A complete `stats` block, because `repo_wiki::snapshot::to_json` always writes
+// all eight counters and the tests should model a real snapshot.
+const stats = {
+  considered: 10,
+  parsed: 9,
+  too_large: 0,
+  unsupported: 0,
+  unreadable: 0,
+  over_budget: 0,
+  file_limit: 0,
+  vendored_skipped: 0,
+};
+
+/** @returns {import("./server.js").SnapshotDoc} */
 function doc(overrides = {}) {
   return {
+    version: 2,
     files: [],
     empty_files: [],
-    stats: { considered: 10, parsed: 9, too_large: 0, unsupported: 0 },
+    stats,
     ...overrides,
   };
 }
@@ -41,7 +63,7 @@ test("a path that is not on disk says so", () => {
 });
 
 test("a file on disk but outside the snapshot points at the budget and files_only", () => {
-  const text = renderSymbols(doc({ stats: { considered: 10, parsed: 9, over_budget: 4 } }), "src/budget.rs", {});
+  const text = renderSymbols(doc({ stats: { ...stats, over_budget: 4 } }), "src/budget.rs", {});
   assert.match(text, /exists on disk but is not in the repository map snapshot/);
   assert.match(text, /output budget/);
   assert.match(text, /larger budget/);
@@ -70,10 +92,21 @@ test("the omitted-path cap mirrors the Rust renderer", () => {
   assert.equal(omittedPathLimit(40), 20);
 });
 
+/**
+ * @param {string | undefined} generatedAt
+ * @param {import("./server.js").DiagnosticItem[]} items
+ * @returns {import("./server.js").DiagnosticsDoc}
+ */
 function diagnosticsDoc(generatedAt, items) {
   return { version: 1, project: "/work", generated_at: generatedAt, items };
 }
 
+/**
+ * @param {string} path
+ * @param {number} line
+ * @param {"error" | "warning" | "info"} severity
+ * @returns {import("./server.js").DiagnosticItem}
+ */
 function diagnosticItem(path, line, severity) {
   return { path, line, column: 3, severity, code: "", message: `${severity} here`, source: "rust-analyzer" };
 }
@@ -116,21 +149,16 @@ test("a snapshot without a timestamp keeps listing its diagnostics", () => {
 // snapshot, and both sides compare against these golden files, so a change to
 // one renderer without the other fails here or in
 // `crates/repo_wiki/tests/repo_map_pages.rs`.
-function repoRoot() {
-  let directory = __dirname;
-  for (;;) {
-    if (existsSync(join(directory, "crates", "repo_wiki", "tests", "fixtures", "repo-map"))) {
-      return directory;
-    }
-    const parent = dirname(directory);
-    assert.notEqual(parent, directory, "no crates/repo_wiki above this test");
-    directory = parent;
-  }
-}
+//
+// `require`, not `JSON.parse(readFileSync(...))`: a `require`d JSON keeps the
+// shape it was written with, so the annotation below is a real check against
+// `SnapshotDocV2` — a field renamed in Rust or in `server.js` fails
+// `script/check-mcp-types` instead of quietly rendering a page without it.
+const fixtures = join(__dirname, "../../../../../../crates/repo_wiki/tests/fixtures/repo-map");
+/** @type {import("./server.js").SnapshotDocV2} */
+const snapshot = require("../../../../../../crates/repo_wiki/tests/fixtures/repo-map/snapshot.json");
 
-const fixtures = join(repoRoot(), "crates/repo_wiki/tests/fixtures/repo-map");
-const snapshot = JSON.parse(readFileSync(join(fixtures, "snapshot.json"), "utf8"));
-
+/** @type {[string, import("./server.js").RepoMapOptions][]} */
 const pages = [
   ["limit-1", { limit: 1, offset: 0, filesOnly: false, includeLocals: false }],
   ["limit-10", { limit: 10, offset: 0, filesOnly: false, includeLocals: false }],
@@ -139,8 +167,12 @@ const pages = [
   ["offset-past-end", { limit: 40, offset: 51, filesOnly: false, includeLocals: false }],
 ];
 
-test("the fallback ordering note is the one the IDE writes", () => {
+test("the fallback ordering note and the version are the ones the IDE writes", () => {
   assert.equal(snapshot.order, DEFAULT_ORDER);
+  // The fixture is the only place the two implementations agree on the version;
+  // without this, bumping `SNAPSHOT_VERSION` here would ship a server that
+  // refuses every snapshot the IDE writes.
+  assert.equal(snapshot.version, SNAPSHOT_VERSION);
 });
 
 for (const [name, options] of pages) {

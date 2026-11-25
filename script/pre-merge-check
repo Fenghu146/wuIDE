@@ -324,6 +324,29 @@ else
     note "This branch predates the hooks; nothing guards commits made in this worktree."
 fi
 
+section 11 "the repository map server still type-checks"
+# Advisory: `server.js` ships as-is and nothing compiles it, so this is the only
+# place its JSDoc types are exercised. It never blocks: a machine whose npx cache
+# is cold or offline must not turn the merge gate red, and the check says so
+# instead of passing.
+types="$current/script/check-mcp-types"
+if [[ ! -x "$types" ]]; then
+    note "script/check-mcp-types is missing or not executable; nothing to check"
+else
+    # 0 clean, 1 type errors, 2 the compiler could not be fetched.
+    types_status=0
+    types_output=$("$types" 2>&1) || types_status=$?
+    if ((types_status == 0)); then
+        pass "server.js and server.test.js are clean"
+    elif ((types_status == 1)); then
+        warn "the MCP server's types no longer match the snapshot it reads"
+        while IFS= read -r line; do note "$line"; done <<< "$types_output"
+        note "Run script/check-mcp-types to see the whole report."
+    else
+        note "skipped: tsc unavailable"
+    fi
+fi
+
 printf '\n'
 if ((blocked)); then
     echo "Blocking problems above; do not merge, tag, or release until they are fixed." >&2

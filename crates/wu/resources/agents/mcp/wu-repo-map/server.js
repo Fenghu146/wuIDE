@@ -6,6 +6,10 @@
 // `<PI_CODING_AGENT_DIR>/diagnostics/<project-key>.json`; this server reads the
 // ones belonging to its working directory. No IPC, no third-party packages:
 // Pi runs us inside the project, so the directory itself is the contract.
+//
+// `@ts-check` turns the JSDoc below into a checked contract without a build
+// step; run `script/check-mcp-types` to verify it.
+// @ts-check
 "use strict";
 
 const { createHash } = require("node:crypto");
@@ -112,8 +116,152 @@ const SOURCE_EXTENSIONS = new Set([
   ".tsx",
 ]);
 
+// Shapes of the two JSON snapshots the IDE writes. They are the contract with
+// Rust: `repo_wiki::symbol_map::{file_json, symbol_json}` fills `files`, and
+// `repo_wiki::snapshot::to_json` / `project::diagnostics_snapshot::to_json` fill
+// the documents. `server.test.js` checks the shared fixture against
+// `SnapshotDocV2`, so a field renamed on either side fails `tsc` here instead of
+// rendering a page with that field silently missing.
+
+/**
+ * @typedef {"error" | "warning" | "info"} Severity
+ */
+
+/**
+ * One symbol as `repo_wiki::symbol_map::symbol_json` writes it. Version 1
+ * snapshots carry only `name`, `line` and `kind`.
+ * @typedef {object} SnapshotSymbol
+ * @property {string} name
+ * @property {number} line One-based, because the agent opens files by line.
+ * @property {string} kind
+ * @property {string | null} [owner]
+ * @property {number} [depth]
+ * @property {string | null} [access]
+ * @property {string | null} [signature]
+ * @property {boolean} [local]
+ */
+
+/**
+ * One `files` entry as `repo_wiki::symbol_map::file_json` writes it. Version 1
+ * snapshots have neither the counts nor `deps`, which is why they stay optional.
+ * @typedef {object} SnapshotFile
+ * @property {string} path
+ * @property {number} [rank]
+ * @property {number} [size]
+ * @property {number} [lines]
+ * @property {number} [in]
+ * @property {number} [out]
+ * @property {number} [deps]
+ * @property {SnapshotSymbol[]} symbols
+ */
+
+/**
+ * `stats` from `repo_wiki::snapshot::to_json`; one `json!` writes all eight.
+ * @typedef {object} SnapshotStats
+ * @property {number} considered
+ * @property {number} parsed
+ * @property {number} too_large
+ * @property {number} unsupported
+ * @property {number} unreadable
+ * @property {number} over_budget
+ * @property {number} file_limit
+ * @property {number} vendored_skipped
+ */
+
+/**
+ * The repository map snapshot. Fields a version 1 file lacks stay optional,
+ * because this type describes what the renderer tolerates, not only what the
+ * current writer emits.
+ * @typedef {object} SnapshotDoc
+ * @property {number} version
+ * @property {string} [project]
+ * @property {string} [generated_at]
+ * @property {string} [order]
+ * @property {number} [max_chars]
+ * @property {SnapshotStats} [stats]
+ * @property {SnapshotFile[]} files
+ * @property {string[]} [empty_files]
+ */
+
+/**
+ * The version 2 document `repo_wiki::snapshot::to_json` emits, with every field
+ * present. Only the test's contract check uses it.
+ * @typedef {Required<SnapshotDoc> & { files: Required<SnapshotFile>[] }} SnapshotDocV2
+ */
+
+/**
+ * One `items` entry from `project::diagnostics_snapshot::to_json`, already
+ * one-based and project-relative.
+ * @typedef {object} DiagnosticItem
+ * @property {string} path
+ * @property {number} line
+ * @property {number} column
+ * @property {Severity} severity
+ * @property {string} code
+ * @property {string} message
+ * @property {string} source
+ */
+
+/**
+ * The diagnostics snapshot; `truncated` is written only when the IDE capped it.
+ * @typedef {object} DiagnosticsDoc
+ * @property {number} version
+ * @property {string} [project]
+ * @property {string} [generated_at]
+ * @property {DiagnosticItem[]} items
+ * @property {boolean} [truncated]
+ */
+
+/**
+ * The page `repo_map` asks for.
+ * @typedef {object} RepoMapOptions
+ * @property {number} limit
+ * @property {number} offset
+ * @property {boolean} [filesOnly]
+ * @property {boolean} [includeLocals]
+ * @property {boolean} [legacy]
+ */
+
+/**
+ * The page `symbols` asks for.
+ * @typedef {object} SymbolOptions
+ * @property {boolean} [includeLocals]
+ * @property {boolean} [legacy]
+ */
+
+/**
+ * The filter `diagnostics` asks for.
+ * @typedef {object} DiagnosticsOptions
+ * @property {string} [path]
+ * @property {Severity} [severity]
+ * @property {number} limit
+ */
+
+/**
+ * A loaded snapshot, or the message saying why there is none. Callers split on
+ * `"error" in loaded`, which is what narrows the union to the snapshot.
+ * @typedef {{doc: SnapshotDoc, legacy: boolean} | {error: string}} LoadedSnapshot
+ */
+
+/**
+ * @typedef {{doc: DiagnosticsDoc} | {error: string}} LoadedDiagnostics
+ */
+
+/** @typedef {{content: {type: "text", text: string}[]}} TextResult */
+
+/**
+ * One JSON-RPC message on stdin. Everything is optional because it arrives as
+ * untrusted JSON; the handlers check what they use.
+ * @typedef {object} RpcRequest
+ * @property {string} [jsonrpc]
+ * @property {string | number | null} [id]
+ * @property {string} [method]
+ * @property {{name?: string, arguments?: Record<string, unknown>, protocolVersion?: string}} [params]
+ */
+
 // Must match `repo_wiki::snapshot::project_key`: forward slashes, no trailing
 // slash, lowercased on Windows, first 16 hex digits of SHA-256.
+/** @param {unknown} root @returns {string} */
 function projectKey(root) {
   let path = String(root).replace(/\\/g, "/");
   while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
@@ -121,6 +269,7 @@ function projectKey(root) {
   return createHash("sha256").update(path, "utf8").digest("hex").slice(0, 16);
 }
 
+/** @returns {string | null} */
 function snapshotPath() {
   const agentDir = process.env.PI_CODING_AGENT_DIR;
   if (!agentDir) return null;
@@ -129,12 +278,14 @@ function snapshotPath() {
 
 // Same key, same directory scheme as the repository map, so both snapshots for
 // one project sit next to each other.
+/** @returns {string | null} */
 function diagnosticsSnapshotPath() {
   const agentDir = process.env.PI_CODING_AGENT_DIR;
   if (!agentDir) return null;
   return join(agentDir, "diagnostics", `${projectKey(process.cwd())}.json`);
 }
 
+/** @returns {LoadedSnapshot} */
 function loadSnapshot() {
   const path = snapshotPath();
   if (!path) return { error: NO_SNAPSHOT };
@@ -146,6 +297,7 @@ function loadSnapshot() {
     return { error: NO_SNAPSHOT };
   }
 
+  /** @type {SnapshotDoc} */
   let doc;
   try {
     doc = JSON.parse(text);
@@ -166,6 +318,7 @@ function loadSnapshot() {
   return { doc, legacy: false };
 }
 
+/** @returns {LoadedDiagnostics} */
 function loadDiagnosticsSnapshot() {
   const path = diagnosticsSnapshotPath();
   if (!path) return { error: NO_DIAGNOSTICS_SNAPSHOT };
@@ -177,6 +330,7 @@ function loadDiagnosticsSnapshot() {
     return { error: NO_DIAGNOSTICS_SNAPSHOT };
   }
 
+  /** @type {DiagnosticsDoc} */
   let doc;
   try {
     doc = JSON.parse(text);
@@ -192,6 +346,7 @@ function loadDiagnosticsSnapshot() {
   return { doc };
 }
 
+/** @param {unknown} path @returns {string} */
 function normalizePath(path) {
   return String(path)
     .replace(/\\/g, "/")
@@ -199,15 +354,18 @@ function normalizePath(path) {
     .replace(/\/+$/, "");
 }
 
+/** @param {number | undefined} depth @returns {string} */
 function indent(depth) {
   return "  ".repeat(Math.max(0, Number(depth) || 0));
 }
 
+/** @param {SnapshotSymbol} symbol @returns {string} */
 function symbolLine(symbol) {
   const signature = typeof symbol.signature === "string" ? symbol.signature : "";
   return `${indent(symbol.depth)}- ${symbol.kind} ${symbol.name}${signature} (line ${symbol.line})`;
 }
 
+/** @param {SnapshotSymbol} entry @returns {boolean} */
 function folds(entry) {
   // Only variables fold: a struct's fields are its layout and must stay named.
   return entry.kind === "variable";
@@ -216,9 +374,16 @@ function folds(entry) {
 // Mirrors `repo_wiki::symbol_map::symbol_lines`: locals are hidden unless
 // asked for, access levels become their own line, and runs of variables fold
 // into one summary line so fields do not bury methods.
+/**
+ * @param {SnapshotSymbol[]} symbols
+ * @param {boolean} [includeLocals]
+ * @returns {string[]}
+ */
 function symbolLines(symbols, includeLocals) {
   const visible = (symbols || []).filter((symbol) => includeLocals || !symbol.local);
+  /** @type {string[]} */
   const lines = [];
+  /** @type {string | null} */
   let lastAccess = null;
   let index = 0;
   while (index < visible.length) {
@@ -262,6 +427,11 @@ function symbolLines(symbols, includeLocals) {
 
 // Mirrors the cap in `SymbolMap::file_block`: the first visible definitions, then
 // one line saying how many were left for the `symbols` tool.
+/**
+ * @param {SnapshotSymbol[]} symbols
+ * @param {boolean} [includeLocals]
+ * @returns {string[]}
+ */
 function cappedSymbolLines(symbols, includeLocals) {
   const visible = (symbols || []).filter((symbol) => includeLocals || !symbol.local);
   const kept = Math.min(visible.length, MAX_SYMBOLS_PER_FILE);
@@ -270,6 +440,7 @@ function cappedSymbolLines(symbols, includeLocals) {
   return lines;
 }
 
+/** @param {SnapshotFile} file @returns {string} */
 function fileHeader(file) {
   if (file.in == null && file.out == null && file.lines == null) {
     // Version 1 snapshots carry no counts; do not invent zeros.
@@ -283,6 +454,7 @@ function fileHeader(file) {
   );
 }
 
+/** @param {number} requested @returns {number} */
 function clampLimit(requested) {
   return Number.isFinite(requested) && requested >= 1
     ? Math.min(Math.floor(requested), MAX_FILE_LIMIT)
@@ -291,6 +463,14 @@ function clampLimit(requested) {
 
 // Renders the file blocks of one page, best-ranked first, until the budget for
 // the body runs out. Mirrors `render_ranked` in `repo_wiki::symbol_map`.
+/**
+ * @param {SnapshotFile[]} files
+ * @param {number} start
+ * @param {number} end
+ * @param {number} budget
+ * @param {RepoMapOptions} options
+ * @returns {{body: string, written: number}}
+ */
 function renderPageBody(files, start, end, budget, options) {
   const body = [];
   let written = start;
@@ -308,6 +488,7 @@ function renderPageBody(files, start, end, budget, options) {
 
 // Paths one page may list after its body, mirroring `omitted_path_limit` in
 // `repo_wiki::symbol_map`.
+/** @param {number} limit @returns {number} */
 function omittedPathLimit(limit) {
   return limit <= 5 ? MAX_OMITTED_PATHS_SMALL : MAX_OMITTED_PATHS;
 }
@@ -315,6 +496,7 @@ function omittedPathLimit(limit) {
 // Honest coverage for the whole build, mirroring `SymbolMap::coverage_notes`:
 // how many candidates became map entries, why the rest did not, and what never
 // became a candidate at all.
+/** @param {SnapshotStats} stats @returns {string[]} */
 function coverageNotes(stats) {
   const notes = [];
   if (Number.isFinite(stats.considered) && stats.considered > 0) {
@@ -336,6 +518,15 @@ function coverageNotes(stats) {
 // Everything before the body: the header, the ordering note and the coverage
 // of the build the page was cut from. An offset at or past `total` leaves an
 // empty page; saying so beats printing a range that runs backwards.
+/**
+ * @param {SnapshotDoc} doc
+ * @param {number} written
+ * @param {number} start
+ * @param {number} end
+ * @param {number} total
+ * @param {RepoMapOptions} options
+ * @returns {string}
+ */
 function renderPageHead(doc, written, start, end, total, options) {
   let header;
   if (start >= total) {
@@ -365,6 +556,14 @@ function renderPageHead(doc, written, start, end, total, options) {
 
 // Everything after the body, with the widest "+N more omitted" line its count
 // can produce, so the body budget never eats that room.
+/**
+ * @param {number} written
+ * @param {number} start
+ * @param {number} end
+ * @param {number} total
+ * @param {RepoMapOptions} options
+ * @returns {string}
+ */
 function renderPageTailReserve(written, start, end, total, options) {
   let tail = "";
   const skipped = total - written;
@@ -379,6 +578,11 @@ function renderPageTailReserve(written, start, end, total, options) {
   return tail;
 }
 
+/**
+ * @param {SnapshotDoc} doc
+ * @param {RepoMapOptions} options
+ * @returns {string}
+ */
 function renderRepoMap(doc, options) {
   const files = doc.files;
   const total = files.length;
@@ -394,7 +598,7 @@ function renderRepoMap(doc, options) {
   // line, exactly like the IDE's renderer, so both surfaces produce the same
   // text for the same snapshot.
   const maxChars =
-    Number.isFinite(doc.max_chars) && doc.max_chars > 0 ? doc.max_chars : FALLBACK_MAX_CHARS;
+    typeof doc.max_chars === "number" && doc.max_chars > 0 ? doc.max_chars : FALLBACK_MAX_CHARS;
   let bodyBudget = maxChars;
   let attempts = 0;
   let head = "";
@@ -443,6 +647,7 @@ function renderRepoMap(doc, options) {
   return text;
 }
 
+/** @param {SnapshotDoc} doc @param {unknown} requested @returns {SnapshotFile | string | undefined} */
 function findFile(doc, requested) {
   const wanted = normalizePath(requested);
   if (!wanted) return undefined;
@@ -458,6 +663,7 @@ function findFile(doc, requested) {
   );
 }
 
+/** @param {string} path @returns {boolean} */
 function isSourcePath(path) {
   const name = String(path).toLowerCase();
   const dot = name.lastIndexOf(".");
@@ -466,6 +672,7 @@ function isSourcePath(path) {
 
 // Same rule as `is_vendored_path` in `repo_wiki::symbol_map`: a hidden or
 // known vendored directory anywhere before the file name.
+/** @param {string} path @returns {boolean} */
 function isVendoredPath(path) {
   const parts = normalizePath(path).split("/");
   return parts
@@ -473,6 +680,12 @@ function isVendoredPath(path) {
     .some((part) => part.startsWith(".") || VENDORED_DIRS.has(part));
 }
 
+/**
+ * @param {SnapshotDoc} doc
+ * @param {unknown} requested
+ * @param {SymbolOptions} options
+ * @returns {string}
+ */
 function renderSymbols(doc, requested, options) {
   if (typeof requested !== "string" || requested.trim() === "") {
     return "Pass the file path, relative to the project root.";
@@ -548,10 +761,12 @@ const TRUNCATED_DIAGNOSTICS =
 // agent can tell a fresh list from one that predates the user's last edit.
 const DIAGNOSTICS_STALE_AFTER_SECONDS = 5 * 60;
 
+/** @param {number} count @param {string} noun @returns {string} */
 function plural(count, noun) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+/** @param {unknown} generatedAt @param {number} now @returns {number | null} */
 function snapshotAgeSeconds(generatedAt, now) {
   if (typeof generatedAt !== "string") return null;
   const written = Date.parse(generatedAt);
@@ -559,6 +774,7 @@ function snapshotAgeSeconds(generatedAt, now) {
   return Math.max(0, Math.round((now - written) / 1000));
 }
 
+/** @param {number} seconds @returns {string} */
 function formatAge(seconds) {
   if (seconds < 90) return `${seconds}s`;
   if (seconds < 90 * 60) return `${Math.round(seconds / 60)}m`;
@@ -568,6 +784,13 @@ function formatAge(seconds) {
 
 // The first line of the tool output: how old the snapshot is, so the list below
 // is never mistaken for live state, plus what it covers.
+/**
+ * @param {DiagnosticsDoc} doc
+ * @param {DiagnosticItem[]} matched
+ * @param {number} fileCount
+ * @param {number} now
+ * @returns {string | null}
+ */
 function freshnessLine(doc, matched, fileCount, now) {
   const age = snapshotAgeSeconds(doc.generated_at, now);
   if (age === null) return null;
@@ -578,12 +801,14 @@ function freshnessLine(doc, matched, fileCount, now) {
   return `Snapshot written ${formatAge(age)} ago · ${size}`;
 }
 
+/** @param {number} requested @returns {number} */
 function clampDiagnosticsLimit(requested) {
   return Number.isFinite(requested) && requested >= 1
     ? Math.min(Math.floor(requested), MAX_DIAGNOSTICS_LIMIT)
     : DEFAULT_DIAGNOSTICS_LIMIT;
 }
 
+/** @param {DiagnosticItem} item @param {string} wanted @returns {boolean} */
 function matchesPath(item, wanted) {
   return (
     !wanted ||
@@ -595,6 +820,11 @@ function matchesPath(item, wanted) {
 
 // One line per diagnostic, grouped under the file it belongs to, so an agent
 // can read the list and open the exact position.
+/**
+ * @param {DiagnosticsDoc} doc
+ * @param {DiagnosticsOptions} options
+ * @returns {string}
+ */
 function renderDiagnostics(doc, options) {
   const wanted = options.path ? normalizePath(options.path) : "";
   const matched = (doc.items || []).filter(
@@ -750,22 +980,30 @@ const TOOLS = [
   },
 ];
 
+/** @param {string} text @returns {TextResult} */
 function textResult(text) {
   return { content: [{ type: "text", text }] };
 }
 
+/** @param {unknown} value @param {number} fallback @returns {number} */
 function intOption(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : fallback;
 }
 
+/**
+ * @param {unknown} name
+ * @param {Record<string, unknown>} args
+ * @returns {TextResult | undefined}
+ */
 function callTool(name, args) {
   if (name === "diagnostics") {
-    const { doc, error } = loadDiagnosticsSnapshot();
-    if (error) return textResult(error);
+    const loaded = loadDiagnosticsSnapshot();
+    if ("error" in loaded) return textResult(loaded.error);
+    const { doc } = loaded;
     const severity =
       typeof args.severity === "string" && DIAGNOSTIC_SEVERITIES.has(args.severity)
-        ? args.severity
+        ? /** @type {Severity} */ (args.severity)
         : undefined;
     return textResult(
       renderDiagnostics(doc, {
@@ -778,8 +1016,9 @@ function callTool(name, args) {
   if (name !== "repo_map" && name !== "symbols") {
     return undefined;
   }
-  const { doc, error, legacy } = loadSnapshot();
-  if (error) return textResult(error);
+  const loaded = loadSnapshot();
+  if ("error" in loaded) return textResult(loaded.error);
+  const { doc, legacy } = loaded;
 
   const includeLocals = Boolean(args && args.include_locals);
   if (name === "repo_map") {
@@ -801,15 +1040,19 @@ function callTool(name, args) {
   );
 }
 
+/** @param {object} message */
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+/** @param {RpcRequest} message */
 function handle(message) {
   const method = message.method || "";
   if (message.id === undefined) return; // notification
 
+  /** @param {object} result */
   const reply = (result) => send({ jsonrpc: "2.0", id: message.id, result });
+  /** @param {number} code @param {string} text */
   const fail = (code, text) =>
     send({ jsonrpc: "2.0", id: message.id, error: { code, message: text } });
 
@@ -861,6 +1104,7 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_ORDER,
+  SNAPSHOT_VERSION,
   renderDiagnostics,
   renderRepoMap,
   renderSymbols,
