@@ -1,6 +1,7 @@
 // This won't be documented further as it is intended to be removed, or merged with the `time_format` crate.
 
 use chrono::{DateTime, Local, NaiveDateTime};
+use i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DateTimeType {
@@ -94,8 +95,7 @@ fn distance_string(
     add_suffix: bool,
     hide_prefix: bool,
 ) -> String {
-    let suffix = if distance < 0 { " from now" } else { " ago" };
-
+    let from_now = distance < 0;
     let distance = distance.abs();
 
     let minutes = distance / 60;
@@ -105,123 +105,120 @@ fn distance_string(
 
     let string = if distance < 5 && include_seconds {
         if hide_prefix {
-            "5 seconds"
+            t!("5 seconds")
         } else {
-            "less than 5 seconds"
+            t!("less than 5 seconds")
         }
-        .to_string()
     } else if distance < 10 && include_seconds {
         if hide_prefix {
-            "10 seconds"
+            t!("10 seconds")
         } else {
-            "less than 10 seconds"
+            t!("less than 10 seconds")
         }
-        .to_string()
     } else if distance < 20 && include_seconds {
         if hide_prefix {
-            "20 seconds"
+            t!("20 seconds")
         } else {
-            "less than 20 seconds"
+            t!("less than 20 seconds")
         }
-        .to_string()
     } else if distance < 40 && include_seconds {
-        "half a minute".to_string()
+        t!("half a minute")
     } else if distance < 60 && include_seconds {
         if hide_prefix {
-            "a minute"
+            t!("a minute")
         } else {
-            "less than a minute"
+            t!("less than a minute")
         }
-        .to_string()
     } else if distance < 90 && include_seconds {
-        "1 minute".to_string()
+        t!("1 minute")
     } else if distance < 30 {
         if hide_prefix {
-            "a minute"
+            t!("a minute")
         } else {
-            "less than a minute"
+            t!("less than a minute")
         }
-        .to_string()
     } else if distance < 90 {
-        "1 minute".to_string()
+        t!("1 minute")
     } else if distance < 2_700 {
-        format!("{} minutes", minutes)
+        t!("{count} minutes", count = minutes)
     } else if distance < 5_400 {
         if hide_prefix {
-            "1 hour"
+            t!("1 hour")
         } else {
-            "about 1 hour"
+            t!("about 1 hour")
         }
-        .to_string()
     } else if distance < 86_400 {
         if hide_prefix {
-            format!("{} hours", hours)
+            t!("{count} hours", count = hours)
         } else {
-            format!("about {} hours", hours)
+            t!("about {count} hours", count = hours)
         }
     } else if distance < 172_800 {
-        "1 day".to_string()
+        t!("1 day")
     } else if distance < 2_592_000 {
-        format!("{} days", days)
+        t!("{count} days", count = days)
     } else if distance < 5_184_000 {
         if hide_prefix {
-            "1 month"
+            t!("1 month")
         } else {
-            "about 1 month"
+            t!("about 1 month")
         }
-        .to_string()
     } else if distance < 7_776_000 {
         if hide_prefix {
-            "2 months"
+            t!("2 months")
         } else {
-            "about 2 months"
+            t!("about 2 months")
         }
-        .to_string()
     } else if distance < 31_540_000 {
-        format!("{} months", months)
+        t!("{count} months", count = months)
     } else if distance < 39_425_000 {
         if hide_prefix {
-            "1 year"
+            t!("1 year")
         } else {
-            "about 1 year"
+            t!("about 1 year")
         }
-        .to_string()
     } else if distance < 55_195_000 {
-        if hide_prefix { "1 year" } else { "over 1 year" }.to_string()
+        if hide_prefix {
+            t!("1 year")
+        } else {
+            t!("over 1 year")
+        }
     } else if distance < 63_080_000 {
         if hide_prefix {
-            "2 years"
+            t!("2 years")
         } else {
-            "almost 2 years"
+            t!("almost 2 years")
         }
-        .to_string()
     } else {
         let years = distance / 31_536_000;
         let remaining_months = (distance % 31_536_000) / 2_592_000;
 
         if remaining_months < 3 {
             if hide_prefix {
-                format!("{} years", years)
+                t!("{count} years", count = years)
             } else {
-                format!("about {} years", years)
+                t!("about {count} years", count = years)
             }
         } else if remaining_months < 9 {
             if hide_prefix {
-                format!("{} years", years)
+                t!("{count} years", count = years)
             } else {
-                format!("over {} years", years)
+                t!("over {count} years", count = years)
             }
         } else if hide_prefix {
-            format!("{} years", years + 1)
+            t!("{count} years", count = years + 1)
         } else {
-            format!("almost {} years", years + 1)
+            t!("almost {count} years", count = years + 1)
         }
     };
 
-    if add_suffix {
-        format!("{}{}", string, suffix)
+    if !add_suffix {
+        return string.to_string();
+    }
+    if from_now {
+        t!("{time} from now", time = string).to_string()
     } else {
-        string
+        t!("{time} ago", time = string).to_string()
     }
 }
 

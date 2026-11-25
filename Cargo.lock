@@ -1842,6 +1842,7 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "gpui",
+ "i18n",
  "pretty_assertions",
  "settings",
  "task",
@@ -12161,6 +12162,7 @@ dependencies = [
  "futures",
  "futures-lite 1.13.0",
  "gpui",
+ "i18n",
  "itertools 0.14.0",
  "libc",
  "log",

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use i18n::t;
 use task::{TaskContext, TaskVariables, VariableName, substitute_variables_in_str};
 
 use crate::settings::{CodeRunnerSettings, RunCase};
@@ -140,7 +141,7 @@ pub struct DebugPlan {
 
 impl DebugPlan {
     pub fn label(&self) -> String {
-        format!("debug {}", self.filename)
+        t!("debug {filename}", filename = self.filename).to_string()
     }
 }
 
@@ -175,7 +176,7 @@ pub struct RunPlan {
 
 impl RunPlan {
     pub fn label(&self) -> String {
-        format!("run {}", self.filename)
+        t!("run {filename}", filename = self.filename).to_string()
     }
 
     /// The step that starts the program, once it is in the plan.
@@ -525,7 +526,7 @@ pub fn resolve_debug(
                 root: cwd.clone(),
                 steps: vec![RunStep {
                     kind: StepKind::Build,
-                    label: format!("build {}", file_name(request.file)),
+                    label: t!("build {filename}", filename = file_name(request.file)).to_string(),
                     command_line: build_line,
                     cwd,
                 }],
@@ -602,7 +603,7 @@ fn single_command_plan(
         root: cwd.clone(),
         steps: vec![RunStep {
             kind: StepKind::Run,
-            label: format!("run {filename}"),
+            label: t!("run {filename}", filename = filename).to_string(),
             command_line,
             cwd,
         }],
@@ -630,13 +631,14 @@ fn compile_plan(
     let program = program_sources(request);
     let (sources, binary_stem, note) = match program {
         Some(program) => {
-            let note = format!(
-                "{} has main, so all {} {} files in {} are compiled together and run as one program.",
-                program.main,
-                program.sources.len(),
-                language,
-                project_name(&directory)
-            );
+            let note = t!(
+                "{main} has main, so all {count} {language} files in {project} are compiled together and run as one program.",
+                main = program.main,
+                count = program.sources.len(),
+                language = language,
+                project = project_name(&directory)
+            )
+            .to_string();
             (program.sources, project_name(&directory), Some(note))
         }
         None => {
@@ -670,13 +672,13 @@ fn compile_plan(
         steps: vec![
             RunStep {
                 kind: StepKind::Build,
-                label: format!("build {filename}"),
+                label: t!("build {filename}", filename = filename).to_string(),
                 command_line: build_line,
                 cwd: directory.clone(),
             },
             RunStep {
                 kind: StepKind::Run,
-                label: format!("run {filename}"),
+                label: t!("run {filename}", filename = filename).to_string(),
                 command_line: run_line,
                 cwd: directory,
             },
@@ -718,10 +720,12 @@ fn rust_plan(
             (
                 "cargo run".to_owned(),
                 (!is_default_target).then(|| {
-                    format!(
-                        "{filename} is not a binary target of the crate at {}, so the run builds and starts its default target.",
-                        project.display()
+                    t!(
+                        "{filename} is not a binary target of the crate at {crate_root}, so the run builds and starts its default target.",
+                        filename = filename,
+                        crate_root = project.display().to_string()
                     )
+                    .to_string()
                 }),
             )
         };
@@ -731,7 +735,7 @@ fn rust_plan(
             root: cwd.clone(),
             steps: vec![RunStep {
                 kind: StepKind::Run,
-                label: format!("run {filename}"),
+                label: t!("run {filename}", filename = filename).to_string(),
                 command_line,
                 cwd,
             }],
@@ -762,22 +766,23 @@ fn rust_plan(
         steps: vec![
             RunStep {
                 kind: StepKind::Build,
-                label: format!("build {filename}"),
+                label: t!("build {filename}", filename = filename).to_string(),
                 command_line: build_line,
                 cwd: cwd.clone(),
             },
             RunStep {
                 kind: StepKind::Run,
-                label: format!("run {filename}"),
+                label: t!("run {filename}", filename = filename).to_string(),
                 command_line: run_line,
                 cwd,
             },
         ],
         pending_binary: None,
         source,
-        note: Some(format!(
-            "{filename} is not inside a crate, so it is compiled with rustc and the binary is started on its own."
-        )),
+        note: Some(
+            t!("{filename} is not inside a crate, so it is compiled with rustc and the binary is started on its own.", filename = filename)
+                .to_string(),
+        ),
     })
 }
 
@@ -802,7 +807,7 @@ fn go_plan(
         root: cwd.clone(),
         steps: vec![RunStep {
             kind: StepKind::Run,
-            label: format!("run {filename}"),
+            label: t!("run {filename}", filename = filename).to_string(),
             command_line: format!("go run {}", quote(&path, is_windows)),
             cwd,
         }],
@@ -848,13 +853,13 @@ fn java_plan(
         steps: vec![
             RunStep {
                 kind: StepKind::Build,
-                label: format!("build {filename}"),
+                label: t!("build {filename}", filename = filename).to_string(),
                 command_line: build_line,
                 cwd: cwd.clone(),
             },
             RunStep {
                 kind: StepKind::Run,
-                label: format!("run {filename}"),
+                label: t!("run {filename}", filename = filename).to_string(),
                 command_line: run_line,
                 cwd,
             },
@@ -947,14 +952,14 @@ fn cmake_plan(
     if !build_dir.is_dir() {
         steps.push(RunStep {
             kind: StepKind::Configure,
-            label: format!("configure {}", project_name(cmake_root)),
+            label: t!("configure {project}", project = project_name(cmake_root)).to_string(),
             command_line: "cmake -S . -B build".to_owned(),
             cwd: cmake_root.to_path_buf(),
         });
     }
     steps.push(RunStep {
         kind: StepKind::Build,
-        label: format!("build {}", project_name(cmake_root)),
+        label: t!("build {project}", project = project_name(cmake_root)).to_string(),
         command_line: "cmake --build build".to_owned(),
         cwd: cmake_root.to_path_buf(),
     });
@@ -969,11 +974,14 @@ fn cmake_plan(
             target: cmake_target(cmake_root),
         }),
         source,
-        note: Some(format!(
-            "{} belongs to a CMake project; building {} and running its executable.",
-            file_name(request.file),
-            project_name(cmake_root)
-        )),
+        note: Some(
+            t!(
+                "{filename} belongs to a CMake project; building {project} and running its executable.",
+                filename = file_name(request.file),
+                project = project_name(cmake_root)
+            )
+            .to_string(),
+        ),
     })
 }
 
@@ -986,15 +994,16 @@ pub fn cmake_run_step(
 ) -> Result<RunStep, RunError> {
     let program = find_cmake_binary(&binary.build_dir, binary.target.as_deref()).ok_or(
         RunError::NoCommand {
-            language: format!(
-                "the CMake project at {} (its build produced no executable named by an add_executable target)",
-                project_root.display()
-            ),
+            language: t!(
+                "the CMake project at {path} (its build produced no executable named by an add_executable target)",
+                path = project_root.display().to_string()
+            )
+            .to_string(),
         },
     )?;
     Ok(RunStep {
         kind: StepKind::Run,
-        label: format!("run {}", project_name(project_root)),
+        label: t!("run {project}", project = project_name(project_root)).to_string(),
         command_line: with_utf8_output(run_program_line(&program, is_windows), is_windows),
         cwd: project_root.to_path_buf(),
     })

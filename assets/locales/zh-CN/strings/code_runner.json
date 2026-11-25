@@ -1,0 +1,13 @@
+{
+  "{filename} belongs to a CMake project; building {project} and running its executable.": "{filename} 属于一个 CMake 工程；将构建 {project} 并运行它的可执行文件。",
+  "{filename} is not a binary target of the crate at {crate_root}, so the run builds and starts its default target.": "{filename} 不是 {crate_root} 处 crate 的二进制目标，因此运行时会构建并启动它的默认目标。",
+  "{filename} is not inside a crate, so it is compiled with rustc and the binary is started on its own.": "{filename} 不在任何 crate 内，因此会用 rustc 单独编译，并单独启动生成的二进制文件。",
+  "{main} has main, so all {count} {language} files in {project} are compiled together and run as one program.": "{main} 中含有 main 函数，因此 {project} 里的 {count} 个 {language} 文件会一起编译，作为一个程序运行。",
+  "build {filename}": "构建 {filename}",
+  "build {project}": "构建 {project}",
+  "configure {project}": "配置 {project}",
+  "debug {filename}": "调试 {filename}",
+  "run {filename}": "运行 {filename}",
+  "run {project}": "运行 {project}",
+  "the CMake project at {path} (its build produced no executable named by an add_executable target)": "{path} 处的 CMake 工程（构建后没有产生由 add_executable 目标命名的可执行文件）"
+}

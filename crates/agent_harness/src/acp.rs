@@ -13,6 +13,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use i18n::t;
 use serde_json::{json, Value};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
@@ -1184,7 +1185,7 @@ async fn drive_inner(
                             "cancelled" => final_status = DoneStatus::Interrupted,
                             "refusal" => {
                                 final_status = DoneStatus::Errored;
-                                final_error = Some("The agent refused the request.".to_owned());
+                                final_error = Some(t!("The agent refused the request.").to_string());
                             }
                             _ => final_status = DoneStatus::Completed,
                         }
@@ -1209,7 +1210,7 @@ async fn drive_inner(
                     }
                     Some(Incoming::Eof) | None => {
                         final_status = DoneStatus::Errored;
-                        final_error = Some("The agent exited before finishing.".to_owned());
+                        final_error = Some(t!("The agent exited before finishing.").to_string());
                         break;
                     }
                 }
@@ -1234,11 +1235,12 @@ async fn drive_inner(
             &session_id,
         ) {
             final_status = DoneStatus::Errored;
-            final_error = Some(format!("The model request failed: {detail}"));
+            final_error = Some(t!("The model request failed: {detail}", detail = detail).to_string());
         } else if !saw_output {
             final_status = DoneStatus::Errored;
             final_error = Some(
-                "The agent finished without returning any output. The model request may have failed (invalid API key, expired key, or network error).".to_owned(),
+                t!("The agent finished without returning any output. The model request may have failed (invalid API key, expired key, or network error).")
+                    .to_string(),
             );
         }
     }

@@ -1,0 +1,8 @@
+{
+  "Command: {command}": "命令：{command}",
+  "Task `{label}` {status}": "任务 `{label}` {status}",
+  "finished": "已结束",
+  "finished successfully": "已成功完成",
+  "finished with exit code: {code}": "已结束，退出码 {code}",
+  "terminated by signal: {signal}": "被信号 {signal} 终止"
+}
