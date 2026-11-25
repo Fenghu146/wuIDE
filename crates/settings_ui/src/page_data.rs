@@ -2793,7 +2793,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         ]
     }
 
-    fn diagnostics_section() -> [SettingsPageItem; 3] {
+    fn diagnostics_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SectionHeader(n!("Diagnostics")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -2830,6 +2830,30 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                             .diagnostics
                             .get_or_insert_default()
                             .include_warnings = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Translate Diagnostics with Model"),
+                description: n!(
+                    "Show a Translate to Chinese button on diagnostics. Each click sends one request to your configured model and counts against your usage."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("diagnostics.translate_with_model"),
+                    pick: |settings_content| {
+                        settings_content
+                            .diagnostics
+                            .as_ref()?
+                            .translate_with_model
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .diagnostics
+                            .get_or_insert_default()
+                            .translate_with_model = value;
                     },
                 }),
                 metadata: None,

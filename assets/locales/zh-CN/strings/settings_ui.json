@@ -1135,5 +1135,7 @@
   "Auto-Archive After": "自动归档时间",
   "Days without a new message before a chat is archived. Between 7 and 365.": "对话有多少天没有新消息后会被归档。取值 7 到 365。",
   "Smart Titles": "智能标题",
-  "Name each new chat with your agent after its first reply. This sends one request through your agent and counts against your plan; it usually takes 2–10 seconds, and if it fails the title from your first message stays. Right-click a chat to rename it with your agent once.": "对话第一轮回复结束后，用你的智能体给它起个名字。这会通过你的智能体发起一次请求，计入你的套餐额度；通常需要 2–10 秒，失败时保留首条消息生成的标题。也可以右键某条对话，单次让智能体重命名。"
+  "Name each new chat with your agent after its first reply. This sends one request through your agent and counts against your plan; it usually takes 2–10 seconds, and if it fails the title from your first message stays. Right-click a chat to rename it with your agent once.": "对话第一轮回复结束后，用你的智能体给它起个名字。这会通过你的智能体发起一次请求，计入你的套餐额度；通常需要 2–10 秒，失败时保留首条消息生成的标题。也可以右键某条对话，单次让智能体重命名。",
+  "Translate Diagnostics with Model": "用模型翻译诊断",
+  "Show a Translate to Chinese button on diagnostics. Each click sends one request to your configured model and counts against your usage.": "在诊断上显示「译成中文」按钮。每点一次都会向你的模型发起一次请求，会计入你的额度。"
 }

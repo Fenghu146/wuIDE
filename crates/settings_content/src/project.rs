@@ -740,6 +740,14 @@ pub struct DiagnosticsSettingsContent {
     /// Default: true
     pub include_warnings: Option<bool>,
 
+    /// Whether diagnostics offer a button that translates their message into Simplified Chinese with your model.
+    /// Every click sends one request to your configured model and counts against your usage.
+    ///
+    /// 是否在诊断上显示「译成中文」按钮，用你的模型把诊断翻译成简体中文。每点一次都会向你的模型发起一次请求，会计入你的额度。
+    ///
+    /// Default: false
+    pub translate_with_model: Option<bool>,
+
     /// Settings for using LSP pull diagnostics mechanism in WuIDE.
     pub lsp_pull_diagnostics: Option<LspPullDiagnosticsSettingsContent>,
 

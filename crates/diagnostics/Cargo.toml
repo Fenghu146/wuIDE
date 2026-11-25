@@ -13,6 +13,7 @@ path = "src/diagnostics.rs"
 doctest = false
 
 [dependencies]
+agent_chat.workspace = true
 anyhow.workspace = true
 collections.workspace = true
 ctor.workspace = true
@@ -26,6 +27,7 @@ language.workspace = true
 log.workspace = true
 lsp.workspace = true
 markdown.workspace = true
+paths.workspace = true
 project.workspace = true
 rand.workspace = true
 serde_json.workspace = true

@@ -14,6 +14,7 @@ use i18n::t;
 use language::{BufferId, Diagnostic, DiagnosticEntryRef, LanguageRegistry};
 use lsp::DiagnosticSeverity;
 use markdown::{CopyButtonVisibility, Markdown, MarkdownElement};
+use project::project_settings::ProjectSettings;
 use settings::Settings;
 use text::Point;
 use theme_settings::ThemeSettings;
@@ -22,6 +23,7 @@ use util::maybe;
 use wu_actions::{AddDiagnosticsToChat, DiagnosticCitation};
 
 use crate::toolbar_controls::DiagnosticsToolbarEditor;
+use crate::translation::{self, TranslationChunk, TranslationId};
 
 pub struct DiagnosticRenderer;
 
@@ -44,56 +46,85 @@ impl DiagnosticRenderer {
         let group_id = primary.diagnostic.group_id;
         let mut results = vec![];
         for entry in diagnostic_group.iter() {
-            let mut markdown = Self::markdown(&entry.diagnostic);
-            if entry.diagnostic.is_primary {
+            let message = Self::markdown(&entry.diagnostic);
+            let mut rest = String::new();
+            let translation = if entry.diagnostic.is_primary {
                 let diagnostic = &primary.diagnostic;
-                append_source_and_code(&mut markdown, diagnostic);
+                append_source_and_code(&mut rest, diagnostic);
 
                 for (ix, entry) in diagnostic_group.iter().enumerate() {
                     if entry.range.start.row.abs_diff(primary.range.start.row) >= 5 {
-                        markdown.push_str(&format!("\n- {}: [", t!("hint")));
-                        markdown.push_str(&Markdown::escape(entry.diagnostic.message.as_str()));
-                        markdown.push_str(&format!(
+                        rest.push_str(&format!("\n- {}: [", t!("hint")));
+                        rest.push_str(&Markdown::escape(entry.diagnostic.message.as_str()));
+                        rest.push_str(&format!(
                             "](file://#diagnostic-{buffer_id}-{group_id}-{ix})\n",
                         ))
                     }
                 }
 
-                results.push(DiagnosticBlock {
-                    initial_range: primary.range.clone(),
-                    severity: primary.diagnostic.severity,
-                    count: 1,
-                    diagnostics_editor: diagnostics_editor.clone(),
-                    copy_message: primary.diagnostic.message.as_shared_string().clone(),
-                    citation: citation_path
-                        .map(|path| citation_for(path, primary.range.start, &primary.diagnostic)),
-                    markdown: cx.new(|cx| {
-                        Markdown::new(markdown.into(), language_registry.clone(), None, cx)
-                    }),
-                });
+                Some(TranslationId {
+                    buffer_id,
+                    group_id,
+                    index: primary_ix,
+                })
             } else {
-                append_source_and_code(&mut markdown, entry.diagnostic);
+                append_source_and_code(&mut rest, entry.diagnostic);
 
-                markdown.push_str(&format!(
+                rest.push_str(&format!(
                     " ([{}](file://#diagnostic-{buffer_id}-{group_id}-{primary_ix}))",
                     t!("back")
                 ));
-                results.push(DiagnosticBlock {
-                    initial_range: entry.range.clone(),
-                    severity: entry.diagnostic.severity,
-                    count: 1,
-                    diagnostics_editor: diagnostics_editor.clone(),
-                    copy_message: entry.diagnostic.message.as_shared_string().clone(),
-                    citation: citation_path
-                        .map(|path| citation_for(path, entry.range.start, &entry.diagnostic)),
-                    markdown: cx.new(|cx| {
-                        Markdown::new(markdown.into(), language_registry.clone(), None, cx)
-                    }),
-                });
-            }
+                None
+            };
+
+            let chunks = vec![TranslationChunk {
+                message,
+                rest,
+                diagnostic: translation,
+            }];
+            results.push(DiagnosticBlock {
+                initial_range: entry.range.clone(),
+                severity: entry.diagnostic.severity,
+                count: 1,
+                diagnostics_editor: diagnostics_editor.clone(),
+                copy_message: entry.diagnostic.message.as_shared_string().clone(),
+                citation: citation_path
+                    .map(|path| citation_for(path, entry.range.start, &entry.diagnostic)),
+                markdown: Self::markdown_entity(chunks.clone(), language_registry.clone(), cx),
+                chunks,
+            });
         }
 
         results
+    }
+
+    /// The markdown of one diagnostic, with its translation state already
+    /// applied, registered so that a translation arriving later can rewrite
+    /// it in place instead of waiting for the block to be rebuilt.
+    fn markdown_entity(
+        chunks: Vec<TranslationChunk>,
+        language_registry: Option<Arc<LanguageRegistry>>,
+        cx: &mut App,
+    ) -> Entity<Markdown> {
+        let translations = translation::translations(cx);
+        let enabled = ProjectSettings::get_global(cx)
+            .diagnostics
+            .translate_with_model;
+        let source = match &translations {
+            Some(translations) => translations.read(cx).source(&chunks, enabled),
+            None => chunks
+                .iter()
+                .map(|chunk| format!("{}{}", chunk.message, chunk.rest))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        };
+        let markdown = cx.new(|cx| Markdown::new(source.into(), language_registry, None, cx));
+        if let Some(translations) = translations {
+            translations.update(cx, |translations, _| {
+                translations.register_view(&markdown, chunks)
+            });
+        }
+        markdown
     }
 
     fn markdown(diagnostic: &Diagnostic) -> String {
@@ -140,11 +171,11 @@ impl DiagnosticRenderer {
                 merged.push(block);
                 continue;
             };
-            let mut markdown = existing.markdown.read(cx).source().to_string();
-            markdown.push_str("\n\n");
-            markdown.push_str(block.markdown.read(cx).source());
+            let mut chunks = existing.chunks.clone();
+            chunks.extend(block.chunks);
             existing.markdown =
-                cx.new(|cx| Markdown::new(markdown.into(), language_registry.clone(), None, cx));
+                Self::markdown_entity(chunks.clone(), language_registry.clone(), cx);
+            existing.chunks = chunks;
             existing.count += block.count;
         }
         merged
@@ -310,6 +341,9 @@ pub(crate) struct DiagnosticBlock {
     /// instead of silently disappearing behind each other.
     pub(crate) count: usize,
     pub(crate) markdown: Entity<Markdown>,
+    /// The markdown is built from these, so a translation can be applied to
+    /// it again without rebuilding the block.
+    pub(crate) chunks: Vec<TranslationChunk>,
     pub(crate) diagnostics_editor: Option<Arc<dyn DiagnosticsToolbarEditor>>,
     pub(crate) copy_message: SharedString,
     /// Present when the diagnostic can be cited in a chat, which needs the file
@@ -463,6 +497,10 @@ impl DiagnosticBlock {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) {
+        if let Some((action, id)) = translation::parse_link(&link) {
+            translation::handle_link(editor, action, id, cx);
+            return;
+        }
         let Some(diagnostic_link) = link.strip_prefix("file://#diagnostic-") else {
             let workspace = editor.workspace();
             editor::hover_popover::open_markdown_url(workspace, link, window, cx);

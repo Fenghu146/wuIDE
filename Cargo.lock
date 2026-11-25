@@ -2919,6 +2919,7 @@ dependencies = [
 name = "diagnostics"
 version = "0.1.0"
 dependencies = [
+ "agent_chat",
  "anyhow",
  "collections",
  "ctor",
@@ -2932,6 +2933,7 @@ dependencies = [
  "log",
  "lsp",
  "markdown",
+ "paths",
  "pretty_assertions",
  "project",
  "rand 0.9.4",

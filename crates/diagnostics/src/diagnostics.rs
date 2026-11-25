@@ -3,6 +3,7 @@ mod toolbar_controls;
 
 mod buffer_diagnostics;
 mod diagnostic_renderer;
+mod translation;
 
 #[cfg(test)]
 mod diagnostics_tests;
@@ -72,6 +73,7 @@ impl Global for IncludeWarnings {}
 
 pub fn init(cx: &mut App) {
     editor::set_diagnostic_renderer(diagnostic_renderer::DiagnosticRenderer {}, cx);
+    translation::init(cx);
     cx.observe_new(ProjectDiagnosticsEditor::register).detach();
     cx.observe_new(BufferDiagnosticsEditor::register).detach();
 }

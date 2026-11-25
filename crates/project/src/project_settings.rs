@@ -458,6 +458,10 @@ pub struct DiagnosticsSettings {
     /// Whether or not to include warning diagnostics.
     pub include_warnings: bool,
 
+    /// Whether diagnostics offer a button that translates their message into
+    /// Simplified Chinese with the user's model.
+    pub translate_with_model: bool,
+
     /// Settings for using LSP pull diagnostics mechanism in Zed.
     pub lsp_pull_diagnostics: LspPullDiagnosticsSettings,
 
@@ -609,6 +613,7 @@ impl Settings for ProjectSettings {
             diagnostics: DiagnosticsSettings {
                 button: diagnostics.button.unwrap(),
                 include_warnings: diagnostics.include_warnings.unwrap(),
+                translate_with_model: diagnostics.translate_with_model.unwrap(),
                 lsp_pull_diagnostics: LspPullDiagnosticsSettings {
                     enabled: lsp_pull_diagnostics.enabled.unwrap(),
                     debounce_ms: lsp_pull_diagnostics.debounce_ms.unwrap().0,

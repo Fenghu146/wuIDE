@@ -20,6 +20,35 @@ pub fn generate_commit_message(
     languages: Arc<LanguageRegistry>,
     cx: &mut App,
 ) -> Task<Result<String>> {
+    let work = run_prompt_once(prompt, cwd, languages, cx);
+    cx.background_spawn(async move {
+        work.await.map_err(|failure| match failure {
+            OneShotFailure::NoAgent => anyhow!(t!(
+                "Install Claude Code, Codex or OpenCode to write commit messages."
+            )),
+            OneShotFailure::Failed(message) => anyhow!(message),
+        })
+    })
+}
+
+/// Why a request that is not part of a chat produced no reply.
+#[derive(Debug, Clone)]
+pub enum OneShotFailure {
+    /// No agent is configured, or none of the configured ones is installed.
+    NoAgent,
+    /// The agent ran and failed, or stopped without replying.
+    Failed(String),
+}
+
+/// Runs one throwaway request and returns the reply, for callers that need a
+/// model answer without a chat: commit messages, smart titles, diagnostic
+/// translations. Nothing is written to the chat history.
+pub fn run_prompt_once(
+    prompt: String,
+    cwd: PathBuf,
+    languages: Arc<LanguageRegistry>,
+    cx: &mut App,
+) -> Task<Result<String, OneShotFailure>> {
     let store = AgentStore::global(languages, cx);
     let settings = AgentChatSettings::get_global(cx);
     let chosen = settings.commit_message.agent;
@@ -56,17 +85,20 @@ pub fn generate_commit_message(
             .into_iter()
             .find(|candidate| !checks_install || candidate.harness.installed());
         let Some(candidate) = candidate else {
-            return Err(anyhow!(t!(
-                "Install Claude Code, Codex or OpenCode to write commit messages."
-            )));
+            return Err(OneShotFailure::NoAgent);
         };
         let model = match chosen_model {
             Some(model) => Some(model),
             None => small_model(&candidate).await,
         };
-        run_once(candidate.kind, candidate.harness, model, prompt, cwd).await
+        run_once(candidate.kind, candidate.harness, model, prompt, cwd)
+            .await
+            .map_err(|error| OneShotFailure::Failed(error.to_string()))
     });
-    cx.background_spawn(async move { work.await? })
+    cx.background_spawn(async move {
+        work.await
+            .map_err(|error| OneShotFailure::Failed(error.to_string()))?
+    })
 }
 
 struct Candidate {
