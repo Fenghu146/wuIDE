@@ -2,6 +2,7 @@
 
 set -euo pipefail
 source script/lib/blob-store.sh
+source script/lib/timeout.sh
 
 build_flag="--release"
 # Extra cargo features for the app binary. Machines without Xcode (no `xcrun metal`)
@@ -96,6 +97,9 @@ fi
 
 # Generate the licenses first, so they can be baked into the binaries
 if [[ -z "${WU_SKIP_LICENSES:-}" ]]; then
+    # Fetch the crates as their own step, so the fetch cargo-about would do
+    # silently is a step that shows progress and can time out by name.
+    prefetch_crates
     script/generate-licenses
 fi
 

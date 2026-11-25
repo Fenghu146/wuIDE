@@ -2,6 +2,7 @@
 
 set -euxo pipefail
 source script/lib/blob-store.sh
+source script/lib/timeout.sh
 
 # Function for displaying help info
 help_info() {
@@ -67,7 +68,10 @@ fi
 # Fetch Pi's Node runtime before the long build, so a network failure is quick.
 script/fetch-node "${target_triple}"
 
-# Generate the licenses first, so they can be baked into the binaries
+# Generate the licenses first, so they can be baked into the binaries. Fetch the
+# crates as their own step, so the fetch cargo-about would do silently is a step
+# that shows progress and can time out by name.
+prefetch_crates
 script/generate-licenses
 
 if "$rustup_installed"; then

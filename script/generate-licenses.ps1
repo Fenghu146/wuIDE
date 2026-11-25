@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+. "$PSScriptRoot/lib/timeout.ps1"
 
 $CARGO_ABOUT_VERSION="0.8.2"
 $outputFile=$args[0] ? $args[0] : "$(Get-Location)/assets/licenses.md"
@@ -34,9 +35,14 @@ if ($needsInstall) {
 
 Write-Host "Generating cargo licenses"
 
+$licensesTimeoutSeconds = if ($env:LICENSES_TIMEOUT_SECONDS) { [int]$env:LICENSES_TIMEOUT_SECONDS } else { 1200 }
 $failFlag = $env:ALLOW_MISSING_LICENSES ? "--fail" : ""
 $args = @('about', 'generate', $failFlag, '-c', 'script/licenses/zed-licenses.toml', $templateFile, '-o', $outputFile) | Where-Object { $_ }
-cargo @args
+# `cargo about` can stall with nothing printed at all (see the note in
+# script/generate-licenses). The bundlers fetch the crates first, so a stall here
+# is cargo-about itself; bound it, so that fails the bundle in 20 minutes rather
+# than hanging until the job timeout.
+Invoke-WithTimeout -Command (@('cargo') + $args) -TimeoutSeconds $licensesTimeoutSeconds -TimeoutMessage "licenses generation stalled; see the cargo about output above (killed after ${licensesTimeoutSeconds}s)"
 
 Write-Host "Applying replacements"
 $replacements = @{

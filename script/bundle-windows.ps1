@@ -8,6 +8,7 @@ Param(
 # https://stackoverflow.com/questions/57949031/powershell-script-stops-if-program-fails-like-bash-set-o-errexit
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+. "$PSScriptRoot/lib/timeout.ps1"
 
 $buildSuccess = $false
 
@@ -125,6 +126,9 @@ function PrepareForBundle {
 }
 
 function GenerateLicenses {
+    # Fetch the crates as their own step, so the fetch cargo-about would do
+    # silently is a step that shows progress and can time out by name.
+    Invoke-CratePrefetch
     . $PSScriptRoot/generate-licenses.ps1
 }
 
