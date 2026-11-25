@@ -370,21 +370,47 @@ cwd                  : 仓库根
    在没有 `amp-bin/wulease.exe` 时回落到 `script/lease` 并打印一行提示。两条路都不会
    让提交悄悄失效。
 
-## 附：一个与本轮无关的老 bug
+## 附一：未加引号的 heredoc 会执行消息里的命令（已修）
 
-`.githooks/pre-commit` 第 23 行用的是**未加引号**的 `<<EOF`，而第 34 行的
-"A clean `` `git merge` `` does not run this hook at all." 里那对反引号没有转义，于是
-bash 会**真的执行 `git merge`**，再把空输出填进那句话。实测：
+`.githooks/pre-commit` 的消息用的是**未加引号**的 `cat >&2 <<EOF`，正文里那句
+"A clean `` `git merge` `` does not run this hook at all" 的反引号因此被当成命令替换，
+bash **真的执行了 `git merge`**，再把空输出填进句子。实测（假的 git 记录调用）：
 
 ```
-$ cat >&2 <<EOF
-finishes a conflicted merge. A clean `git merge` does not run this hook at all.
-EOF
 fake git was called with: [merge]
+pre-commit: the shared main checkout is not a place to edit.
 finishes a conflicted merge. A clean  does not run this hook at all.
 ```
 
-后果：在主检出里手敲提交、且没设 `AMP_MAIN_COMMIT=1` 时，钩子会先跑一次 `git merge`。
-若当前分支有 upstream 且落后，这一次 `merge` 会真的合进来。改成 `<<'EOF'` 即可。
+后果比输出难看严重：在主检出里手敲提交、未设 `AMP_MAIN_COMMIT=1` 时，钩子会先跑一次
+`git merge`；本地 `main` 落后 `origin/main` 时，这一步会**把 `main` 快进**——正是
+"主检出只做合并、合并由人决定"要防的事，而且完全静默。`f88814ea` 上就存在。
 
-这是 `f88814ea` 上就存在的问题，本轮没有改它。
+修法是**只转义反引号**，而不是把分隔符改成 `<<'EOF'`：这段消息中间要展开
+`  $toplevel`，引号版本会把变量变成字面量。
+
+`script/hook-test` 把这一类钉住：假 `git` 放 PATH 最前、**直接运行钩子**、记录每次调用，
+断言没有 `merge`、也没有白名单（`rev-parse`、`worktree`）之外的子命令。用 HEAD 里未修的
+版本跑它，5 项里 3 项会红（含"没有运行 `git merge`"），所以它不是空转的测试。
+
+规则写进了 `docs/PARALLEL-DEV.md` 的"钩子里的文本不要被 shell 展开"。
+
+## 附二：一次推送多个 commit 会撞上 GitHub 500
+
+一次推三个 commit 时远端连续返回：
+
+```
+remote: Internal Server Error
+remote: Request ID 8AF6:55548:3C4749:5F53DE:6B063A26
+ ! [remote rejected]   feat/lease-go -> feat/lease-go (Internal Server Error)
+```
+
+同一时刻 `git ls-remote` 正常、`git push --dry-run` 也正确列出待推范围，状态页显示全部
+正常——所以不是网络或认证问题，是接收端对这次上传的瞬时故障。**逐段推即可绕过**：
+
+```sh
+git push origin <sha1>:refs/heads/<branch>
+git push origin <sha2>:refs/heads/<branch>
+```
+
+三段都一次成功，不需要 force，也不需要重开分支。
