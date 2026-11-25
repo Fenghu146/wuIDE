@@ -65,22 +65,8 @@ if command -v rustup >/dev/null 2>&1; then
     rustup_installed=true
 fi
 
-# Fetch Pi's Node runtime before the long build, so a network failure is quick.
-script/fetch-node "${target_triple}"
-
-# Generate the licenses first, so they can be baked into the binaries. Fetch the
-# crates as their own step, so the fetch cargo-about would do silently is a step
-# that shows progress and can time out by name.
-prefetch_crates
-script/generate-licenses
-
-if "$rustup_installed"; then
-    rustup target add "$remote_server_triple"
-fi
-
 export CC=${CC:-$(which clang)}
 
-# Build binary in release mode
 # We need lld to link libwebrtc.a successfully on aarch64-linux.
 # NOTE: Since RUSTFLAGS env var overrides all .cargo/config.toml rustflags
 # (see https://github.com/rust-lang/cargo/issues/5376), the
@@ -90,6 +76,53 @@ if [[ "$(uname -m)" == "aarch64" ]]; then
 else
     export RUSTFLAGS="${RUSTFLAGS:-} -C link-args=-Wl,--disable-new-dtags,-rpath,\$ORIGIN/../lib"
 fi
+
+# Builds the standalone remote_server binary that clients download. It keeps its
+# own cargo invocation so feature unification with the editor cannot change the
+# dynamic libraries it links. CI builds it in a job of its own and skips it here
+# with WU_SKIP_REMOTE_SERVER=1; WU_REMOTE_SERVER_ONLY=1 builds nothing else.
+build_remote_server() {
+    if "$rustup_installed"; then
+        rustup target add "$remote_server_triple"
+    fi
+    if [[ "$remote_server_triple" == "$musl_triple" ]]; then
+        export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static"
+        musl_cc_var="CC_$(echo "$remote_server_triple" | tr '-' '_')"
+        export "$musl_cc_var"=musl-gcc
+    fi
+    cargo --config .cargo/bundle-config.toml build --release --target "${remote_server_triple}" --package remote_server
+
+    # We use llvm-objcopy because GNU objcopy on older distros (e.g. Ubuntu 20.04)
+    # doesn't understand CREL sections produced by newer LLVM.
+    llvm-objcopy --strip-debug --discard-all "${target_dir}/${remote_server_triple}/release/remote_server"
+
+    # Ensure that remote_server does not depend on libssl nor libcrypto, as we got rid of these deps.
+    if ldd "${target_dir}/${remote_server_triple}/release/remote_server" | grep -q 'libcrypto\|libssl'; then
+        if [[ "$remote_server_triple" == *-musl ]]; then
+            echo "Error: remote_server still depends on libssl or libcrypto" && exit 1
+        else
+            echo "Info: Using non-musl remote-server build."
+        fi
+    fi
+
+    gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/wu-remote-server-linux-$(uname -m).gz"
+}
+
+if [[ -n "${WU_REMOTE_SERVER_ONLY:-}" ]]; then
+    build_remote_server
+    exit 0
+fi
+
+# Fetch Pi's Node runtime before the long build, so a network failure is quick.
+script/fetch-node "${target_triple}"
+
+# Generate the licenses first, so they can be baked into the binaries. Fetch the
+# crates as their own step, so the fetch cargo-about would do silently is a step
+# that shows progress and can time out by name.
+prefetch_crates
+script/generate-licenses
+
+# Build binary in release mode
 lld=$("$CC" -print-prog-name=ld.lld)
 lld_version=$("$lld" --version)
 if [[ ! "$lld_version" =~ LLD\ ([0-9]+)\. ]] || (( BASH_REMATCH[1] < 12 )); then
@@ -103,29 +136,15 @@ if [[ "$(uname -m)" != "aarch64" ]]; then
 fi
 cargo --config .cargo/bundle-config.toml rustc --release --target "${target_triple}" --package wu --bin IDE -- -C linker="$CC" -C link-arg=-fuse-ld=lld ${icf_args[@]+"${icf_args[@]}"}
 cargo --config .cargo/bundle-config.toml build --release --target "${target_triple}" --package cli
-# Build remote_server in separate invocation to prevent feature unification from other crates
-# from influencing dynamic libraries required by it.
-if [[ "$remote_server_triple" == "$musl_triple" ]]; then
-    export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static"
-    musl_cc_var="CC_$(echo "$remote_server_triple" | tr '-' '_')"
-    export "$musl_cc_var"=musl-gcc
+
+if [[ -z "${WU_SKIP_REMOTE_SERVER:-}" ]]; then
+    build_remote_server
 fi
-cargo --config .cargo/bundle-config.toml build --release --target "${remote_server_triple}" --package remote_server
 
 # We use llvm-objcopy because GNU objcopy on older distros (e.g. Ubuntu 20.04)
 # doesn't understand CREL sections produced by newer LLVM.
 llvm-objcopy --strip-unneeded "${target_dir}/${target_triple}/release/IDE"
 llvm-objcopy --strip-debug --discard-all "${target_dir}/${target_triple}/release/cli"
-llvm-objcopy --strip-debug --discard-all "${target_dir}/${remote_server_triple}/release/remote_server"
-
-# Ensure that remote_server does not depend on libssl nor libcrypto, as we got rid of these deps.
-if ldd "${target_dir}/${remote_server_triple}/release/remote_server" | grep -q 'libcrypto\|libssl'; then
-    if [[ "$remote_server_triple" == *-musl ]]; then
-        echo "Error: remote_server still depends on libssl or libcrypto" && exit 1
-    else
-        echo "Info: Using non-musl remote-server build."
-    fi
-fi
 
 suffix=""
 if [ "$channel" != "stable" ]; then
@@ -263,5 +282,3 @@ rm -rf "${archive}"
 remove_match="ide(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
 ls "${target_dir}/release" | grep -E ${remove_match} | xargs -d "\n" -I {} rm -f "${target_dir}/release/{}" || true
 tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "ide$suffix.app"
-
-gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/wu-remote-server-linux-${arch}.gz"

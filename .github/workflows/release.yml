@@ -36,6 +36,8 @@ jobs:
       # Three jobs keeps the release build inside the runner's memory while
       # still using most of its cores.
       CARGO_BUILD_JOBS: "3"
+      # The `remote_server` job builds the server this bundle used to build.
+      WU_SKIP_REMOTE_SERVER: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -73,7 +75,6 @@ jobs:
           name: macos-${{ matrix.arch }}
           path: |
             target/${{ matrix.arch }}-apple-darwin/release/IDE-${{ matrix.arch }}.dmg
-            target/wu-remote-server-macos-${{ matrix.arch }}.gz
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
@@ -97,6 +98,8 @@ jobs:
       CC: clang
       CXX: clang++
       CARGO_BUILD_JOBS: "4"
+      # The `remote_server` job builds the server this bundle used to build.
+      WU_SKIP_REMOTE_SERVER: "1"
     steps:
       - uses: actions/checkout@v4
       # The release profile builds with `lto = "thin"` and `codegen-units = 1`,
@@ -124,13 +127,15 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: |
             target/release/ide-linux-${{ matrix.arch }}.tar.gz
-            target/wu-remote-server-linux-${{ matrix.arch }}.gz
           if-no-files-found: error
 
   bundle_windows:
     needs: check_version
     runs-on: windows-2022
     timeout-minutes: 300
+    env:
+      # The `remote_server` job builds the server this bundle used to build.
+      WU_SKIP_REMOTE_SERVER: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -146,11 +151,85 @@ jobs:
           name: windows-x86_64
           path: |
             target/IDE-x86_64.exe
-            target/wu-remote-server-windows-x86_64.gz
+          if-no-files-found: error
+
+  # Each bundle used to compile the remote server serially after the editor: on
+  # macOS and Linux under a feature set nothing else used, which recompiled part
+  # of the graph, and on Windows with 191 crates recompiled. Building it in a job
+  # of its own puts that work next to the editor builds instead of behind them,
+  # and every platform still runs the exact commands its bundle script used.
+  remote_server:
+    needs: check_version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            arch: aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - os: macos
+            arch: x86_64
+            runner: macos-15
+            target: x86_64-apple-darwin
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-22.04
+          - os: linux
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+          - os: windows
+            arch: x86_64
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      WU_REMOTE_SERVER_ONLY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install lld
+        if: matrix.os == 'macos'
+        run: brew install lld
+      - name: Install Linux dependencies
+        if: matrix.os == 'linux'
+        run: ./script/linux
+      - name: Use the stable release channel
+        if: matrix.os != 'windows'
+        run: echo stable > crates/wu/RELEASE_CHANNEL
+      - name: Use the stable release channel
+        if: matrix.os == 'windows'
+        run: Set-Content -Path crates/wu/RELEASE_CHANNEL -Value stable -NoNewline
+        shell: pwsh
+      - name: Build
+        if: matrix.os == 'macos'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          APPLE_NOTARIZATION_TEAM: ${{ secrets.APPLE_NOTARIZATION_TEAM }}
+        run: script/bundle-mac ${{ matrix.target }}
+      - name: Build
+        if: matrix.os == 'linux'
+        run: ./script/bundle-linux
+      - name: Build
+        if: matrix.os == 'windows'
+        run: script/bundle-windows.ps1 -Architecture ${{ matrix.arch }}
+        shell: pwsh
+      # The file name inside the artifact is the asset name the client asks for,
+      # and it sorts under the os/arch the bundle jobs used to upload it under.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remote-server-${{ matrix.os }}-${{ matrix.arch }}
+          path: target/wu-remote-server-${{ matrix.os }}-${{ matrix.arch }}.gz
           if-no-files-found: error
 
   release:
-    needs: [bundle_mac, bundle_linux, bundle_windows]
+    needs: [bundle_mac, bundle_linux, bundle_windows, remote_server]
     # Every job that uploads an asset gates the release. Publishing while one of
     # them failed ships a release that silently misses that asset, which is worse
     # than no release at all, so keep this list in sync with the upload steps
