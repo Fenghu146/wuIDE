@@ -201,3 +201,22 @@ Rules emerge from validated patterns, not one-off observations. The workflow is:
 1. Agent notes a pattern during a session.
 2. Team validates the pattern in code review.
 3. A dedicated commit adds the rule with context on *why* it exists.
+
+# This machine
+
+- The main checkout is `D:\wuIDE-main\wuIDE-main`. Builds write to `D:\cargo-target` (`CARGO_TARGET_DIR`), never to `<repo>\target`.
+- `bash` on PATH is WSL and cannot resolve `D:/...` paths. Run scripts with `"C:\Program Files\Git\bin\bash.exe"`.
+- A local build (`cargo build --profile release-fast -p wu --bin IDE`) produces `D:\cargo-target\release-fast\IDE.exe`. It needs `WU_AGENT_BIN_DIR` pointing at `crates\wu\resources\agents` and a working directory inside the repo, or the built-in agents will not resolve.
+- Release artifacts come from CI, never from a local build. The pre-tag gate is `script/pre-merge-check --release`.
+
+# Do not run the editor tests on this machine
+
+`cargo test -p editor` opens GPUI windows and has twice bug-checked this machine with `0x113 VIDEO_DXGKRNL_FATAL_ERROR` (NVIDIA driver). It passes in CI. Run it there.
+
+# macOS arm64 runners are capacity-constrained
+
+A job that never starts and reports `The job was not acquired by Runner of type hosted` is GitHub capacity, not a defect in this repository. Do not retry it in a loop; rerun at a quieter hour (US night, 08:00–10:00 Beijing).
+
+# The lease tool has two implementations
+
+The hook runs `.git/amp-bin/wulease.exe`, built from `script/lease-go/main.go`. `script/lease` is a legacy shell fallback whose `normalize()` already differs — it still widens `claim <dir>` to the parent directory. Change the Go one.
