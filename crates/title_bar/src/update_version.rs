@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use auto_update::{AutoUpdateStatus, AutoUpdater, UpdateCheckType};
+use auto_update::{AutoUpdateStatus, AutoUpdater, UpdateCheckType, digest_preview};
 use gpui::{Empty, Render};
 use i18n::t;
 use semver::Version;
@@ -43,6 +43,8 @@ impl UpdateVersion {
             AutoUpdateStatus::Idle => AutoUpdateStatus::Checking,
             AutoUpdateStatus::Checking => AutoUpdateStatus::Available {
                 version: Version::new(1, 99, 0),
+                digest: None,
+                release_url: None,
             },
             AutoUpdateStatus::Available { .. } => AutoUpdateStatus::Downloading {
                 version: Version::new(1, 99, 0),
@@ -101,10 +103,43 @@ impl Render for UpdateVersion {
             AutoUpdateStatus::Checking if self.update_check_type.is_manual() => {
                 UpdateButton::checking().into_any_element()
             }
-            AutoUpdateStatus::Available { version } => {
-                let tooltip = Self::version_tooltip_message(version);
+            AutoUpdateStatus::Available {
+                version,
+                digest,
+                release_url,
+            } => {
+                let tooltip_message = Self::version_tooltip_message(version);
+                let digest = digest.clone();
+                let release_url = release_url.clone();
+                let disclaimer = t!(
+                    "GitHub computes this digest from the release asset it hosts. It confirms your download matches that file, but it cannot prove the publisher is a trusted developer or that the release came from them."
+                );
+                let tooltip = Tooltip::element(move |_, _| {
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new(tooltip_message.clone()))
+                        .when_some(digest.clone(), |content, digest| {
+                            content.child(
+                                Label::new(t!(
+                                    "Release digest: {digest}",
+                                    digest = digest_preview(&digest)
+                                ))
+                                .size(LabelSize::Small),
+                            )
+                        })
+                        .when_some(release_url.clone(), |content, url| {
+                            content
+                                .child(Label::new(url).size(LabelSize::Small).color(Color::Muted))
+                        })
+                        .child(
+                            Label::new(disclaimer.clone())
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .into_any_element()
+                });
                 UpdateButton::new(IconName::ArrowCircle, t!("Update available"))
-                    .tooltip(tooltip)
+                    .tooltip_fn(tooltip)
                     .on_click(cx.listener(|this, _, _window, cx| this.start_update(cx)))
                     .with_dismiss()
                     .on_dismiss(cx.listener(|this, _, _window, cx| this.dismiss(cx)))

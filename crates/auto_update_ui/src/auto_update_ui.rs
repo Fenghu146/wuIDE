@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use auto_update::{AutoUpdateStatus, AutoUpdater, release_notes_url};
+use auto_update::{AutoUpdateStatus, AutoUpdater, digest_preview, release_notes_url};
 use gpui::{
     App, DismissEvent, EventEmitter, FocusHandle, Focusable, TaskExt, Window, actions,
     prelude::*,
@@ -8,7 +8,7 @@ use gpui::{
 use i18n::t;
 use release_channel::ReleaseChannel;
 use semver::Version;
-use ui::{AnnouncementToast, ListBulletItem, prelude::*};
+use ui::{AnnouncementToast, ButtonLink, CopyButton, ListBulletItem, prelude::*};
 use workspace::{
     Workspace,
     notifications::{
@@ -159,7 +159,12 @@ fn notify_when_update_available(cx: &mut App) {
     let mut announced_version: Option<Version> = None;
     cx.observe(&updater, move |updater, cx| {
         let status = updater.read(cx).status();
-        let AutoUpdateStatus::Available { version } = status else {
+        let AutoUpdateStatus::Available {
+            version,
+            digest,
+            release_url,
+        } = status
+        else {
             return;
         };
         // Polling runs every few hours; the same release must not be announced
@@ -168,12 +173,17 @@ fn notify_when_update_available(cx: &mut App) {
             return;
         }
         announced_version = Some(version.clone());
-        show_update_available(version, cx);
+        show_update_available(version, digest, release_url, cx);
     })
     .detach();
 }
 
-fn show_update_available(version: Version, cx: &mut App) {
+fn show_update_available(
+    version: Version,
+    digest: Option<String>,
+    release_url: Option<String>,
+    cx: &mut App,
+) {
     let Some(updater) = AutoUpdater::get(cx) else {
         return;
     };
@@ -184,39 +194,93 @@ fn show_update_available(version: Version, cx: &mut App) {
         app_name = app_name,
         version = version
     );
+    let digest_metadata = digest.map(|digest| {
+        (
+            t!("Release digest: {digest}", digest = digest_preview(&digest)),
+            digest,
+        )
+    });
+    let release_url = release_url.map(SharedString::from);
+    let has_metadata = digest_metadata.is_some() || release_url.is_some();
+    let disclaimer = t!(
+        "GitHub computes this digest from the release asset it hosts. It confirms your download matches that file, but it cannot prove the publisher is a trusted developer or that the release came from them."
+    );
 
     show_app_notification(
         NotificationId::unique::<UpdateAvailableNotification>(),
         cx,
         move |cx| {
+            let message = message.clone();
+            let digest_metadata = digest_metadata.clone();
+            let release_url = release_url.clone();
+            let disclaimer = disclaimer.clone();
             cx.new(|cx| {
-                MessageNotification::new(message.clone(), cx)
-                    .primary_message(t!("Download and Install"))
-                    .primary_on_click({
-                        let updater = updater.clone();
-                        move |_window, cx| {
-                            if let Some(updater) = updater.upgrade() {
-                                updater.update(cx, |updater, cx| {
-                                    updater.install_available_update(cx)
-                                });
-                            }
-                            cx.emit(DismissEvent);
+                MessageNotification::new_from_builder(cx, move |_, _| {
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new(message.clone()))
+                        .when(has_metadata, |content| {
+                            content.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .when_some(
+                                                digest_metadata.clone(),
+                                                |row, (preview, full_digest)| {
+                                                    row.child(
+                                                        Label::new(preview).size(LabelSize::Small),
+                                                    )
+                                                    .child(
+                                                        CopyButton::new(
+                                                            "update-available-digest",
+                                                            full_digest,
+                                                        )
+                                                        .tooltip_label(t!("Copy full digest")),
+                                                    )
+                                                },
+                                            )
+                                            .when_some(release_url.clone(), |row, url| {
+                                                row.child(
+                                                    ButtonLink::new(url.clone(), url)
+                                                        .label_size(LabelSize::Small),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        Label::new(disclaimer.clone())
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    ),
+                            )
+                        })
+                        .into_any_element()
+                })
+                .primary_message(t!("Download and Install"))
+                .primary_on_click({
+                    let updater = updater.clone();
+                    move |_window, cx| {
+                        if let Some(updater) = updater.upgrade() {
+                            updater.update(cx, |updater, cx| updater.install_available_update(cx));
                         }
-                    })
-                    .secondary_message(t!("Skip This Version"))
-                    .secondary_on_click({
-                        let updater = updater.clone();
-                        let version = version.clone();
-                        move |_window, cx| {
-                            if let Some(updater) = updater.upgrade() {
-                                updater.update(cx, |updater, cx| {
-                                    updater.skip_version(&version, cx).detach_and_log_err(cx);
-                                });
-                            }
-                            cx.emit(DismissEvent);
+                        cx.emit(DismissEvent);
+                    }
+                })
+                .secondary_message(t!("Skip This Version"))
+                .secondary_on_click({
+                    let updater = updater.clone();
+                    let version = version.clone();
+                    move |_window, cx| {
+                        if let Some(updater) = updater.upgrade() {
+                            updater.update(cx, |updater, cx| {
+                                updater.skip_version(&version, cx).detach_and_log_err(cx);
+                            });
                         }
-                    })
-                    .show_suppress_button(false)
+                        cx.emit(DismissEvent);
+                    }
+                })
+                .show_suppress_button(false)
             })
         },
     );

@@ -70,6 +70,15 @@
 - 智能体聊天里的思考动画用 `assets/icons/wu_mark.svg` 的单色遮罩（`crates/agent_chat/src/chat_style.rs` 的 `LOGO_PATH`，渐变扫光保留）；它和 `assets/icons/wu.svg` 内容一致，都是 `viewBox="0 0 24 24"` 的单个 `currentColor` 路径（所以 `LOGO_ASPECT` 是 1:1），只保留鲍伯短发、刘海转角、圆脸和肩线这些能认出人像的轮廓，眼睛高光、衬衫纽扣、小花等在遮罩里会糊成一团的细节都去掉了。`assets/icons/agent_pi.svg` 是 Pi 的方块像素图标。
 - `README.md` / `README.zh-CN.md` / `docs/INSTALL.md` / `NOTICE` / `.github/release/body.md` 里的产品名与文案同步为 WuIDE；下载链接和资产名保持原样。
 
+按上面的规则归类：
+
+| 类别 | 是否改成 WuIDE | 例子 |
+| --- | --- | --- |
+| 用户可见的显示名 | 是 | 窗口标题、关于面板、菜单 |
+| 持久化的设置/主题值 | 否（迁移成本） | 主题 `IDE Dark` |
+| 二进制/资产/scheme 标识符 | 否（兼容性） | `IDE.exe`、`wu://`、`wu::*` |
+| 翻译字符串 | 是（通过 locale 文件） | 条目数随版本变化，见 `assets/locales/zh-CN/` |
+
 ## 已知限制
 
 - **Pi 的 Node 运行时**：Windows 使用入库的 `node.exe`；macOS / Linux 由 `script/fetch-node` 在打包时下载对应架构的官方 Node（`crates/wu/resources/agents/node` 被 `.gitignore` 忽略）并校验 SHA256，因此打包机需要能访问 `nodejs.org`。打包脚本在缺少 `node`、`dsh-acp` 或 `node_modules` 时都会失败，不再发出缺少智能体的包。

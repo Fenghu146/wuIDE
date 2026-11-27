@@ -172,6 +172,8 @@ pub enum AutoUpdateStatus {
     /// download, so that installing always stays an explicit decision.
     Available {
         version: Version,
+        digest: Option<String>,
+        release_url: Option<String>,
     },
     Downloading {
         version: Version,
@@ -198,9 +200,17 @@ impl PartialEq for AutoUpdateStatus {
             (AutoUpdateStatus::Idle, AutoUpdateStatus::Idle) => true,
             (AutoUpdateStatus::Checking, AutoUpdateStatus::Checking) => true,
             (
-                AutoUpdateStatus::Available { version: v1 },
-                AutoUpdateStatus::Available { version: v2 },
-            ) => v1 == v2,
+                AutoUpdateStatus::Available {
+                    version: v1,
+                    digest: digest1,
+                    release_url: url1,
+                },
+                AutoUpdateStatus::Available {
+                    version: v2,
+                    digest: digest2,
+                    release_url: url2,
+                },
+            ) => v1 == v2 && digest1 == digest2 && url1 == url2,
             (
                 AutoUpdateStatus::Downloading { version: v1, .. },
                 AutoUpdateStatus::Downloading { version: v2, .. },
@@ -251,6 +261,8 @@ const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/Fenghu146/wu
 #[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+    #[serde(default)]
+    html_url: String,
     assets: Vec<GitHubReleaseAsset>,
 }
 
@@ -270,6 +282,29 @@ fn github_asset_name(asset: &str, os: &str, arch: &str) -> Result<String> {
         ("wu-remote-server", _) => Ok(format!("wu-remote-server-{os}-{arch}.gz")),
         _ => anyhow::bail!("no release asset for {asset} on {os}"),
     }
+}
+
+fn announcement_metadata(release: &GitHubRelease) -> (Option<String>, Option<String>) {
+    let digest = match github_asset_name("zed", OS, ARCH) {
+        Ok(asset_name) => release
+            .assets
+            .iter()
+            .find(|asset| asset.name == asset_name)
+            .and_then(|asset| asset.digest.as_deref())
+            .filter(|digest| !digest.is_empty())
+            .map(|digest| {
+                format!(
+                    "sha256:{}",
+                    digest.strip_prefix("sha256:").unwrap_or(digest)
+                )
+            }),
+        Err(error) => {
+            log::warn!("Auto Update: cannot name the asset for digest display: {error}");
+            None
+        }
+    };
+    let release_url = (!release.html_url.is_empty()).then(|| release.html_url.clone());
+    (digest, release_url)
 }
 
 struct MacOsUnmounter<'a> {
@@ -433,6 +468,17 @@ pub fn release_notes_url(cx: &mut App) -> Option<String> {
         ReleaseChannel::Dev => "https://github.com/Fenghu146/wuIDE/commits/main/".to_string(),
     };
     Some(url)
+}
+
+pub fn digest_preview(digest: &str) -> String {
+    let hex = digest.strip_prefix("sha256:").unwrap_or(digest);
+    let mut remaining = hex.chars();
+    let prefix: String = remaining.by_ref().take(12).collect();
+    if remaining.next().is_some() {
+        format!("sha256:{prefix}…")
+    } else {
+        format!("sha256:{prefix}")
+    }
 }
 
 pub fn view_release_notes(_: &ViewReleaseNotes, cx: &mut App) -> Option<()> {
@@ -646,7 +692,7 @@ impl AutoUpdater {
     /// Records `version` as skipped, so automatic checks stay quiet until a
     /// higher release shows up.
     pub fn skip_version(&mut self, version: &Version, cx: &mut Context<Self>) -> Task<Result<()>> {
-        if matches!(&self.status, AutoUpdateStatus::Available { version: available } if available == version)
+        if matches!(&self.status, AutoUpdateStatus::Available { version: available, .. } if available == version)
         {
             self.status = AutoUpdateStatus::Idle;
             cx.notify();
@@ -939,8 +985,11 @@ impl AutoUpdater {
                 }
             } else {
                 log::info!("Auto Update: announcing {newer_version}");
+                let (digest, release_url) = announcement_metadata(&release);
                 AutoUpdateStatus::Available {
                     version: newer_version,
+                    digest,
+                    release_url,
                 }
             };
             this.update(cx, |this, cx| {
@@ -1663,9 +1712,11 @@ mod tests {
                     let asset_name = github_asset_name("zed", OS, ARCH)?;
                     let release = serde_json::json!({
                         "tag_name": tag_name,
+                        "html_url": format!("https://github.com/Fenghu146/wuIDE/releases/tag/{tag_name}"),
                         "assets": [{
                             "name": asset_name,
                             "browser_download_url": download_url,
+                            "digest": format!("sha256:{:x}", Sha256::digest(b"<fake-zed-update>")),
                         }],
                     });
                     return Ok(Response::builder()
@@ -1716,6 +1767,10 @@ mod tests {
             status,
             AutoUpdateStatus::Available {
                 version: semver::Version::new(0, 100, 1),
+                digest: Some(format!("sha256:{:x}", Sha256::digest(b"<fake-zed-update>"))),
+                release_url: Some(
+                    "https://github.com/Fenghu146/wuIDE/releases/tag/v0.100.1".to_owned()
+                ),
             }
         );
 
@@ -1884,6 +1939,52 @@ mod tests {
 
         let downloaded_len = std::fs::metadata(&target_path).unwrap().len();
         assert_eq!(downloaded_len, content_length as u64);
+    }
+
+    #[test]
+    fn test_announcement_metadata_is_optional() {
+        let release: GitHubRelease = serde_json::from_value(serde_json::json!({
+            "tag_name": "v1.2.3",
+            "assets": [],
+        }))
+        .expect("a release without a URL or published digest still deserializes");
+
+        assert_eq!(announcement_metadata(&release), (None, None));
+    }
+
+    #[test]
+    fn test_empty_announcement_metadata_becomes_none() {
+        let asset_name = github_asset_name("zed", OS, ARCH).expect("test platform has an asset");
+        let release: GitHubRelease = serde_json::from_value(serde_json::json!({
+            "tag_name": "v1.2.3",
+            "html_url": "",
+            "assets": [{
+                "name": asset_name,
+                "browser_download_url": "https://test.example/empty",
+                "digest": "",
+            }],
+        }))
+        .expect("empty release metadata still deserializes");
+
+        assert!(release.html_url.is_empty());
+        assert_eq!(
+            release
+                .assets
+                .first()
+                .and_then(|asset| asset.digest.as_deref()),
+            Some("")
+        );
+        assert_eq!(announcement_metadata(&release), (None, None));
+    }
+
+    #[test]
+    fn test_digest_preview() {
+        assert_eq!(
+            digest_preview("sha256:0123456789abcdef0123456789abcdef"),
+            "sha256:0123456789ab…"
+        );
+        assert_eq!(digest_preview("0123456789abcdef"), "sha256:0123456789ab…");
+        assert_eq!(digest_preview("sha256:abc123"), "sha256:abc123");
     }
 
     #[test]
