@@ -26,7 +26,11 @@
 
 (field_declaration
   type: (_) @context
-  declarator: (field_identifier) @name) @item
+  declarator: [
+    (field_identifier) @name
+    (array_declarator
+      declarator: (field_identifier) @name)
+  ]) @item
 
 (type_definition
   "typedef" @context

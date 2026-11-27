@@ -85,10 +85,12 @@ const STALE_DIAGNOSTICS_SNAPSHOT =
   "The diagnostics snapshot cannot be read, probably because Wu wrote it in a different " +
   "format. Ask the user to open the Problems panel in Wu to refresh it, then call again.";
 
+// The IDE prints its repository's scaled cap in `order`; a fallback snapshot
+// has no repository size to scale from, so it names the rule without a number.
 const DEFAULT_ORDER =
   "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. " +
   "`in N` counts distinct files that reference a definition this file owns, ignoring names " +
-  "shared by more than 20 files; `out M` counts the files this one references under the same rule; " +
+  "shared by too many files; `out M` counts the files this one references under the same rule; " +
   "`deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this " +
   "one, so it is a certain dependency rather than a shared name.";
 
@@ -496,8 +498,12 @@ function omittedPathLimit(limit) {
 // Honest coverage for the whole build, mirroring `SymbolMap::coverage_notes`:
 // how many candidates became map entries, why the rest did not, and what never
 // became a candidate at all.
-/** @param {SnapshotStats} stats @returns {string[]} */
-function coverageNotes(stats) {
+/**
+ * @param {SnapshotStats} stats
+ * @param {number} total
+ * @returns {string[]}
+ */
+function coverageNotes(stats, total) {
   const notes = [];
   if (Number.isFinite(stats.considered) && stats.considered > 0) {
     const reasons = [];
@@ -507,7 +513,9 @@ function coverageNotes(stats) {
     if (stats.file_limit > 0) reasons.push(`${stats.file_limit} beyond the ${MAX_FILES}-file limit`);
     if (stats.unreadable > 0) reasons.push(`${stats.unreadable} unreadable`);
     const suffix = reasons.length === 0 ? "" : ` (${reasons.join(", ")})`;
-    notes.push(`Indexed ${stats.parsed} / ${stats.considered} candidate files${suffix}.`);
+    notes.push(
+      `Parsed ${stats.parsed} / ${stats.considered} candidate files${suffix}; ${total} with definitions.`,
+    );
   }
   if (stats.vendored_skipped > 0) {
     notes.push(`Excluded before scanning: ${stats.vendored_skipped} vendored or generated paths.`);
@@ -548,7 +556,7 @@ function renderPageHead(doc, written, start, end, total, options) {
 
   const stats = doc.stats;
   if (stats && Number.isFinite(stats.considered) && Number.isFinite(stats.parsed)) {
-    head.push(...coverageNotes(stats));
+    head.push(...coverageNotes(stats, total));
   }
   if (options.legacy) head.push(LEGACY_SNAPSHOT);
   return `${head.join("\n")}\n`;

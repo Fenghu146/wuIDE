@@ -44,7 +44,7 @@ pub fn to_json(map: &SymbolMap, project_root: &Path, generated_at: &str) -> Valu
         "version": SNAPSHOT_VERSION,
         "project": project_root.to_string_lossy(),
         "generated_at": generated_at,
-        "order": SymbolMap::order_description(),
+        "order": map.order_description(),
         "max_chars": crate::symbol_map::MAX_REPO_MAP_CHARS,
         "stats": {
             "considered": map.stats.considered,
