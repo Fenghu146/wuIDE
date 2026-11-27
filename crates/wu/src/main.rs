@@ -568,6 +568,37 @@ fn main() {
         #[cfg(target_os = "macos")]
         wu::move_to_applications::init(cx);
         project::Project::init(&client, cx);
+
+        // One watcher for the shared diagnostics directory, not one per Project.
+        // A failed watch only costs agent-initiated refreshes, so nothing here
+        // is allowed to fail startup or to run in tests.
+        #[cfg(not(test))]
+        project::diagnostics_snapshot::start_refresh_watcher(
+            fs.clone() as Arc<dyn Fs>,
+            Arc::new({
+                let workspace_store = workspace_store.clone();
+                move |cx: &mut App| {
+                    workspace_store
+                        .update(cx, |workspace_store, cx| {
+                            for workspace in workspace_store
+                                .workspaces()
+                                .filter_map(|weak| weak.upgrade())
+                            {
+                                workspace.update(cx, |workspace, cx| {
+                                    let project = workspace.project().clone();
+                                    if project.read(cx).is_local() {
+                                        project.update(cx, |project, cx| {
+                                            project.schedule_diagnostics_snapshot(cx);
+                                        });
+                                    }
+                                });
+                            }
+                        });
+                }
+            }),
+            cx,
+        );
+
         debugger_ui::init(cx);
         debugger_tools::init(cx);
 

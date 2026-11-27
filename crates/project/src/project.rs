@@ -117,7 +117,7 @@ use std::{
     pin::pin,
     str::{self, FromStr},
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use task_store::TaskStore;
@@ -220,7 +220,6 @@ pub struct Project {
     buffers_needing_diff: HashSet<WeakEntity<Buffer>>,
     git_diff_debouncer: DebouncedDelay<Self>,
     diagnostics_snapshot_debouncer: DebouncedDelay<Self>,
-    _diagnostics_refresh_task: Task<()>,
     remotely_created_models: Arc<Mutex<RemotelyCreatedModels>>,
     terminals: Terminals,
     node: Option<NodeRuntime>,
@@ -1192,43 +1191,6 @@ impl Project {
 
             cx.subscribe(&lsp_store, Self::on_lsp_store_event).detach();
 
-            let refresh_fs = fs.clone();
-            let diagnostics_refresh_task = cx.spawn(async move |this, cx| {
-                let (mut requests, _watcher) = diagnostics_snapshot::watch_refresh_requests(
-                    refresh_fs.clone(),
-                    paths::diagnostics_snapshots_dir(),
-                )
-                .await;
-                while let Some(requests) = requests.next().await {
-                    let mut current = false;
-                    for request in requests {
-                        let contents = refresh_fs.load(&request).await.log_err();
-                        refresh_fs
-                            .remove_file(
-                                &request,
-                                RemoveOptions {
-                                    ignore_if_not_exists: true,
-                                    ..Default::default()
-                                },
-                            )
-                            .await
-                            .log_err();
-                        current |= contents
-                            .as_deref()
-                            .is_some_and(|contents| {
-                                diagnostics_snapshot::is_current_refresh_request(
-                                    contents.as_bytes(),
-                                    SystemTime::now(),
-                                )
-                            });
-                    }
-                    if current {
-                        this.update(cx, |this, cx| this.schedule_diagnostics_snapshot(cx))
-                            .log_err();
-                    }
-                }
-            });
-
             Self {
                 worktree_store,
                 buffer_store,
@@ -1252,7 +1214,6 @@ impl Project {
                 buffers_needing_diff: Default::default(),
                 git_diff_debouncer: DebouncedDelay::new(),
                 diagnostics_snapshot_debouncer: DebouncedDelay::new(),
-                _diagnostics_refresh_task: diagnostics_refresh_task,
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
@@ -1467,7 +1428,6 @@ impl Project {
                 buffers_needing_diff: Default::default(),
                 git_diff_debouncer: DebouncedDelay::new(),
                 diagnostics_snapshot_debouncer: DebouncedDelay::new(),
-                _diagnostics_refresh_task: Task::ready(()),
                 terminals: Terminals {
                     local_handles: Vec::new(),
                 },
@@ -2754,7 +2714,8 @@ impl Project {
         }
     }
 
-    fn schedule_diagnostics_snapshot(&mut self, cx: &mut Context<Self>) {
+    /// Rewrites snapshots once the current burst of diagnostics settles.
+    pub fn schedule_diagnostics_snapshot(&mut self, cx: &mut Context<Self>) {
         self.diagnostics_snapshot_debouncer.fire_new(
             diagnostics_snapshot::DEBOUNCE,
             cx,

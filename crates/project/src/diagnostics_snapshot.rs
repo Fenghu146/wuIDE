@@ -13,11 +13,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use fs::{Fs, PathEventKind, RemoveOptions, Watcher};
 use futures::StreamExt;
+use gpui::App;
 use language::{DiagnosticEntry, PointUtf16, Unclipped};
 use lsp::{DiagnosticSeverity, NumberOrString};
 use path::PathStyle;
@@ -128,6 +129,46 @@ pub async fn watch_refresh_requests(
         }),
     );
     (Box::pin(requests), watcher)
+}
+
+type RefreshHandler = Arc<dyn Fn(&mut App) + Send + Sync + 'static>;
+static REFRESH_WATCHER_STARTED: OnceLock<()> = OnceLock::new();
+
+/// Starts the one watcher that answers Pi's refresh markers. The app calls this
+/// once; projects only supply the callback that rewrites their snapshots.
+pub fn start_refresh_watcher(fs: Arc<dyn Fs>, on_refresh: RefreshHandler, cx: &mut App) {
+    if REFRESH_WATCHER_STARTED.set(()).is_err() {
+        return;
+    }
+
+    let refresh_fs = fs.clone();
+    cx.spawn(async move |cx| {
+        let (mut requests, _watcher) =
+            watch_refresh_requests(fs, paths::diagnostics_snapshots_dir()).await;
+        while let Some(requests) = requests.next().await {
+            let mut current = false;
+            for request in requests {
+                let contents = refresh_fs.load(&request).await.log_err();
+                refresh_fs
+                    .remove_file(
+                        &request,
+                        RemoveOptions {
+                            ignore_if_not_exists: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .log_err();
+                current |= contents.as_deref().is_some_and(|contents| {
+                    is_current_refresh_request(contents.as_bytes(), SystemTime::now())
+                });
+            }
+            if current {
+                cx.update(|app| on_refresh(app));
+            }
+        }
+    })
+    .detach();
 }
 
 /// One diagnostic as the snapshot records it: one-based, project-relative.

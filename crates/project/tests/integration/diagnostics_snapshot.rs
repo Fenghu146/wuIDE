@@ -1,9 +1,11 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fs::{CreateOptions, FakeFs, Fs};
 use futures::StreamExt;
-use gpui::TestAppContext;
+use gpui::{App, TestAppContext};
+use project::diagnostics_snapshot::start_refresh_watcher;
 use project::Project;
 use language::{Diagnostic, DiagnosticEntry, DiagnosticMessage, PointUtf16, Unclipped};
 use lsp::{DiagnosticSeverity, NumberOrString};
@@ -13,7 +15,7 @@ use project::diagnostics_snapshot::{
     watch_refresh_requests, write,
 };
 use serde_json::json;
-use util::path;
+use util::{ResultExt as _, path};
 
 fn rel(path: &str) -> &RelPath {
     RelPath::from_unix_str(path).unwrap()
@@ -191,7 +193,19 @@ async fn a_refresh_marker_rewrites_the_snapshot(cx: &mut TestAppContext) {
     let fs = FakeFs::new(cx.executor());
     fs.insert_tree(path!("/work"), json!({ "a.rs": "" }))
         .await;
-    let _project = Project::test(fs.clone(), [Path::new(path!("/work"))], cx).await;
+    let project = Project::test(fs.clone(), [Path::new(path!("/work"))], cx).await;
+    let weak_project = project.downgrade();
+    cx.update(|cx| {
+        start_refresh_watcher(
+            fs.clone() as Arc<dyn Fs>,
+            Arc::new(move |cx: &mut App| {
+                weak_project
+                    .update(cx, |project, cx| project.schedule_diagnostics_snapshot(cx))
+                    .log_err();
+            }),
+            cx,
+        )
+    });
     cx.run_until_parked();
 
     let dir = paths::diagnostics_snapshots_dir();
