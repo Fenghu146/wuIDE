@@ -10,7 +10,6 @@ use crate::{
 };
 use agent_harness::PermissionMode;
 use anyhow::Result;
-use collections::HashSet;
 use editor::{Editor, EditorEvent};
 use gpui::{
     Action, Animation, AnimationExt as _, AnyElement, App, AsyncWindowContext, Bounds, ClickEvent,
@@ -387,7 +386,6 @@ pub struct AgentPanel {
     search: Entity<Editor>,
     renaming: Option<RenameField>,
     row_menu: Option<RowMenu>,
-    hovered_row: Option<SharedString>,
     list_scroll: ScrollHandle,
     showing_saved: bool,
     _subscriptions: Vec<Subscription>,
@@ -435,7 +433,6 @@ impl AgentPanel {
                     search,
                     renaming: None,
                     row_menu: None,
-                    hovered_row: None,
                     list_scroll: ScrollHandle::new(),
                     showing_saved: false,
                 }
@@ -1109,7 +1106,6 @@ impl AgentPanel {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
-                this.hovered_row = None;
                 this.store.update(cx, |store, cx| match action {
                     RowAction::Pin { pinned } => store.set_pinned(&id, !pinned, cx),
                 });
@@ -1137,7 +1133,7 @@ impl AgentPanel {
         };
         let subline = colors.text_muted.opacity(0.5);
         let time_color = colors.text_muted.opacity(0.8);
-        let hovered = self.hovered_row.as_ref() == Some(&id);
+        let row_group = SharedString::from(format!("agent-session-row-group-{id}"));
         let status = RowStatus::of(&session);
         let status_color = status.color(cx);
         let time_ago: SharedString = format_time_ago(session.updated_at, now).into();
@@ -1174,49 +1170,39 @@ impl AgentPanel {
                 .justify_center()
                 .child(status_glyph())
         });
-        let corner_body: AnyElement = if hovered {
-            h_flex()
+        let hover_action = h_flex()
+            .h(px(14.))
+            .gap(px(4.))
+            .items_center()
+            .when(!compact, |this| this.mr(px(-4.)))
+            .child(self.row_action(
+                &id,
+                RowAction::Pin {
+                    pinned: session.pinned,
+                },
+                compact,
+                cx,
+            ))
+            .visible_on_hover(row_group.clone());
+        let corner: AnyElement = match status.label() {
+            Some(label) => h_flex()
                 .gap(px(4.))
-                .when(!compact, |this| this.mr(px(-4.)))
-                .child(self.row_action(
-                    &id,
-                    RowAction::Pin {
-                        pinned: session.pinned,
-                    },
-                    compact,
-                    cx,
-                ))
-                .into_any_element()
-        } else {
-            match status.label() {
-                Some(label) => h_flex()
-                    .gap(px(4.))
-                    .child(status_glyph())
-                    .child(
-                        div()
-                            .text_size(ui(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(status_color)
-                            .child(label),
-                    )
-                    .into_any_element(),
-                None => div()
-                    .text_size(ui(10.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(time_color)
-                    .child(time_ago.clone())
-                    .into_any_element(),
-            }
+                .child(status_glyph())
+                .child(
+                    div()
+                        .text_size(ui(10.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(status_color)
+                        .child(label),
+                )
+                .into_any_element(),
+            None => div()
+                .text_size(ui(10.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(time_color)
+                .child(time_ago.clone())
+                .into_any_element(),
         };
-        let mut corner = Some(
-            div()
-                .flex_none()
-                .h(px(14.))
-                .flex()
-                .items_center()
-                .text_color(subline)
-                .child(corner_body),
-        );
         let harness_icon = agent_logo(session.kind);
         let harness_tint = agent_tint(session.kind);
         let title_content = match renaming {
@@ -1236,6 +1222,7 @@ impl AgentPanel {
         let rest_text = if selected { text } else { text.opacity(0.8) };
         let row = div()
             .id(SharedString::from(format!("agent-session-row-{id}")))
+            .group(row_group.clone())
             .h(px(row_height))
             .flex()
             .flex_col()
@@ -1247,20 +1234,6 @@ impl AgentPanel {
             .when(selected, |this| this.bg(selected_row(cx)))
             .hover(move |style| style.bg(hover_bg).text_color(text))
             .cursor_pointer()
-            .on_hover(cx.listener({
-                let id = id.clone();
-                move |this, hovered: &bool, _, cx| {
-                    if *hovered {
-                        if this.hovered_row.as_ref() != Some(&id) {
-                            this.hovered_row = Some(id.clone());
-                            cx.notify();
-                        }
-                    } else if this.hovered_row.as_ref() == Some(&id) {
-                        this.hovered_row = None;
-                        cx.notify();
-                    }
-                }
-            }))
             .on_click(cx.listener({
                 let id = id.clone();
                 let rename_title = session.title.to_string();
@@ -1294,7 +1267,27 @@ impl AgentPanel {
                         harness_tint.map_or(colors.text_muted, |tint| tint.opacity(0.8)),
                     ))
                     .child(title_content)
-                    .when(!compact || hovered, |this| this.children(corner.take()))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_none()
+                            .h(px(14.))
+                            .child(hover_action)
+                            .when(!compact, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_end()
+                                        .overflow_hidden()
+                                        .text_color(subline)
+                                        .group_hover(row_group, |style| style.invisible())
+                                        .child(corner),
+                                )
+                            }),
+                    )
                     .when(compact, |this| {
                         this.child(
                             div()
@@ -1419,11 +1412,6 @@ impl AgentPanel {
             .filter(|session| Self::matches_search(session, &query))
             .collect();
         let layout = layout_list(&sessions, &prefs, searching);
-        let rendered_rows: HashSet<String> = layout
-            .active
-            .iter()
-            .flat_map(|group| group.rows.iter().map(|row| row.session.id.clone()))
-            .collect();
         let row_context = RowContext {
             now: OffsetDateTime::now_utc().unix_timestamp(),
             compact: prefs.compact_rows,
@@ -1438,7 +1426,6 @@ impl AgentPanel {
         ChatList {
             active,
             searching,
-            rendered_rows,
             notice: self.render_auto_archive_notice(cx),
         }
     }
@@ -1560,7 +1547,6 @@ impl AgentPanel {
 struct ChatList {
     active: Vec<AnyElement>,
     searching: bool,
-    rendered_rows: HashSet<String>,
     notice: Option<AnyElement>,
 }
 
@@ -2141,13 +2127,6 @@ impl Focusable for AgentPanel {
 impl Render for AgentPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let list = self.render_list(cx);
-        if self
-            .hovered_row
-            .as_ref()
-            .is_some_and(|id| !list.rendered_rows.contains(id.as_ref()))
-        {
-            self.hovered_row = None;
-        }
         let has_any = !self
             .store
             .read(cx)
