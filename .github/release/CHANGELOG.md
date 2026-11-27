@@ -10,6 +10,11 @@ All notable user-facing changes to Wu are listed here, newest first.
 - The keybind context is registered as `Zed Keybind Context`, but three places looked it up as `Wu Keybind Context`, so the keymap editor and the settings language list silently found nothing. They use the registered name now, with a comment recording why.
 - The repository map keeps pointer return types (`TreeNode *` no longer renders as `TreeNode`), lists array fields, and scales its “names too common to count” threshold to the repository size instead of a fixed 20 files. The page states the threshold it actually used.
 - Remote Explorer's “New Remote Connection” opens a form — name, host, port, user, note and private key path — and connects with what it collected instead of `SshConnectionOptions::default()`, whose hostname was always empty. The private key path is persisted; passwords still come from the askpass prompt and are never stored.
+- The agent sidebar no longer rebuilds the whole session list when the pointer crosses a row: hover visibility is now CSS-style group state, and the list materialises only the rows inside the viewport.
+- A background-task card stops ticking once its last task finishes, instead of refreshing once a second for as long as the card exists.
+- `FORK.md` gains a table of which identifiers follow a rename and which are kept for compatibility, so the same rename questions stop being relitigated.
+- The update card and the title-bar tooltip now show the first twelve characters of the release digest, a link to the release, and the sentence that a digest proves the download matches GitHub's record but not who published it.
+- The agent can ask for its diagnostics snapshot to be refreshed: the MCP tool writes a `<project-key>.refresh` marker, the IDE watches for it and rescans, instead of telling the user to refresh the Problems panel by hand.
 
 ## 1.5.0 - 2026-11-26
 
