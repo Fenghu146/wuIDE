@@ -149,12 +149,17 @@ pub struct SshConnectionOptions {
 
 impl From<settings::SshConnection> for SshConnectionOptions {
     fn from(val: settings::SshConnection) -> Self {
+        let mut args = val.args;
+        if let Some(private_key_path) = val.private_key_path.filter(|path| !path.trim().is_empty()) {
+            args.push("-i".to_string());
+            args.push(private_key_path);
+        }
         SshConnectionOptions {
             host: val.host.to_string().into(),
             username: val.username,
             port: val.port,
             password: None,
-            args: Some(val.args),
+            args: Some(args),
             nickname: val.nickname,
             upload_binary_over_ssh: val.upload_binary_over_ssh.unwrap_or_default(),
             port_forwards: val.port_forwards,
@@ -2079,6 +2084,20 @@ fn build_command_windows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_private_key_path_is_passed_to_ssh() {
+        let options = SshConnectionOptions::from(settings::SshConnection {
+            host: "host.example".to_string(),
+            private_key_path: Some("/keys/id_ed25519".to_string()),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            options.args,
+            Some(vec!["-i".to_string(), "/keys/id_ed25519".to_string()])
+        );
+    }
 
     #[test]
     fn test_build_command() -> Result<()> {

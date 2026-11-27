@@ -1798,6 +1798,7 @@ impl RemoteServerProjects {
                     upload_binary_over_ssh: None,
                     port_forwards: connection_options.port_forwards,
                     connection_timeout: connection_options.connection_timeout,
+                    private_key_path: None,
                 })
         });
     }
