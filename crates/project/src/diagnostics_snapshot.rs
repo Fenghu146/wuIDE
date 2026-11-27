@@ -137,6 +137,9 @@ static REFRESH_WATCHER_STARTED: OnceLock<()> = OnceLock::new();
 /// Starts the one watcher that answers Pi's refresh markers. The app calls this
 /// once; projects only supply the callback that rewrites their snapshots.
 pub fn start_refresh_watcher(fs: Arc<dyn Fs>, on_refresh: RefreshHandler, cx: &mut App) {
+    // The flag is set before spawning, so a failed start cannot be retried later
+    // in this process: subsequent calls return early forever. Restarting the
+    // application is required to try again.
     if REFRESH_WATCHER_STARTED.set(()).is_err() {
         return;
     }

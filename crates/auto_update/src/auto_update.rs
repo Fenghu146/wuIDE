@@ -284,20 +284,27 @@ fn github_asset_name(asset: &str, os: &str, arch: &str) -> Result<String> {
     }
 }
 
+/// Turn a release digest into the bare hex string used by `verify_digest`.
+/// An empty digest must become `None`, otherwise verification receives
+/// `Some("")` and treats it as a real checksum.
+fn normalize_release_digest(digest: Option<String>) -> Option<String> {
+    digest.filter(|digest| !digest.is_empty()).map(|digest| {
+        digest
+            .strip_prefix("sha256:")
+            .map(str::to_owned)
+            .unwrap_or(digest)
+    })
+}
+
 fn announcement_metadata(release: &GitHubRelease) -> (Option<String>, Option<String>) {
     let digest = match github_asset_name("zed", OS, ARCH) {
         Ok(asset_name) => release
             .assets
             .iter()
             .find(|asset| asset.name == asset_name)
-            .and_then(|asset| asset.digest.as_deref())
-            .filter(|digest| !digest.is_empty())
-            .map(|digest| {
-                format!(
-                    "sha256:{}",
-                    digest.strip_prefix("sha256:").unwrap_or(digest)
-                )
-            }),
+            .and_then(|asset| asset.digest.clone())
+            .and_then(|digest| normalize_release_digest(Some(digest)))
+            .map(|digest| format!("sha256:{digest}")),
         Err(error) => {
             log::warn!("Auto Update: cannot name the asset for digest display: {error}");
             None
@@ -912,12 +919,7 @@ impl AutoUpdater {
         Ok(ReleaseAsset {
             version: Self::tag_version(&release.tag_name).to_string(),
             url: asset.browser_download_url,
-            digest: asset.digest.map(|digest| {
-                digest
-                    .strip_prefix("sha256:")
-                    .map(str::to_owned)
-                    .unwrap_or(digest)
-            }),
+            digest: normalize_release_digest(asset.digest),
         })
     }
 
@@ -1658,6 +1660,20 @@ mod tests {
 
     pub(super) struct InstallOverride(pub Rc<dyn Fn(&Path, &AsyncApp) -> Result<Option<PathBuf>>>);
     impl Global for InstallOverride {}
+
+    #[test]
+    fn empty_release_digest_is_none_not_some_empty() {
+        assert_eq!(normalize_release_digest(None), None);
+        assert_eq!(normalize_release_digest(Some(String::new())), None);
+        assert_eq!(
+            normalize_release_digest(Some("sha256:abc123".to_string())),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            normalize_release_digest(Some("abc123".to_string())),
+            Some("abc123".to_string())
+        );
+    }
 
     #[gpui::test]
     fn test_auto_update_defaults_to_true(cx: &mut TestAppContext) {

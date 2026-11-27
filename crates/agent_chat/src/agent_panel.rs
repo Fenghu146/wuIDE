@@ -15,10 +15,10 @@ use gpui::{
     Action, Animation, AnimationExt as _, AnyElement, App, AsyncWindowContext, Bounds, ClickEvent,
     ClipboardItem, Context, CursorStyle, DismissEvent, EdgeFade, Element, ElementId, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, GlobalElementId, Hsla, InspectorElementId,
-    IntoElement, LayoutId, ListAlignment, ListState, MouseButton, MouseDownEvent, ParentElement,
-    Pixels, Point, PromptButton, PromptLevel, Render, RenderOnce, ScrollHandle, SharedString,
-    Styled, Subscription, Svg, TextStyleRefinement, Transformation, WeakEntity, Window, anchored,
-    deferred, div, list, percentage, point, px, rgb, svg,
+    IntoElement, LayoutId, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Point, PromptButton, PromptLevel, Render, RenderOnce, ScrollHandle,
+    SharedString, Styled, Subscription, Svg, TextStyleRefinement, Transformation, WeakEntity, Window,
+    anchored, deferred, div, list, percentage, point, px, rgb, svg,
 };
 use i18n::{n, t, tc};
 use project::Project;
@@ -389,7 +389,8 @@ pub struct AgentPanel {
     row_menu: Option<RowMenu>,
     session_list: ListState,
     session_list_items: Vec<SessionListItem>,
-    session_list_signature: Vec<(SharedString, Pixels)>,
+    session_list_order: Vec<SharedString>,
+    session_list_heights: Vec<Pixels>,
     showing_saved: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -438,7 +439,8 @@ impl AgentPanel {
                     row_menu: None,
                     session_list: ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW)),
                     session_list_items: Vec::new(),
-                    session_list_signature: Vec::new(),
+                    session_list_order: Vec::new(),
+                    session_list_heights: Vec::new(),
                     showing_saved: false,
                 }
             })
@@ -1277,6 +1279,7 @@ impl AgentPanel {
                             .relative()
                             .flex_none()
                             .h(px(14.))
+                            .visible_on_hover(row_group.clone())
                             .child(hover_action)
                             .when(!compact, |this| {
                                 this.child(
@@ -1388,6 +1391,27 @@ impl AgentPanel {
             .into_any_element()
     }
 
+    /// The smallest range of list items that must be replaced to turn `old` into
+    /// `new`: everything outside the common prefix and suffix is untouched.
+    /// Splicing only this range keeps gpui from resetting the scroll top, which
+    /// it does whenever the replaced range contains the item at the scroll top.
+    fn list_replacement_range<T: PartialEq>(
+        old: &[T],
+        new: &[T],
+    ) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+        let mut start = 0;
+        while start < old.len() && start < new.len() && old[start] == new[start] {
+            start += 1;
+        }
+        let mut old_end = old.len();
+        let mut new_end = new.len();
+        while old_end > start && new_end > start && old[old_end - 1] == new[new_end - 1] {
+            old_end -= 1;
+            new_end -= 1;
+        }
+        (start..old_end, start..new_end)
+    }
+
     fn matches_search(session: &SessionSummary, query: &str) -> bool {
         if query.is_empty() {
             return true;
@@ -1419,7 +1443,7 @@ impl AgentPanel {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let active_id = self.active_chat_id(cx);
         let items = list_items(&sessions, &prefs, searching, now, active_id.as_deref());
-        let signature: Vec<(SharedString, Pixels)> = items
+        let (order, heights): (Vec<SharedString>, Vec<Pixels>) = items
             .iter()
             .map(|item| match item {
                 SessionListItem::Header { key, height, .. } => (key.clone(), px(*height)),
@@ -1430,14 +1454,41 @@ impl AgentPanel {
                     px(*height),
                 ),
             })
-            .collect();
-        if signature != self.session_list_signature {
-            let old_count = self.session_list.item_count();
+            .unzip();
+        if order != self.session_list_order {
+            // Only splice the range whose identity actually changed. gpui resets
+            // the scroll top to the start of the replaced range whenever that
+            // range contains the scroll-top item, so replacing everything on
+            // every session update drags the user back to the top.
+            let (old_range, new_range) =
+                Self::list_replacement_range(&self.session_list_order, &order);
+            let scroll_top = self.session_list.logical_scroll_top();
+            let anchor = self
+                .session_list_order
+                .get(scroll_top.item_ix)
+                .cloned()
+                .and_then(|key| order.iter().position(|candidate| candidate == &key));
             self.session_list.splice_with_height_hints(
-                0..old_count,
-                signature.iter().map(|(_, height)| *height),
+                old_range,
+                heights[new_range].iter().copied(),
             );
-            self.session_list_signature = signature;
+            if let Some(anchor) = anchor {
+                // splice_items is synchronous: it rewrites the sum tree and the
+                // scroll offset in the same borrow_mut, so restoring here cannot
+                // land in the wrong layout pass.
+                self.session_list.scroll_to(ListOffset {
+                    item_ix: anchor,
+                    offset_in_item: scroll_top.offset_in_item,
+                });
+            }
+            self.session_list_order = order;
+            self.session_list_heights = heights;
+        } else if heights != self.session_list_heights {
+            // Same sessions in the same order: heights changed. remeasure_items
+            // marks those rows for remeasure while preserving the scroll anchor.
+            let (range, _) = Self::list_replacement_range(&self.session_list_heights, &heights);
+            self.session_list.remeasure_items(range);
+            self.session_list_heights = heights;
         }
         let empty = items.is_empty();
         self.session_list_items = items;
@@ -2595,5 +2646,72 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(rows, [("live", true), ("branch", false), ("old", false)]);
+    }
+
+    #[test]
+    fn reordering_sessions_keeps_the_scrolled_to_session_visible() {
+        let old: Vec<SharedString> = ["header", "session-a", "session-b", "session-c"]
+            .iter()
+            .map(|key| SharedString::from(key.to_string()))
+            .collect();
+        let new: Vec<SharedString> = ["header", "session-b", "session-a", "session-c"]
+            .iter()
+            .map(|key| SharedString::from(key.to_string()))
+            .collect();
+
+        let (old_range, new_range) = AgentPanel::list_replacement_range(&old, &new);
+        // A reorder of two adjacent rows must not replace the entire list: doing
+        // so is what used to reset the scroll top to item 0.
+        assert_eq!(old_range, 1..3);
+        assert_eq!(new_range, 1..3);
+
+        let heights = vec![px(32.), px(31.), px(31.), px(31.)];
+        let list = ListState::new(old.len(), ListAlignment::Top, px(LIST_OVERDRAW));
+        list.splice_with_height_hints(0..old.len(), heights.iter().copied());
+        list.scroll_to(ListOffset {
+            item_ix: 2,
+            offset_in_item: px(7.),
+        });
+        assert_eq!(list.logical_scroll_top().item_ix, 2);
+
+        // Replay what render_list does: splice only the changed range, then
+        // restore the scroll top by the key that was at the top beforehand.
+        let scroll_top = list.logical_scroll_top();
+        let anchor_key = old.get(scroll_top.item_ix).cloned().unwrap();
+        let anchor = new.iter().position(|candidate| candidate == &anchor_key);
+        list.splice_with_height_hints(
+            old_range,
+            heights[new_range].iter().copied(),
+        );
+        assert_eq!(anchor, Some(1), "session-b moved from index 2 to index 1");
+        if let Some(anchor) = anchor {
+            list.scroll_to(ListOffset {
+                item_ix: anchor,
+                offset_in_item: scroll_top.offset_in_item,
+            });
+        }
+
+        let restored = list.logical_scroll_top();
+        assert_eq!(new[restored.item_ix], "session-b");
+        assert_eq!(restored.offset_in_item, px(7.));
+    }
+
+    #[test]
+    fn unchanged_identity_needs_no_splice_even_when_heights_differ() {
+        let order: Vec<SharedString> = ["header", "session-a", "session-b"]
+            .iter()
+            .map(|key| SharedString::from(key.to_string()))
+            .collect();
+        // render_list compares order separately from heights. Equal order takes
+        // the remeasure path, so no identity replacement is produced at all.
+        let (old_range, _) = AgentPanel::list_replacement_range(&order, &order);
+        assert!(old_range.is_empty(), "identical orders need no replacement");
+
+        let reordered: Vec<SharedString> = ["header", "session-b", "session-a"]
+            .iter()
+            .map(|key| SharedString::from(key.to_string()))
+            .collect();
+        let (old_range, _) = AgentPanel::list_replacement_range(&order, &reordered);
+        assert_eq!(old_range, 1..3);
     }
 }

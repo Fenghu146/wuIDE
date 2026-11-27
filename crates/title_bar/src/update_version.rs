@@ -92,6 +92,13 @@ impl UpdateVersion {
     fn version_tooltip_message(version: &Version) -> String {
         UpdateButton::version_tooltip_message(version)
     }
+
+    /// The digest/URL/disclaimer block is only meaningful when the release
+    /// actually carried metadata, matching the notification card's `has_metadata`.
+    fn has_release_metadata(digest: Option<&str>, release_url: Option<&str>) -> bool {
+        digest.is_some_and(|digest| !digest.is_empty())
+            || release_url.is_some_and(|url| !url.is_empty())
+    }
 }
 
 impl Render for UpdateVersion {
@@ -111,6 +118,7 @@ impl Render for UpdateVersion {
                 let tooltip_message = Self::version_tooltip_message(version);
                 let digest = digest.clone();
                 let release_url = release_url.clone();
+                let has_metadata = Self::has_release_metadata(digest.as_deref(), release_url.as_deref());
                 let disclaimer = t!(
                     "GitHub computes this digest from the release asset it hosts. It confirms your download matches that file, but it cannot prove the publisher is a trusted developer or that the release came from them."
                 );
@@ -118,24 +126,28 @@ impl Render for UpdateVersion {
                     v_flex()
                         .gap_1()
                         .child(Label::new(tooltip_message.clone()))
-                        .when_some(digest.clone(), |content, digest| {
-                            content.child(
-                                Label::new(t!(
-                                    "Release digest: {digest}",
-                                    digest = digest_preview(&digest)
-                                ))
-                                .size(LabelSize::Small),
-                            )
-                        })
-                        .when_some(release_url.clone(), |content, url| {
+                        .when(has_metadata, |content| {
                             content
-                                .child(Label::new(url).size(LabelSize::Small).color(Color::Muted))
+                                .when_some(digest.clone(), |content, digest| {
+                                    content.child(
+                                        Label::new(t!(
+                                            "Release digest: {digest}",
+                                            digest = digest_preview(&digest)
+                                        ))
+                                        .size(LabelSize::Small),
+                                    )
+                                })
+                                .when_some(release_url.clone(), |content, url| {
+                                    content.child(
+                                        Label::new(url).size(LabelSize::Small).color(Color::Muted),
+                                    )
+                                })
+                                .child(
+                                    Label::new(disclaimer.clone())
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                )
                         })
-                        .child(
-                            Label::new(disclaimer.clone())
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
                         .into_any_element()
                 });
                 UpdateButton::new(IconName::ArrowCircle, t!("Update available"))
@@ -209,6 +221,14 @@ mod tests {
             message,
             "Update to Version: 1.0.0+nightly.14d9a4189f058d8736339b06ff2340101eaea5af"
         );
+    }
+
+    #[test]
+    fn release_metadata_is_hidden_when_neither_digest_nor_url_is_present() {
+        assert!(!UpdateVersion::has_release_metadata(None, None));
+        assert!(!UpdateVersion::has_release_metadata(Some(""), Some("")));
+        assert!(UpdateVersion::has_release_metadata(Some("sha256:abc"), None));
+        assert!(UpdateVersion::has_release_metadata(None, Some("https://example.test")));
     }
 
     #[test]
