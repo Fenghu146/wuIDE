@@ -183,7 +183,16 @@ impl BackgroundTasksCard {
         let tick = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                let running = this
+                    .update(cx, |this, cx| {
+                        let running = !this.session.read(cx).background_tasks().is_empty();
+                        if running {
+                            cx.notify();
+                        }
+                        running
+                    })
+                    .unwrap_or(false);
+                if !running {
                     return;
                 }
             }
@@ -294,6 +303,10 @@ mod tests {
     use agent_harness::AgentEvent;
     use gpui::{TestAppContext, WeakEntity};
     use project::FakeFs;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[gpui::test]
     async fn the_popup_lists_each_task_once(cx: &mut TestAppContext) {
@@ -390,5 +403,63 @@ mod tests {
         chat.update(cx, |chat, cx| {
             assert!(chat.render_background_indicator(cx).is_none())
         });
+    }
+
+    #[gpui::test]
+    async fn the_card_stops_ticking_after_the_last_task(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        store.update(cx, |store, _| store.skip_plan_usage());
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        feed_events(
+            &session,
+            vec![AgentEvent::BackgroundTasksChanged {
+                tasks: vec![agent_harness::BackgroundTaskInfo {
+                    task_id: "bg1".into(),
+                    kind: BackgroundTaskKind::Shell,
+                    description: "Run tests".into(),
+                }],
+            }],
+            cx,
+        );
+        let card = cx.update(|cx| {
+            cx.new(|cx| {
+                BackgroundTasksCard::new(session.clone(), WeakEntity::new_invalid(), cx)
+            })
+        });
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let counter = notifications.clone();
+        cx.update(|cx| {
+            cx.observe(&card, move |_, _| {
+                counter.fetch_add(1, Ordering::Relaxed);
+            })
+            .detach();
+        });
+        cx.executor().advance_clock(TICK);
+        cx.run_until_parked();
+        assert!(
+            notifications.load(Ordering::Relaxed) > 0,
+            "a running task keeps the card fresh"
+        );
+
+        feed_events(
+            &session,
+            vec![AgentEvent::BackgroundTasksChanged { tasks: Vec::new() }],
+            cx,
+        );
+        let before = notifications.load(Ordering::Relaxed);
+        cx.executor().advance_clock(TICK * 3);
+        cx.run_until_parked();
+        assert_eq!(
+            notifications.load(Ordering::Relaxed),
+            before,
+            "the tick stops once the last task is gone"
+        );
     }
 }
