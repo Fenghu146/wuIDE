@@ -4,6 +4,13 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## Unreleased
 
+## 1.5.1 - 2026-11-27
+
+- The bundled Pi agent keeps the user's Git identity: it forwards `GIT_AUTHOR_*` and `GIT_COMMITTER_*` when they are set, and otherwise reads `user.name` and `user.email` from the real `~/.gitconfig`, which is also mirrored into the isolated home. Commits made by Pi no longer carry a placeholder author.
+- The keybind context is registered as `Zed Keybind Context`, but three places looked it up as `Wu Keybind Context`, so the keymap editor and the settings language list silently found nothing. They use the registered name now, with a comment recording why.
+- The repository map keeps pointer return types (`TreeNode *` no longer renders as `TreeNode`), lists array fields, and scales its “names too common to count” threshold to the repository size instead of a fixed 20 files. The page states the threshold it actually used.
+- Remote Explorer's “New Remote Connection” opens a form — name, host, port, user, note and private key path — and connects with what it collected instead of `SshConnectionOptions::default()`, whose hostname was always empty. The private key path is persisted; passwords still come from the askpass prompt and are never stored.
+
 ## 1.5.0 - 2026-11-26
 
 - `script/lease` is a Go program now: claiming is 8–9× faster and no longer needs bash, which on Windows meant WSL and a path it could not parse. It also fixes a silent widening — `claim crates/diagnostics` without a trailing slash used to claim all of `crates/`, because the path was never stat'ed.
