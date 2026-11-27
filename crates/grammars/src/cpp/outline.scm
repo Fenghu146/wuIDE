@@ -153,6 +153,8 @@
   type: (_) @context
   declarator: [
     (field_identifier) @name
+    (array_declarator
+      declarator: (field_identifier) @name)
     (pointer_declarator
       "*" @context
       declarator: (field_identifier) @name)

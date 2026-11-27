@@ -10,7 +10,7 @@
 //! `tests` are written by hundreds of files and implemented by dozens, so an
 //! edge through one of them records shared vocabulary rather than one file
 //! using another's definition. Edges are therefore weighted by how distinctive
-//! the name is (see [`MAX_SHARED_NAME_FILES`] and [`mention_weight`]), and the
+//! the name is (see [`shared_name_file_limit`] and [`mention_weight`]), and the
 //! `in`/`out` counts shown to agents report the same filtered edges the rank is
 //! built from.
 //!
@@ -128,13 +128,18 @@ const PAGERANK_DAMPING: f32 = 0.85;
 /// 264, `from` 137, `fmt` 113, `init` 106, `default` 105 — plus the shadowed
 /// standard names above.
 ///
-/// Twenty is a little over one percent of this repository's 1,565 indexed files,
-/// and it is where a name stops pointing at an owner: at or below it a mention is
-/// one of a handful that tie two files together, and above it the name is part of
-/// how the whole codebase talks. Raise it for a repository of many small crates,
-/// where real interfaces are legitimately written that often; lower it for a
-/// monorepo of a few very large files.
-pub const MAX_SHARED_NAME_FILES: usize = 20;
+/// The cap scales with the repository. Twenty is a little over one percent of
+/// this repository's 1,565 indexed files, and it is where a name stops pointing
+/// at an owner: at or below it a mention is one of a handful that tie two files
+/// together, and above it the name is part of how the whole codebase talks. A
+/// fixed 20 would be 18% of a 113-file repository, where almost no name reaches
+/// it and every mention becomes an edge; one fiftieth of the indexed files keeps
+/// the same fraction at any size. The floor keeps small repositories from
+/// treating two or three mentions as ownership, and the ceiling stops common
+/// names in very large repositories from turning into edges.
+pub fn shared_name_file_limit(file_count: usize) -> usize {
+    (file_count / 50).clamp(3, 50)
+}
 
 /// Definition kinds that can own an inbound reference edge.
 ///
@@ -232,7 +237,7 @@ pub struct FileSymbols {
     pub lines: u32,
     /// Distinct files that reference a definition this file owns.
     ///
-    /// Only edges that survived [`MAX_SHARED_NAME_FILES`] count, so this is the same
+    /// Only edges that survived [`shared_name_file_limit`] count, so this is the same
     /// graph the rank is computed from: a file whose only inbound evidence was a
     /// name like `new` reports `0` here and does not rank as if it were called.
     pub in_degree: u32,
@@ -476,7 +481,7 @@ impl SymbolMap {
             "## Repository map\n\n{header}.\n{}\n",
             Self::order_description()
         );
-        for note in self.coverage_notes() {
+        for note in self.coverage_notes(total) {
             head.push_str(&note);
             head.push('\n');
         }
@@ -512,8 +517,10 @@ impl SymbolMap {
     /// entries, why the rest did not, and what never became a candidate at all.
     ///
     /// A page that lists 40 files out of thousands would otherwise look
-    /// complete.
-    fn coverage_notes(&self) -> Vec<String> {
+    /// complete. The parsed count and the number of files with definitions are
+    /// different measures; naming both keeps the coverage line from looking
+    /// like it contradicts the page's "files with definitions" total.
+    fn coverage_notes(&self, total: usize) -> Vec<String> {
         let stats = &self.stats;
         let mut notes = Vec::new();
         if stats.considered > 0 {
@@ -546,8 +553,8 @@ impl SymbolMap {
                 format!(" ({})", reasons.join(", "))
             };
             notes.push(format!(
-                "Indexed {} / {} candidate files{reasons}.",
-                stats.parsed, stats.considered
+                "Parsed {} / {} candidate files{reasons}; {} with definitions.",
+                stats.parsed, stats.considered, total
             ));
         }
         let mut excluded = Vec::new();
@@ -1824,8 +1831,9 @@ fn function_signature(item: tree_sitter::Node<'_>, bytes: &[u8]) -> Option<Arc<s
         && let Some(parameters) = declarator.child_by_field_name("parameters")
     {
         let parameters = normalize_whitespace(parameters.utf8_text(bytes).ok()?);
+        let decorations = declarator_decorations(declarator);
         return Some(match declared_type(item, bytes) {
-            Some(return_type) => format!("{parameters} -> {return_type}").into(),
+            Some(return_type) => format!("{parameters} -> {return_type}{decorations}").into(),
             None => parameters.into(),
         });
     }
@@ -1877,6 +1885,24 @@ fn find_function_declarator(node: tree_sitter::Node<'_>) -> Option<tree_sitter::
         children.into_iter().next()
     });
     declared.and_then(find_function_declarator)
+}
+
+/// The `*`/`&` a declarator adds to the type written before it. `TreeNode
+/// *make()` reads `() -> TreeNode*`, just as `variable_signature` reads
+/// `ListNode *cur` as `: ListNode*`.
+fn declarator_decorations(node: tree_sitter::Node<'_>) -> String {
+    let mut decorations = String::new();
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        match parent.kind() {
+            "pointer_declarator" => decorations.push('*'),
+            "reference_declarator" => decorations.push('&'),
+            "array_declarator" | "init_declarator" | "parenthesized_declarator" => {}
+            _ => break,
+        }
+        current = parent.parent();
+    }
+    decorations
 }
 
 /// The type a declaration writes before its declarator, walked out from the
@@ -2501,7 +2527,7 @@ fn is_data_file(file: &ParsedFile) -> bool {
 /// rules decide whether the mention is evidence at all: only
 /// [`OWNING_KINDS`] can own a name, both files must be in the same
 /// [`language_family`] (a `Menu` in TypeScript is not a `Menu` in Rust), and a
-/// name more than [`MAX_SHARED_NAME_FILES`] files mention is vocabulary rather
+/// name more than [`shared_name_file_limit`] files mention is vocabulary rather
 /// than a dependency. Every surviving mention weighs [`mention_weight`] of the
 /// number of files owning the name. Degrees are the number of distinct files on
 /// each side of those edges, so what a page prints and what the ranking used
@@ -2546,7 +2572,9 @@ fn rank(files: &mut [ParsedFile]) {
     }
 
     // Outgoing weights per file, plus each file's total weight for
-    // normalization.
+    // normalization. The cap is decided once here so the graph and the text
+    // that describes it use the same number.
+    let shared_limit = shared_name_file_limit(count);
     let mut edges: Vec<Vec<(usize, f32)>> = vec![Vec::new(); count];
     let mut totals: Vec<f32> = vec![0.; count];
     for (index, file) in files.iter().enumerate() {
@@ -2555,7 +2583,7 @@ fn rank(files: &mut [ParsedFile]) {
         }
         let mut weights: HashMap<usize, f32> = HashMap::new();
         for mention in &file.mentions {
-            if mentioned_by.get(mention).copied().unwrap_or(0) > MAX_SHARED_NAME_FILES {
+            if mentioned_by.get(mention).copied().unwrap_or(0) > shared_limit {
                 continue;
             }
             let Some(definers) = defined_in.get(mention) else {
@@ -3803,8 +3831,9 @@ mod tests {
         let text = map.to_markdown(100_000);
         assert!(
             text.contains(
-                "Indexed 812 / 3368 candidate files (1310 unsupported language, 60 over 1024 KiB, \
-                 98 over the byte budget, 1086 beyond the 3000-file limit, 2 unreadable)."
+                "Parsed 812 / 3368 candidate files (1310 unsupported language, 60 over 1024 KiB, \
+                 98 over the byte budget, 1086 beyond the 3000-file limit, 2 unreadable); \
+                 1 with definitions."
             ),
             "{text}"
         );
@@ -4124,6 +4153,47 @@ void f() {
     }
 
     #[test]
+    fn function_signatures_keep_pointer_returns() {
+        let symbols = cpp_symbols(
+            r#"
+TreeNode *make_node(int value);
+TreeNode **make_handle();
+"#,
+        );
+
+        let make_node = symbols
+            .iter()
+            .find(|symbol| &*symbol.name == "make_node")
+            .expect("the pointer-returning function is listed");
+        assert_eq!(make_node.signature.as_deref(), Some("(int value) -> TreeNode*"));
+
+        let make_handle = symbols
+            .iter()
+            .find(|symbol| &*symbol.name == "make_handle")
+            .expect("the double pointer is listed");
+        assert_eq!(make_handle.signature.as_deref(), Some("() -> TreeNode**"));
+    }
+
+    #[test]
+    fn array_fields_are_listed_with_their_type() {
+        let symbols = cpp_symbols(
+            r#"
+struct Bucket {
+    int data[MAX];
+    int *pointer;
+};
+"#,
+        );
+
+        let data = symbols
+            .iter()
+            .find(|symbol| &*symbol.name == "data")
+            .expect("the array field is listed");
+        assert_eq!(&*data.kind, "field");
+        assert_eq!(data.signature.as_deref(), Some(": int"));
+    }
+
+    #[test]
     fn overloads_survive_collapsing_while_prototypes_and_macros_collapse() {
         let symbols = cpp_symbols(
             r#"
@@ -4279,20 +4349,25 @@ vector<int> bfs(int start) {
             files
         };
 
-        // `MAX_SHARED_NAME_FILES` files writing the name is still evidence.
-        let mut at_the_cap = with_owner(MAX_SHARED_NAME_FILES);
+        // Four files put the cap at its floor of three. At the cap the name is
+        // still evidence; one more caller makes every mention vocabulary.
+        let mut at_the_cap = with_owner(3);
         rank(&mut at_the_cap);
-        assert_eq!(
-            at_the_cap.last().unwrap().in_degree,
-            MAX_SHARED_NAME_FILES as u32
-        );
+        assert_eq!(at_the_cap.last().unwrap().in_degree, 3);
 
-        // One more caller makes every one of the mentions vocabulary.
-        let mut past_the_cap = with_owner(MAX_SHARED_NAME_FILES + 1);
+        let mut past_the_cap = with_owner(4);
         rank(&mut past_the_cap);
         let owner = past_the_cap.last().unwrap();
         assert_eq!(owner.in_degree, 0, "the name is no evidence");
         assert_eq!(past_the_cap[0].out_degree, 0, "the callers gain no edge");
+    }
+
+    #[test]
+    fn shared_name_limit_scales_with_the_repository() {
+        assert_eq!(shared_name_file_limit(1), 3);
+        assert_eq!(shared_name_file_limit(113), 3);
+        assert_eq!(shared_name_file_limit(1_565), 31);
+        assert_eq!(shared_name_file_limit(10_000), 50);
     }
 
     #[test]

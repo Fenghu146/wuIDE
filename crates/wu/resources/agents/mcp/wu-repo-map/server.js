@@ -496,8 +496,12 @@ function omittedPathLimit(limit) {
 // Honest coverage for the whole build, mirroring `SymbolMap::coverage_notes`:
 // how many candidates became map entries, why the rest did not, and what never
 // became a candidate at all.
-/** @param {SnapshotStats} stats @returns {string[]} */
-function coverageNotes(stats) {
+/**
+ * @param {SnapshotStats} stats
+ * @param {number} total
+ * @returns {string[]}
+ */
+function coverageNotes(stats, total) {
   const notes = [];
   if (Number.isFinite(stats.considered) && stats.considered > 0) {
     const reasons = [];
@@ -507,7 +511,9 @@ function coverageNotes(stats) {
     if (stats.file_limit > 0) reasons.push(`${stats.file_limit} beyond the ${MAX_FILES}-file limit`);
     if (stats.unreadable > 0) reasons.push(`${stats.unreadable} unreadable`);
     const suffix = reasons.length === 0 ? "" : ` (${reasons.join(", ")})`;
-    notes.push(`Indexed ${stats.parsed} / ${stats.considered} candidate files${suffix}.`);
+    notes.push(
+      `Parsed ${stats.parsed} / ${stats.considered} candidate files${suffix}; ${total} with definitions.`,
+    );
   }
   if (stats.vendored_skipped > 0) {
     notes.push(`Excluded before scanning: ${stats.vendored_skipped} vendored or generated paths.`);
@@ -548,7 +554,7 @@ function renderPageHead(doc, written, start, end, total, options) {
 
   const stats = doc.stats;
   if (stats && Number.isFinite(stats.considered) && Number.isFinite(stats.parsed)) {
-    head.push(...coverageNotes(stats));
+    head.push(...coverageNotes(stats, total));
   }
   if (options.legacy) head.push(LEGACY_SNAPSHOT);
   return `${head.join("\n")}\n`;
