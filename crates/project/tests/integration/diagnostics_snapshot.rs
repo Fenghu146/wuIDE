@@ -1,10 +1,21 @@
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use fs::{CreateOptions, FakeFs, Fs};
+use futures::StreamExt;
+use gpui::{App, TestAppContext};
+use project::diagnostics_snapshot::start_refresh_watcher;
+use project::Project;
 use language::{Diagnostic, DiagnosticEntry, DiagnosticMessage, PointUtf16, Unclipped};
 use lsp::{DiagnosticSeverity, NumberOrString};
 use path::rel_path::RelPath;
-use project::diagnostics_snapshot::{Item, MAX_ITEMS, MAX_MESSAGE_CHARS, to_json, write};
+use project::diagnostics_snapshot::{
+    Item, MAX_ITEMS, MAX_MESSAGE_CHARS, is_current_refresh_request, is_refresh_request, to_json,
+    watch_refresh_requests, write,
+};
 use serde_json::json;
+use util::{ResultExt as _, path};
 
 fn rel(path: &str) -> &RelPath {
     RelPath::from_unix_str(path).unwrap()
@@ -150,4 +161,127 @@ fn write_uses_the_same_key_as_the_repo_map_snapshot() {
     let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&written).unwrap()).unwrap();
     assert_eq!(doc["version"], 1);
     assert_eq!(doc["items"], json!([]));
+}
+
+#[gpui::test]
+async fn only_refresh_markers_reach_the_watcher(cx: &mut TestAppContext) {
+    let fs = FakeFs::new(cx.executor());
+    let dir = Path::new("/agent/diagnostics").to_path_buf();
+    let (mut requests, _watcher) = watch_refresh_requests(fs.clone(), dir.clone()).await;
+
+    let key = paths::project_key(Path::new("/work/project"));
+    let snapshot = dir.join(format!("{key}.json"));
+    let marker = dir.join(format!("{key}.refresh"));
+    fs.create_file(&snapshot, CreateOptions::default())
+        .await
+        .unwrap();
+    fs.create_file(&marker, CreateOptions::default())
+        .await
+        .unwrap();
+
+    assert!(is_refresh_request(&marker));
+    assert!(!is_refresh_request(&snapshot));
+    assert_eq!(
+        requests.next().await.expect("a refresh marker is delivered"),
+        vec![marker]
+    );
+}
+
+#[gpui::test]
+async fn a_refresh_marker_rewrites_the_snapshot(cx: &mut TestAppContext) {
+    super::init_test(cx);
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(path!("/work"), json!({ "a.rs": "" }))
+        .await;
+    let project = Project::test(fs.clone(), [Path::new(path!("/work"))], cx).await;
+    let weak_project = project.downgrade();
+    cx.update(|cx| {
+        start_refresh_watcher(
+            fs.clone() as Arc<dyn Fs>,
+            Arc::new(move |cx: &mut App| {
+                weak_project
+                    .update(cx, |project, cx| project.schedule_diagnostics_snapshot(cx))
+                    .log_err();
+            }),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+
+    let dir = paths::diagnostics_snapshots_dir();
+    let key = paths::project_key(Path::new(path!("/work")));
+    let marker = dir.join(format!("{key}.refresh"));
+    let snapshot = dir.join(format!("{key}.json"));
+    fs.create_file(&marker, CreateOptions::default())
+        .await
+        .unwrap();
+    let requested_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .to_string();
+    fs.write(&marker, requested_at.as_bytes()).await.unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+
+    // The writer uses `std::fs`, so the resulting snapshot is a real file even
+    // when the project's other files live in FakeFs.
+    let written = std::fs::read_to_string(&snapshot).expect("snapshot was rewritten");
+    std::fs::remove_file(&snapshot).expect("remove the test snapshot");
+    let doc: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(doc["version"], 1);
+    assert_eq!(doc["project"], path!("/work"));
+    assert_eq!(doc["items"], json!([]));
+    assert!(fs.metadata(&marker).await.unwrap().is_none());
+}
+
+#[test]
+fn refresh_requests_expire_after_five_minutes() {
+    let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let millis = |time: SystemTime| time.duration_since(UNIX_EPOCH).unwrap().as_millis();
+
+    assert!(is_current_refresh_request(
+        format!("{}\n", millis(now)).as_bytes(),
+        now
+    ));
+    assert!(!is_current_refresh_request(
+        format!("{}", millis(now - Duration::from_secs(10 * 60))).as_bytes(),
+        now
+    ));
+    assert!(!is_current_refresh_request(b"no clock here", now));
+}
+
+#[gpui::test]
+async fn startup_sweeps_abandoned_markers(cx: &mut TestAppContext) {
+    let fs = FakeFs::new(cx.executor());
+    let dir = Path::new("/agent/diagnostics").to_path_buf();
+    fs.create_dir(&dir).await.unwrap();
+
+    let abandoned = dir.join("abandoned.refresh");
+    fs.create_file(&abandoned, CreateOptions::default())
+        .await
+        .unwrap();
+    fs.write(&abandoned, b"1000\n").await.unwrap();
+
+    let current = dir.join("current.refresh");
+    fs.create_file(&current, CreateOptions::default())
+        .await
+        .unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .to_string();
+    fs.write(&current, now.as_bytes()).await.unwrap();
+
+    let (mut requests, _watcher) = watch_refresh_requests(fs.clone(), dir).await;
+    assert!(
+        fs.metadata(&abandoned).await.unwrap().is_none(),
+        "a marker from a closed session must not linger"
+    );
+    assert_eq!(
+        requests.next().await.expect("the live marker is replayed"),
+        vec![current]
+    );
 }

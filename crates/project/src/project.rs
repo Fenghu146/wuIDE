@@ -2714,7 +2714,8 @@ impl Project {
         }
     }
 
-    fn schedule_diagnostics_snapshot(&mut self, cx: &mut Context<Self>) {
+    /// Rewrites snapshots once the current burst of diagnostics settles.
+    pub fn schedule_diagnostics_snapshot(&mut self, cx: &mut Context<Self>) {
         self.diagnostics_snapshot_debouncer.fire_new(
             diagnostics_snapshot::DEBOUNCE,
             cx,
