@@ -4,19 +4,23 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use editor::Editor;
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle,
-    Subscription, Task, WeakEntity, Window, actions,
+    App, AppContext as _, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    ScrollHandle, Subscription, Task, TaskExt, WeakEntity, Window, actions,
 };
 use i18n::{n, t};
+use menu;
 use remote::{RemoteConnectionOptions, SshConnectionOptions};
-use settings::Settings as _;
-use util::ResultExt as _;
+use settings::{Settings as _, update_settings_file};
 use ui::{
-    Clickable as _, Icon, IconButton, IconName, Indicator, Label, LabelCommon as _,
-    LabelSize, ListItem, ListSubHeader, Tooltip, prelude::*,
+    Clickable as _, ElevationIndex, Icon, IconButton, IconName, Indicator, Label, LabelCommon as _,
+    LabelSize, ListItem, ListSubHeader, Modal, ModalFooter, ModalHeader, Section, Tooltip,
+    prelude::*,
 };
-use workspace::{MultiWorkspace, OpenOptions, Panel, Workspace, dock::{DockPosition, PanelEvent}};
+use workspace::{
+    ModalView, MultiWorkspace, OpenOptions, Panel, Workspace, dock::{DockPosition, PanelEvent},
+};
 
 use crate::{
     RemoteSettings, connect_with_modal, open_remote_project,
@@ -312,12 +316,12 @@ impl RemotePanel {
         let Some(workspace) = self.workspace.upgrade() else {
             return;
         };
-        let options = RemoteConnectionOptions::Ssh(SshConnectionOptions::default());
-        let task = connect_with_modal(&workspace, options, window, cx);
-        cx.spawn(async move |_, _| {
-            task.await.log_err();
-        })
-        .detach();
+        let weak_workspace = workspace.downgrade();
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_modal(window, cx, |window, cx| {
+                NewSshConnectionModal::new(weak_workspace.clone(), window, cx)
+            });
+        });
     }
 
     fn toggle_expanded(&mut self, key: Arc<str>) {
@@ -557,11 +561,298 @@ impl Panel for RemotePanel {
     }
 }
 
+struct NewSshConnectionModal {
+    workspace: WeakEntity<Workspace>,
+    nickname: Entity<Editor>,
+    host: Entity<Editor>,
+    port: Entity<Editor>,
+    username: Entity<Editor>,
+    note: Entity<Editor>,
+    private_key_path: Entity<Editor>,
+    focus_handle: FocusHandle,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl NewSshConnectionModal {
+    fn new(workspace: WeakEntity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let nickname = cx.new(|cx| Editor::single_line(window, cx));
+        let host = cx.new(|cx| Editor::single_line(window, cx));
+        let port = cx.new(|cx| Editor::single_line(window, cx));
+        let username = cx.new(|cx| Editor::single_line(window, cx));
+        let note = cx.new(|cx| Editor::single_line(window, cx));
+        let private_key_path = cx.new(|cx| Editor::single_line(window, cx));
+        port.update(cx, |editor, cx| editor.set_text("22", window, cx));
+        nickname.update(cx, |editor, cx| editor.focus_handle(cx).focus(window, cx));
+
+        let mut subscriptions = Vec::new();
+        for editor in [&nickname, &host, &port, &username, &note, &private_key_path] {
+            subscriptions.push(cx.observe(editor, |_, _, cx| cx.notify()));
+        }
+
+        Self {
+            workspace,
+            nickname,
+            host,
+            port,
+            username,
+            note,
+            private_key_path,
+            focus_handle: cx.focus_handle(),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let host = self.host.read(cx).text(cx).trim().to_string();
+        if host.is_empty() {
+            return;
+        }
+        let port = self
+            .port
+            .read(cx)
+            .text(cx)
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .unwrap_or(22);
+        let nickname = trimmed_option(self.nickname.read(cx).text(cx));
+        let username = trimmed_option(self.username.read(cx).text(cx));
+        let private_key_path = trimmed_option(self.private_key_path.read(cx).text(cx));
+        let (connection, options) =
+            ssh_connection_and_options(nickname, host, port, username, private_key_path);
+
+        if let Some(fs) = self.workspace.upgrade().map(|workspace| {
+            workspace.read_with(cx, |workspace, _| workspace.app_state().fs.clone())
+        }) {
+            update_settings_file(fs, cx, move |settings, _| {
+                settings
+                    .remote
+                    .ssh_connections
+                    .get_or_insert_with(Vec::new)
+                    .push(connection);
+            });
+        }
+
+        cx.emit(DismissEvent);
+        if let Some(workspace) = self.workspace.upgrade() {
+            let task = connect_with_modal(
+                &workspace,
+                RemoteConnectionOptions::Ssh(options),
+                window,
+                cx,
+            );
+            task.detach_and_log_err(cx);
+        }
+    }
+
+    fn field(label: SharedString, editor: Entity<Editor>) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .child(Label::new(label).size(LabelSize::Small))
+            .child(div().w_full().child(editor))
+    }
+}
+
+impl Focusable for NewSshConnectionModal {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl EventEmitter<DismissEvent> for NewSshConnectionModal {}
+
+impl ModalView for NewSshConnectionModal {}
+
+impl Render for NewSshConnectionModal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let host_missing = self.host.read(cx).text(cx).trim().is_empty();
+
+        div()
+            .elevation_3(cx)
+            .w(rems(30.))
+            .max_h(rems(36.))
+            .overflow_hidden()
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| cx.emit(DismissEvent)))
+            .on_action(cx.listener(|this, _: &menu::Confirm, window, cx| this.confirm(window, cx)))
+            .child(
+                Modal::new("new-ssh-connection", None)
+                    .header(
+                        ModalHeader::new()
+                            .show_dismiss_button(true)
+                            .headline(t!("New SSH Connection")),
+                    )
+                    .section(
+                        Section::new()
+                            .child(Self::field(t!("Name"), self.nickname.clone()))
+                            .child(Self::field(t!("Host"), self.host.clone()))
+                            .child(Self::field(t!("Port"), self.port.clone()))
+                            .child(Self::field(t!("Username"), self.username.clone()))
+                            .child(Self::field(
+                                t!("Private Key Path"),
+                                self.private_key_path.clone(),
+                            ))
+                            .child(Self::field(t!("Note"), self.note.clone())),
+                    )
+                    .footer(
+                        ModalFooter::new().end_slot(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("new-ssh-cancel", t!("Cancel"))
+                                        .layer(ElevationIndex::ModalSurface)
+                                        .on_click(cx.listener(|_, _, _, cx| cx.emit(DismissEvent))),
+                                )
+                                .child(
+                                    Button::new("new-ssh-connect", t!("OK"))
+                                        .style(ButtonStyle::Filled)
+                                        .layer(ElevationIndex::ModalSurface)
+                                        .disabled(host_missing)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm(window, cx)
+                                        })),
+                                ),
+                        ),
+                    ),
+            )
+    }
+}
+
+fn trimmed_option(text: String) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn ssh_connection_and_options(
+    nickname: Option<String>,
+    host: String,
+    port: u16,
+    username: Option<String>,
+    private_key_path: Option<String>,
+) -> (settings::SshConnection, SshConnectionOptions) {
+    let mut args = Vec::new();
+    if let Some(path) = &private_key_path {
+        args.push("-i".to_string());
+        args.push(path.clone());
+    }
+    let connection = settings::SshConnection {
+        host: host.clone(),
+        username: username.clone(),
+        port: Some(port),
+        args: Vec::new(),
+        projects: Default::default(),
+        nickname: nickname.clone(),
+        upload_binary_over_ssh: None,
+        port_forwards: None,
+        connection_timeout: None,
+        private_key_path,
+    };
+    let options = SshConnectionOptions {
+        host: host.into(),
+        username,
+        port: Some(port),
+        args: Some(args),
+        nickname,
+        ..Default::default()
+    };
+    (connection, options)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui::{TestAppContext, UpdateGlobal as _};
     use project::{FakeFs, Project};
+
+    #[test]
+    fn new_connection_form_uses_the_entered_values_for_connection_options() {
+        let (connection, options) = ssh_connection_and_options(
+            Some("dev".to_string()),
+            "host.example".to_string(),
+            2222,
+            Some("alice".to_string()),
+            Some("/keys/id_ed25519".to_string()),
+        );
+
+        assert_eq!(connection.host, "host.example");
+        assert_eq!(connection.port, Some(2222));
+        assert_eq!(connection.username.as_deref(), Some("alice"));
+        assert_eq!(connection.nickname.as_deref(), Some("dev"));
+        assert_eq!(
+            connection.private_key_path.as_deref(),
+            Some("/keys/id_ed25519")
+        );
+        assert_eq!(options.host.to_string(), "host.example");
+        assert_eq!(options.port, Some(2222));
+        assert_eq!(options.username.as_deref(), Some("alice"));
+        assert_eq!(options.nickname.as_deref(), Some("dev"));
+        assert_eq!(
+            options.args,
+            Some(vec!["-i".to_string(), "/keys/id_ed25519".to_string()])
+        );
+
+        let (_, options_without_key) =
+            ssh_connection_and_options(None, "host.example".to_string(), 22, None, None);
+        assert_eq!(options_without_key.args, Some(Vec::new()));
+    }
+
+    #[gpui::test]
+    async fn new_connection_opens_the_form_instead_of_connecting(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            crate::init(cx);
+        });
+
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("test window should have a workspace");
+        let workspace_handle = workspace.downgrade();
+        let panel = window
+            .update(cx, |_, window, cx| {
+                cx.spawn_in(window, async move |_, cx| {
+                    RemotePanel::load(workspace_handle, cx.clone()).await
+                })
+            })
+            .expect("test window should be open")
+            .await
+            .expect("remote panel should load");
+
+        window
+            .update(cx, |_, window, cx| {
+                panel.update(cx, |panel, cx| panel.new_connection(window, cx));
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let modal = cx.update(|cx| workspace.read(cx).active_modal::<NewSshConnectionModal>(cx));
+        assert!(modal.is_some(), "new connection should show the form first");
+
+        window
+            .update(cx, |_, window, cx| {
+                modal.expect("form should be open").update(cx, |modal, cx| {
+                    modal.confirm(window, cx);
+                });
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        assert!(
+            cx.update(|cx| {
+                workspace
+                    .read(cx)
+                    .active_modal::<NewSshConnectionModal>(cx)
+                    .is_some()
+            }),
+            "an empty host must not submit the form"
+        );
+    }
 
     #[gpui::test]
     async fn settings_changes_refresh_the_server_list_without_panicking(

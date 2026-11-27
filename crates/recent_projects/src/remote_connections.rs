@@ -50,7 +50,14 @@ impl RemoteSettings {
             {
                 options.nickname = conn.nickname;
                 options.upload_binary_over_ssh = conn.upload_binary_over_ssh.unwrap_or_default();
-                options.args = Some(conn.args);
+                let mut args = conn.args;
+                if let Some(private_key_path) =
+                    conn.private_key_path.filter(|path| !path.trim().is_empty())
+                {
+                    args.push("-i".to_string());
+                    args.push(private_key_path);
+                }
+                options.args = Some(args);
                 options.port_forwards = conn.port_forwards;
                 break;
             }

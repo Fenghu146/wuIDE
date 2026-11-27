@@ -1509,6 +1509,8 @@ pub struct SshConnection {
     /// Timeout in seconds for SSH connection and downloading the remote server binary.
     /// Defaults to 10 seconds if not specified.
     pub connection_timeout: Option<u16>,
+    /// Path to a private key passed to ssh with `-i`.
+    pub private_key_path: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema, MergeFrom, Debug)]
