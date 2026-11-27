@@ -1758,7 +1758,8 @@ fn all_language_names(cx: &App) -> Vec<SharedString> {
         .languages
         .language_names()
         .into_iter()
-        .filter(|name| name.as_ref() != "Wu Keybind Context")
+        // The context is registered as "Zed Keybind Context"; "Wu" was never registered (see f733c611).
+        .filter(|name| name.as_ref() != "Zed Keybind Context")
         .map(Into::into)
         .collect()
 }

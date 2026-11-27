@@ -95,13 +95,11 @@ impl PtySender {
     }
 
     pub(super) fn resize(&self, bounds: TerminalBounds) {
-        if let Err(error) = self
-            .notifier
+        // The pty loop may already be gone; a resize on a closed channel is harmless to drop.
+        self.notifier
             .0
             .send(Msg::Resize(window_size_from_terminal_bounds(bounds)))
-        {
-            log::error!("failed to resize alacritty pty: {error}");
-        }
+            .ok();
     }
 
     pub(super) fn shutdown(&self) {
