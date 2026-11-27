@@ -64,6 +64,14 @@ use crate::wu::{OpenRequestKind, eager_load_active_theme_and_icon_theme};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// On Windows, SSH_ASKPASS is IDE.exe itself. SSH passes the prompt text as
+/// argv[1] and supplies the socket path through this environment variable,
+/// so askpass mode is detected before clap parses the prompt as a path.
+#[cfg(target_os = "windows")]
+fn askpass_socket() -> Option<String> {
+    std::env::var("ZED_ASKPASS_SOCKET").ok()
+}
+
 fn build_application() -> Application {
     let platform = gpui_platform::current_platform(false);
     if std::env::var("ZED_EXPERIMENTAL_A11Y").as_deref() == Ok("1") {
@@ -218,6 +226,16 @@ fn install_panic_hook() {
 fn main() {
     #[cfg(unix)]
     util::prevent_root_execution();
+
+    // On Windows, SSH invokes SSH_ASKPASS directly with the prompt text as
+    // argv[1] and no way to pass extra arguments. The socket path is supplied
+    // via ZED_ASKPASS_SOCKET, so handle that before clap tries to parse the
+    // prompt as an option or a path to open.
+    #[cfg(target_os = "windows")]
+    if let Some(socket) = askpass_socket() {
+        askpass::main_from_args(&socket, env::args().skip(1));
+        return;
+    }
 
     let args = Args::parse();
 
@@ -1852,5 +1870,31 @@ fn check_for_conpty_dll() {
         }
     } else {
         log::warn!("Failed to load conpty.dll. Terminal will work with reduced functionality.");
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod askpass_tests {
+    use super::*;
+
+    #[test]
+    fn askpass_socket_is_detected_before_clap_parses_the_prompt() {
+        // SSH_ASKPASS=IDE.exe receives the prompt as argv[1]. The socket env var
+        // is what distinguishes that invocation from a normal GUI launch.
+        // Environment mutation is unsafe in Rust 2024; tests run in isolation.
+        unsafe {
+            std::env::remove_var("ZED_ASKPASS_SOCKET");
+        }
+        assert!(askpass_socket().is_none());
+
+        unsafe {
+            std::env::set_var("ZED_ASKPASS_SOCKET", r"C:\tmp\askpass.sock");
+        }
+        assert_eq!(askpass_socket().as_deref(), Some(r"C:\tmp\askpass.sock"));
+
+        unsafe {
+            std::env::remove_var("ZED_ASKPASS_SOCKET");
+        }
+        assert!(askpass_socket().is_none());
     }
 }

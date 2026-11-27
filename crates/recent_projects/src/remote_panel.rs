@@ -933,6 +933,50 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn connect_with_modal_opens_a_modal_not_an_editor_item(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            editor::init(cx);
+            crate::init(cx);
+        });
+
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("test window should have a workspace");
+        let before_items = cx.read(|cx| workspace.read(cx).items(cx).count());
+
+        window
+            .update(cx, |_, window, cx| {
+                connect_with_modal(
+                    &workspace,
+                    RemoteConnectionOptions::Ssh(SshConnectionOptions {
+                        host: "example.com".into(),
+                        ..Default::default()
+                    }),
+                    window,
+                    cx,
+                );
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let has_modal = cx.update(|cx| {
+            workspace
+                .read(cx)
+                .active_modal::<remote_connection::RemoteConnectionModal>(cx)
+                .is_some()
+        });
+        let after_items = cx.read(|cx| workspace.read(cx).items(cx).count());
+        assert!(has_modal, "connect_with_modal must create a modal");
+        assert_eq!(
+            before_items, after_items,
+            "connect_with_modal must not open an editor item"
+        );
+    }
+
+    #[gpui::test]
     async fn settings_changes_refresh_the_server_list_without_panicking(
         cx: &mut TestAppContext,
     ) {
