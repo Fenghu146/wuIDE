@@ -15,10 +15,10 @@ use gpui::{
     Action, Animation, AnimationExt as _, AnyElement, App, AsyncWindowContext, Bounds, ClickEvent,
     ClipboardItem, Context, CursorStyle, DismissEvent, EdgeFade, Element, ElementId, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, GlobalElementId, Hsla, InspectorElementId,
-    IntoElement, LayoutId, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, PromptButton,
-    PromptLevel, Render, RenderOnce, ScrollHandle, SharedString, Styled, Subscription, Svg,
-    TextStyleRefinement, Transformation, WeakEntity, Window, anchored, deferred, div, percentage,
-    point, px, rgb, svg,
+    IntoElement, LayoutId, ListAlignment, ListState, MouseButton, MouseDownEvent, ParentElement,
+    Pixels, Point, PromptButton, PromptLevel, Render, RenderOnce, ScrollHandle, SharedString,
+    Styled, Subscription, Svg, TextStyleRefinement, Transformation, WeakEntity, Window, anchored,
+    deferred, div, list, percentage, point, px, rgb, svg,
 };
 use i18n::{n, t, tc};
 use project::Project;
@@ -56,6 +56,7 @@ const HARNESS_ICON_SIZE: f32 = 13.0;
 const COMPACT_TIME_WIDTH: f32 = 30.0;
 const LABEL_FADE_BAND: f32 = 20.0;
 const LIST_FADE_BAND: f32 = 24.0;
+const LIST_OVERDRAW: f32 = 1200.;
 const CLAUDE_BRAND: u32 = 0xD97757;
 const SPINNER_PERIOD: Duration = Duration::from_millis(750);
 const SPINNER_DIM: f32 = 0.1;
@@ -386,7 +387,9 @@ pub struct AgentPanel {
     search: Entity<Editor>,
     renaming: Option<RenameField>,
     row_menu: Option<RowMenu>,
-    list_scroll: ScrollHandle,
+    session_list: ListState,
+    session_list_items: Vec<SessionListItem>,
+    session_list_signature: Vec<(SharedString, Pixels)>,
     showing_saved: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -433,7 +436,9 @@ impl AgentPanel {
                     search,
                     renaming: None,
                     row_menu: None,
-                    list_scroll: ScrollHandle::new(),
+                    session_list: ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW)),
+                    session_list_items: Vec::new(),
+                    session_list_signature: Vec::new(),
                     showing_saved: false,
                 }
             })
@@ -1400,7 +1405,7 @@ impl AgentPanel {
                 .is_some_and(|branch| branch.to_lowercase().contains(query))
     }
 
-    fn render_list(&self, cx: &Context<Self>) -> ChatList {
+    fn render_list(&mut self, cx: &mut Context<Self>) -> ChatList {
         let roots = chat_roots(&self.project, cx);
         let store = self.store.read(cx);
         let prefs = store.list_prefs().clone();
@@ -1411,22 +1416,80 @@ impl AgentPanel {
             .into_iter()
             .filter(|session| Self::matches_search(session, &query))
             .collect();
-        let layout = layout_list(&sessions, &prefs, searching);
-        let row_context = RowContext {
-            now: OffsetDateTime::now_utc().unix_timestamp(),
-            compact: prefs.compact_rows,
-            active_id: self.active_chat_id(cx),
-        };
-        let active = layout
-            .active
-            .into_iter()
-            .enumerate()
-            .map(|(index, group)| self.render_group(group, index > 0, &row_context, cx))
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let active_id = self.active_chat_id(cx);
+        let items = list_items(&sessions, &prefs, searching, now, active_id.as_deref());
+        let signature: Vec<(SharedString, Pixels)> = items
+            .iter()
+            .map(|item| match item {
+                SessionListItem::Header { key, height, .. } => (key.clone(), px(*height)),
+                SessionListItem::Session {
+                    session, height, ..
+                } => (
+                    SharedString::from(format!("session-{}", session.id)),
+                    px(*height),
+                ),
+            })
             .collect();
+        if signature != self.session_list_signature {
+            let old_count = self.session_list.item_count();
+            self.session_list.splice_with_height_hints(
+                0..old_count,
+                signature.iter().map(|(_, height)| *height),
+            );
+            self.session_list_signature = signature;
+        }
+        let empty = items.is_empty();
+        self.session_list_items = items;
         ChatList {
-            active,
+            empty,
             searching,
             notice: self.render_auto_archive_notice(cx),
+        }
+    }
+
+    fn render_list_item(&self, index: usize, cx: &Context<Self>) -> AnyElement {
+        let Some(item) = self.session_list_items.get(index) else {
+            return div().into_any_element();
+        };
+        match item {
+            SessionListItem::Header {
+                key,
+                label,
+                icon,
+                collapsed,
+                padding_top,
+                body_inset,
+                height,
+            } => div()
+                .w_full()
+                .h(px(*height))
+                .pt(px(*padding_top))
+                .pb(px(*body_inset))
+                .child(self.section_header(key.clone(), label.clone(), *icon, *collapsed, cx))
+                .into_any_element(),
+            SessionListItem::Session {
+                session,
+                nested,
+                dimmed,
+                now,
+                compact,
+                selected,
+                height,
+            } => div()
+                .w_full()
+                .h(px(*height))
+                .pb(px(LIST_GAP))
+                .child(self.render_session(
+                    session.clone(),
+                    *nested,
+                    *dimmed,
+                    *now,
+                    *compact,
+                    *selected,
+                    cx,
+                ))
+                .into_any_element(),
         }
     }
 
@@ -1469,14 +1532,45 @@ impl AgentPanel {
                 .into_any_element(),
         )
     }
+}
 
-    fn render_group(
-        &self,
-        group: ListGroup,
-        follows_group: bool,
-        row_context: &RowContext,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+struct ChatList {
+    empty: bool,
+    searching: bool,
+    notice: Option<AnyElement>,
+}
+
+enum SessionListItem {
+    Header {
+        key: SharedString,
+        label: SharedString,
+        icon: Option<IconName>,
+        collapsed: bool,
+        padding_top: f32,
+        body_inset: f32,
+        height: f32,
+    },
+    Session {
+        session: SessionSummary,
+        nested: bool,
+        dimmed: bool,
+        now: i64,
+        compact: bool,
+        selected: bool,
+        height: f32,
+    },
+}
+
+fn list_items(
+    sessions: &[SessionSummary],
+    prefs: &ChatListPrefs,
+    searching: bool,
+    now: i64,
+    active_id: Option<&str>,
+) -> Vec<SessionListItem> {
+    let layout = layout_list(sessions, prefs, searching);
+    let mut items = Vec::new();
+    for (index, group) in layout.active.into_iter().enumerate() {
         let collapsed = group.collapsed;
         let (key, label, icon, top_gap): (SharedString, SharedString, Option<IconName>, bool) =
             match &group.kind {
@@ -1496,7 +1590,7 @@ impl AgentPanel {
                     CHATS_KEY.into(),
                     disclosure_label(&t!("Chats"), collapsed, group.total),
                     None,
-                    follows_group,
+                    index > 0,
                 ),
                 GroupKind::Archived => (
                     ARCHIVED_KEY.into(),
@@ -1505,55 +1599,43 @@ impl AgentPanel {
                     true,
                 ),
             };
-        let header = self.section_header(key.clone(), label, icon, collapsed, cx);
-        let body: Vec<AnyElement> = group
-            .rows
-            .iter()
-            .map(|row| {
-                let selected = row_context.active_id.as_deref() == Some(row.session.id.as_str());
-                self.render_session(
-                    row.session.clone(),
-                    row.nested,
-                    row.dimmed,
-                    row_context.now,
-                    row_context.compact,
-                    selected,
-                    cx,
-                )
-            })
-            .collect();
-        let section = v_flex()
-            .id(SharedString::from(format!("{key}-section")))
-            .w_full()
-            .rounded(px(8.))
-            .child(header)
-            .when(!body.is_empty(), |this| {
-                this.child(
-                    v_flex()
-                        .w_full()
-                        .pt(px(DISCLOSURE_BODY_INSET))
-                        .gap(px(LIST_GAP))
-                        .children(body),
-                )
+        let mut padding_top = if matches!(items.last(), Some(SessionListItem::Header { .. })) {
+            LIST_GAP
+        } else {
+            0.
+        };
+        if top_gap {
+            padding_top += SECTION_GAP;
+        }
+        let body_inset = if group.rows.is_empty() {
+            0.
+        } else {
+            DISCLOSURE_BODY_INSET
+        };
+        let height = padding_top + DISCLOSURE_HEADER_HEIGHT + body_inset;
+        items.push(SessionListItem::Header {
+            key,
+            label,
+            icon,
+            collapsed,
+            padding_top,
+            body_inset,
+            height,
+        });
+        for row in group.rows {
+            let height = row_height(prefs.compact_rows, row.session.branch.is_some()) + LIST_GAP;
+            items.push(SessionListItem::Session {
+                session: row.session.clone(),
+                nested: row.nested,
+                dimmed: row.dimmed,
+                now,
+                compact: prefs.compact_rows,
+                selected: active_id == Some(row.session.id.as_str()),
+                height,
             });
-        div()
-            .w_full()
-            .when(top_gap, |this| this.pt(px(SECTION_GAP)))
-            .child(section)
-            .into_any_element()
+        }
     }
-}
-
-struct ChatList {
-    active: Vec<AnyElement>,
-    searching: bool,
-    notice: Option<AnyElement>,
-}
-
-struct RowContext {
-    now: i64,
-    compact: bool,
-    active_id: Option<String>,
+    items
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1889,6 +1971,7 @@ enum FadeTarget {
 struct EdgeFaded {
     child: AnyElement,
     scroll: ScrollHandle,
+    list: Option<ListState>,
     target: FadeTarget,
 }
 
@@ -1905,14 +1988,16 @@ fn faded_label(id: impl Into<ElementId>, fill: bool, label: impl IntoElement) ->
             .child(div().flex_none().whitespace_nowrap().child(label))
             .into_any_element(),
         scroll,
+        list: None,
         target: FadeTarget::Label,
     }
 }
 
-fn faded_list(scroll: &ScrollHandle, list: impl IntoElement) -> EdgeFaded {
+fn faded_list(list_state: &ListState, child: impl IntoElement) -> EdgeFaded {
     EdgeFaded {
-        child: list.into_any_element(),
-        scroll: scroll.clone(),
+        child: child.into_any_element(),
+        scroll: ScrollHandle::new(),
+        list: Some(list_state.clone()),
         target: FadeTarget::List,
     }
 }
@@ -1956,9 +2041,11 @@ impl EdgeFaded {
                 })
             }
             FadeTarget::List => {
-                let offset = self.scroll.offset().y;
+                let list = self.list.as_ref()?;
+                let offset = list.scroll_px_offset_for_scrollbar().y;
+                let max_offset = list.max_offset_for_scrollbar().y;
                 let top = offset < px(-0.5);
-                let bottom = offset > -self.scroll.max_offset().y + px(0.5);
+                let bottom = offset > -max_offset + px(0.5);
                 (top || bottom).then_some(EdgeFade {
                     band: px(LIST_FADE_BAND),
                     top,
@@ -2126,7 +2213,7 @@ impl Focusable for AgentPanel {
 
 impl Render for AgentPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = self.render_list(cx);
+        let chat_list = self.render_list(cx);
         let has_any = !self
             .store
             .read(cx)
@@ -2135,40 +2222,33 @@ impl Render for AgentPanel {
         let body: AnyElement = if self.showing_saved {
             self.render_saved_messages(cx)
         } else if has_any {
-            let active: Option<AnyElement> = if list.active.is_empty() {
-                Some(
-                    div()
-                        .px(px(SPACE_SM))
-                        .pb(px(SPACE_SM))
-                        .text_size(ui(12.))
-                        .text_color(text_faint(cx))
-                        .child(if list.searching {
-                            t!("No matching chats")
-                        } else {
-                            t!("No chats yet")
-                        })
-                        .into_any_element(),
-                )
-            } else {
-                Some(
-                    v_flex()
-                        .gap(px(LIST_GAP))
-                        .pb(px(SPACE_SM))
-                        .children(list.active)
-                        .into_any_element(),
-                )
-            };
+            let session_list = self.session_list.clone();
+            let render_item = cx.processor(|this, index, _, cx| this.render_list_item(index, cx));
             faded_list(
-                &self.list_scroll,
+                &self.session_list,
                 v_flex()
                     .id("agent-sessions")
                     .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.list_scroll)
                     .px(px(SPACE_SM))
                     .pt(px(LIST_PAD_TOP))
-                    .children(active)
-                    .children(list.notice),
+                    .when(chat_list.empty, |this| {
+                        this.child(
+                            div()
+                                .px(px(SPACE_SM))
+                                .pb(px(SPACE_SM))
+                                .text_size(ui(12.))
+                                .text_color(text_faint(cx))
+                                .child(if chat_list.searching {
+                                    t!("No matching chats")
+                                } else {
+                                    t!("No chats yet")
+                                }),
+                        )
+                    })
+                    .when(!chat_list.empty, |this| {
+                        this.child(list(session_list, render_item).flex_1().min_h_0())
+                    })
+                    .children(chat_list.notice),
             )
             .into_any_element()
         } else {
@@ -2482,5 +2562,38 @@ mod tests {
         assert_eq!(row_height(true, true), 29.);
         assert_eq!(row_height(false, false), 29.);
         assert_eq!(row_height(false, true), 45.);
+    }
+
+    #[test]
+    fn list_items_flatten_groups_into_measurable_rows() {
+        let prefs = ChatListPrefs::default();
+        let archived = SessionSummary {
+            archived_at: Some(1),
+            ..session("old", "/a")
+        };
+        let with_branch = SessionSummary {
+            branch: Some("feature".into()),
+            ..session("branch", "/a")
+        };
+        let sessions = vec![session("live", "/a"), with_branch, archived];
+        let items = list_items(&sessions, &prefs, false, 100, Some("live"));
+        let heights = items
+            .iter()
+            .map(|item| match item {
+                SessionListItem::Header { height, .. } => *height,
+                SessionListItem::Session { height, .. } => *height,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(heights, [32., 31., 47., 44., 31.]);
+        let rows = items
+            .iter()
+            .filter_map(|item| match item {
+                SessionListItem::Session {
+                    session, selected, ..
+                } => Some((session.id.as_str(), *selected)),
+                SessionListItem::Header { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows, [("live", true), ("branch", false), ("old", false)]);
     }
 }
