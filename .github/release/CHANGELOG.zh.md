@@ -4,15 +4,33 @@
 
 ## 1.5.1 - 2026-11-27
 
-- 内置 Pi agent 保留用户的 Git 身份：已设的 `GIT_AUTHOR_*` 与 `GIT_COMMITTER_*` 原样转发，没有时从真实 `~/.gitconfig` 读 `user.name` 与 `user.email`，并镜像进隔离 home。Pi 产生的提交不再带占位作者。
-- keybind 上下文的注册名是 `Zed Keybind Context`，而三处按 `Wu Keybind Context` 查询，导致 keymap 编辑器和设置页的语言列表静默查不到东西。现在改为用注册名查询，并留注释记下原因。
-- 仓库地图保留指针返回类型（`TreeNode *` 不再渲染成 `TreeNode`）、列出数组字段，并把“名字太常见不计入引用”的阈值改为随仓库规模缩放，而不是固定 20 个文件。页面上会写出实际使用的阈值。
-- Remote Explorer 的「新建连接」改为先打开表单——名称、主机、端口、用户名、备注、私钥路径——并用收集到的参数连接，而不是 `SshConnectionOptions::default()`（它的主机名永远是空串）。私钥路径会持久化；密码仍走 askpass 提示，不落盘。
-- 智能体侧栏不再因为鼠标跨过一行就重建整个会话列表：hover 的可见性改为 CSS 式的 group 状态，列表只物化视口内的行。
-- 后台任务卡片在最后一个任务结束后停止刷新，而不是只要卡片存在就每秒 tick 一次。
-- `FORK.md` 增加一张表，说明哪些标识符跟随改名、哪些为兼容而保留，避免同一类改名问题被反复讨论。
-- 更新卡和标题栏提示现在显示发布摘要的前十二位、一个指向该发布的链接，以及那句说明——摘要只能证明下载文件与 GitHub 记录一致，不能证明发布者是谁。
-- 智能体可以请求刷新诊断快照：MCP 工具写一个 `<project-key>.refresh` 标记，IDE 监听到后重新扫描，而不是让用户手动刷新 Problems 面板。
+**性能**
+
+- 会话侧栏 hover 改为 CSS group 状态，去掉每行的 `cx.notify()`
+- 会话列表虚拟化（`ListState` + `list()`），只渲染可见行
+- 后台任务卡片在无任务时停止 tick
+
+**体验**
+
+- 会话列表重排时保持滚动位置（之前任何会话更新导致重排就会把位置拽回顶部）
+- 紧凑模式下 hover 操作区不再常驻占位，标题少被截断 14px
+- 更新通知卡显示 release digest（12 位 + 可点击链接 + 完整性说明）
+
+**修复**
+
+- SSH 远程连接表单点「确定」崩溃（double lease，改为 defer 到 effect cycle 末尾）
+- Windows 上 SSH 密码认证不通（askpass 没走 GUI 分流，ssh 的提示文本被 clap 当成文件路径，弹出一个假 IDE 窗口）
+- 密码输入框按 Enter 不提交（三平台 keymap 缺 PasswordPrompt > Editor 的 enter 绑定）
+- 标题栏更新提示的完整性说明无条件显示
+- 下载路径的空 digest 未折成 `None`，会拿 `Some("")` 比对导致安装失败
+- agent 可请求刷新 diagnostics 快照（`.refresh` 标记 + 单例 watcher）
+- `FORK.md` 增加命名规则表
+
+**已知问题**
+
+- 远程开发需要正式通道构建：dev 通道不会下载 remote server binary，需设 `ZED_BUILD_REMOTE_SERVER` 或使用正式发布版
+- 端口转发在需要密码时会静默失败（`build_forward_ports_command` 不传 `SSH_ASKPASS` 相关环境变量）
+- Windows 无 ControlMaster 复用，每次连接都要重新认证
 
 ## 1.5.0 - 2026-11-26
 

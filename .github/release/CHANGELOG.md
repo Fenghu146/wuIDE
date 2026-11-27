@@ -6,15 +6,33 @@ All notable user-facing changes to Wu are listed here, newest first.
 
 ## 1.5.1 - 2026-11-27
 
-- The bundled Pi agent keeps the user's Git identity: it forwards `GIT_AUTHOR_*` and `GIT_COMMITTER_*` when they are set, and otherwise reads `user.name` and `user.email` from the real `~/.gitconfig`, which is also mirrored into the isolated home. Commits made by Pi no longer carry a placeholder author.
-- The keybind context is registered as `Zed Keybind Context`, but three places looked it up as `Wu Keybind Context`, so the keymap editor and the settings language list silently found nothing. They use the registered name now, with a comment recording why.
-- The repository map keeps pointer return types (`TreeNode *` no longer renders as `TreeNode`), lists array fields, and scales its “names too common to count” threshold to the repository size instead of a fixed 20 files. The page states the threshold it actually used.
-- Remote Explorer's “New Remote Connection” opens a form — name, host, port, user, note and private key path — and connects with what it collected instead of `SshConnectionOptions::default()`, whose hostname was always empty. The private key path is persisted; passwords still come from the askpass prompt and are never stored.
-- The agent sidebar no longer rebuilds the whole session list when the pointer crosses a row: hover visibility is now CSS-style group state, and the list materialises only the rows inside the viewport.
-- A background-task card stops ticking once its last task finishes, instead of refreshing once a second for as long as the card exists.
-- `FORK.md` gains a table of which identifiers follow a rename and which are kept for compatibility, so the same rename questions stop being relitigated.
-- The update card and the title-bar tooltip now show the first twelve characters of the release digest, a link to the release, and the sentence that a digest proves the download matches GitHub's record but not who published it.
-- The agent can ask for its diagnostics snapshot to be refreshed: the MCP tool writes a `<project-key>.refresh` marker, the IDE watches for it and rescans, instead of telling the user to refresh the Problems panel by hand.
+**Performance**
+
+- The agent sidebar's hover state is now CSS group state, with no `cx.notify()` per row
+- The session list is virtualised (`ListState` + `list()`) and only renders visible rows
+- Background-task cards stop ticking when there are no tasks
+
+**Experience**
+
+- The session list keeps its scroll position when sessions are reordered (any session update used to drag the position back to the top)
+- In compact mode the hover actions no longer reserve space, giving titles 14px more room
+- The update notification shows the release digest (12 characters, a clickable link and the integrity note)
+
+**Fixes**
+
+- SSH connection form crashes on OK (double lease; deferred to the end of the effect cycle)
+- SSH password authentication did not work on Windows (askpass skipped the GUI branch and clap treated the SSH prompt as a file path, opening a fake IDE window)
+- Enter did not submit the password prompt (all three keymaps were missing the enter binding for PasswordPrompt > Editor)
+- The title-bar update tooltip showed the integrity note unconditionally
+- An empty digest on the download path was not folded into `None`, so `Some("")` was compared and installation failed
+- Agents can request a diagnostics snapshot refresh (`.refresh` marker plus a singleton watcher)
+- `FORK.md` gains a naming-rules table
+
+**Known issues**
+
+- Remote development needs a release channel build: dev channel does not download the remote server binary; set `ZED_BUILD_REMOTE_SERVER` or use a released build
+- Port forwarding fails silently when a password is required (`build_forward_ports_command` does not pass the `SSH_ASKPASS` environment variables)
+- Windows has no ControlMaster reuse, so every connection authenticates again
 
 ## 1.5.0 - 2026-11-26
 
