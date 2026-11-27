@@ -85,10 +85,12 @@ const STALE_DIAGNOSTICS_SNAPSHOT =
   "The diagnostics snapshot cannot be read, probably because Wu wrote it in a different " +
   "format. Ask the user to open the Problems panel in Wu to refresh it, then call again.";
 
+// The IDE prints its repository's scaled cap in `order`; a fallback snapshot
+// has no repository size to scale from, so it names the rule without a number.
 const DEFAULT_ORDER =
   "Order: referencing fan-in (desc), then IDF-weighted reference PageRank (desc), then path. " +
   "`in N` counts distinct files that reference a definition this file owns, ignoring names " +
-  "shared by more than 20 files; `out M` counts the files this one references under the same rule; " +
+  "shared by too many files; `out M` counts the files this one references under the same rule; " +
   "`deps N` counts the files whose `mod`, `use`, `#include` or relative `import` resolves to this " +
   "one, so it is a certain dependency rather than a shared name.";
 

@@ -168,7 +168,13 @@ const pages = [
 ];
 
 test("the fallback ordering note and the version are the ones the IDE writes", () => {
-  assert.equal(snapshot.order, DEFAULT_ORDER);
+  // The IDE scales its cap to the repository (51 files here give 3); the
+  // fallback cannot know the size, so it names the rule without a number.
+  assert.match(snapshot.order, /shared by more than 3 files/);
+  assert.equal(
+    DEFAULT_ORDER,
+    snapshot.order.replace(/shared by more than \d+ files/, "shared by too many files"),
+  );
   // The fixture is the only place the two implementations agree on the version;
   // without this, bumping `SNAPSHOT_VERSION` here would ship a server that
   // refuses every snapshot the IDE writes.

@@ -152,9 +152,11 @@ fn map_from_fixture(doc: &serde_json::Value) -> SymbolMap {
 #[test]
 fn the_fixture_states_the_ordering_the_ide_prints() {
     let doc = read_fixture();
+    let map = map_from_fixture(&doc);
+    let order = map.order_description();
     assert_eq!(
         doc["order"].as_str(),
-        Some(SymbolMap::order_description()),
+        Some(order.as_str()),
         "the fixture's order note must be the one WuIDE writes"
     );
     assert_eq!(doc["max_chars"].as_u64(), Some(MAX_REPO_MAP_CHARS as u64));
