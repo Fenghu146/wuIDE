@@ -636,13 +636,25 @@ impl NewSshConnectionModal {
 
         cx.emit(DismissEvent);
         if let Some(workspace) = self.workspace.upgrade() {
-            let task = connect_with_modal(
-                &workspace,
-                RemoteConnectionOptions::Ssh(options),
-                window,
-                cx,
-            );
-            task.detach_and_log_err(cx);
+            // `confirm` runs inside this modal's listener, so the modal entity is
+            // leased. Connecting synchronously would make `toggle_modal` hide the
+            // same entity and panic with a double lease. Defer to the end of the
+            // effect cycle, after the lease is released. Bind to the window handle
+            // rather than an entity: both the modal and the workspace are leased
+            // here, and `connect_with_modal` needs to lease the workspace itself.
+            let window_handle = window.window_handle();
+            cx.defer(move |cx| {
+                cx.update_window(window_handle, |_, window, cx| {
+                    let task = connect_with_modal(
+                        &workspace,
+                        RemoteConnectionOptions::Ssh(options),
+                        window,
+                        cx,
+                    );
+                    task.detach_and_log_err(cx);
+                })
+                .ok();
+            });
         }
     }
 
@@ -851,6 +863,72 @@ mod tests {
                     .is_some()
             }),
             "an empty host must not submit the form"
+        );
+    }
+
+    #[gpui::test]
+    async fn confirming_a_filled_form_does_not_double_lease_the_modal(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            workspace::AppState::test(cx);
+            crate::init(cx);
+        });
+
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let window = cx.add_window(|window, cx| MultiWorkspace::test_new(project, window, cx));
+        let workspace = window
+            .read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone())
+            .expect("test window should have a workspace");
+        let workspace_handle = workspace.downgrade();
+        let panel = window
+            .update(cx, |_, window, cx| {
+                cx.spawn_in(window, async move |_, cx| {
+                    RemotePanel::load(workspace_handle, cx.clone()).await
+                })
+            })
+            .expect("test window should be open")
+            .await
+            .expect("remote panel should load");
+
+        window
+            .update(cx, |_, window, cx| {
+                panel.update(cx, |panel, cx| panel.new_connection(window, cx));
+            })
+            .expect("test window should be open");
+        cx.run_until_parked();
+
+        let modal = cx
+            .update(|cx| workspace.read(cx).active_modal::<NewSshConnectionModal>(cx))
+            .expect("form should be open");
+
+        // Fill in the host so `confirm` takes the submit path instead of returning
+        // early on an empty host.
+        window
+            .update(cx, |_, window, cx| {
+                modal.update(cx, |modal, cx| {
+                    modal.host.update(cx, |editor, cx| {
+                        editor.set_text("host.example", window, cx);
+                    });
+                });
+            })
+            .expect("test window should be open");
+
+        // This used to panic with double_lease_panic<NewSshConnectionModal>: `confirm`
+        // ran inside the modal's listener and synchronously called `toggle_modal`,
+        // which tried to hide that same leased entity.
+        window
+            .update(cx, |_, window, cx| {
+                modal.update(cx, |modal, cx| modal.confirm(window, cx));
+            })
+            .expect("confirm must not panic");
+
+        assert!(
+            cx.update(|cx| {
+                workspace
+                    .read(cx)
+                    .active_modal::<NewSshConnectionModal>(cx)
+                    .is_none()
+            }),
+            "the form must be dismissed after confirming"
         );
     }
 
