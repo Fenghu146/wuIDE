@@ -54,6 +54,13 @@ const PI_THINKING_CONFIG_ID: &str = "thought_level";
 // recognizable. Pi reads it from the agent directory on every start.
 const PI_ADDENDUM_VERSION: u32 = 3;
 
+const GIT_IDENTITY_VARIABLES: [&str; 4] = [
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+];
+
 #[derive(Clone)]
 struct AcpPreset {
     id: HarnessId,
@@ -577,6 +584,10 @@ fn prepare_pi_home(program: &Path, agent_root: &Path) -> Option<(PathBuf, PathBu
         }
     }
 
+    // Git looks up its identity under $HOME, which is isolated for Pi. Mirror
+    // the user's config so `git commit` keeps the right author there.
+    mirror_git_config(&home);
+
     if let Err(error) = ensure_local_pi_provider(&agent_dir, &settings_path) {
         log::warn!("failed to configure the Pi model provider: {error}");
     }
@@ -778,6 +789,88 @@ fn source_pi_agent_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(|home| PathBuf::from(home).join(".pi").join("agent"))
+}
+
+fn real_home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .find_map(|name| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+fn git_identity_from_config(path: &Path) -> (Option<String>, Option<String>) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (None, None),
+        Err(error) => {
+            log::warn!("failed to read Git config {path:?}: {error}");
+            return (None, None);
+        }
+    };
+    let mut in_user_section = false;
+    let mut name = None;
+    let mut email = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_user_section = line.eq_ignore_ascii_case("[user]");
+            continue;
+        }
+        if !in_user_section {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').to_owned();
+        match key.trim().to_ascii_lowercase().as_str() {
+            "name" if name.is_none() => name = Some(value),
+            "email" if email.is_none() => email = Some(value),
+            _ => {}
+        }
+    }
+    (name, email)
+}
+
+/// Git commits made by Pi must keep the user's identity even though its `HOME`
+/// is isolated. Explicit variables win; otherwise fall back to the real
+/// `~/.gitconfig`, since Git cannot find it below the isolated home.
+fn git_identity_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    let forwarded: Vec<_> = GIT_IDENTITY_VARIABLES
+        .iter()
+        .filter_map(|variable| std::env::var_os(variable).map(|value| (*variable, value)))
+        .collect();
+    if !forwarded.is_empty() {
+        return forwarded;
+    }
+    let Some(home) = real_home_dir() else {
+        return Vec::new();
+    };
+    let (name, email) = git_identity_from_config(&home.join(".gitconfig"));
+    let mut derived = Vec::with_capacity(GIT_IDENTITY_VARIABLES.len());
+    for variable in GIT_IDENTITY_VARIABLES {
+        let value = if variable.ends_with("NAME") { &name } else { &email };
+        if let Some(value) = value {
+            derived.push((variable, value.into()));
+        }
+    }
+    derived
+}
+
+fn mirror_git_config(home: &Path) {
+    if let Some(source) = real_home_dir().map(|user_home| user_home.join(".gitconfig"))
+        && source.is_file()
+    {
+        let to = home.join(".gitconfig");
+        if let Err(error) = std::fs::copy(&source, &to) {
+            log::warn!("failed to mirror Git config: {error}");
+        } else if let Err(error) = restrict_to_owner(&to) {
+            log::warn!("failed to restrict permissions on {to:?}: {error}");
+        }
+    }
 }
 
 /// Guarantee the isolated Pi home points at a provider it can actually use.
@@ -1034,6 +1127,9 @@ async fn drive_inner(
             .env("USERPROFILE", home.as_os_str())
             .env("HOME", home.as_os_str())
             .env("PI_CODING_AGENT_DIR", agent_dir.as_os_str());
+        for (variable, value) in git_identity_env() {
+            command.env(variable, value);
+        }
     }
     let mut child: Child = command.spawn().map_err(|error| {
         HarnessError::NotInstalled(format!("{} ({error})", launch.program.display()))
@@ -1733,6 +1829,202 @@ fn bundled_program_file(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<OsString>)>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn set(overrides: &[(&'static str, Option<&OsStr>)]) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+            let saved = overrides
+                .iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect();
+            for (name, value) in overrides {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+            Self {
+                saved,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    fn identity_value<'a>(
+        identity: &'a [(&'static str, OsString)],
+        name: &str,
+    ) -> Option<&'a OsStr> {
+        identity
+            .iter()
+            .find(|(variable, _)| *variable == name)
+            .map(|(_, value)| value.as_os_str())
+    }
+
+    #[test]
+    fn pi_forwards_explicit_git_identity_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let profile = dir.path().join("profile");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[user]\n name = From Config\n email = config@example.com\n",
+        )
+        .unwrap();
+
+        let _guard = EnvGuard::set(&[
+            ("GIT_AUTHOR_NAME", Some(OsStr::new("Author From Env"))),
+            ("GIT_AUTHOR_EMAIL", Some(OsStr::new("author@example.com"))),
+            ("GIT_COMMITTER_NAME", Some(OsStr::new("Committer From Env"))),
+            ("GIT_COMMITTER_EMAIL", Some(OsStr::new("committer@example.com"))),
+            ("HOME", Some(home.as_os_str())),
+            ("USERPROFILE", Some(profile.as_os_str())),
+        ]);
+
+        let identity = git_identity_env();
+        assert_eq!(identity.len(), 4, "explicit identity must win over the config");
+        assert_eq!(
+            identity_value(&identity, "GIT_AUTHOR_NAME"),
+            Some(OsStr::new("Author From Env"))
+        );
+        assert_eq!(
+            identity_value(&identity, "GIT_AUTHOR_EMAIL"),
+            Some(OsStr::new("author@example.com"))
+        );
+        assert_eq!(
+            identity_value(&identity, "GIT_COMMITTER_NAME"),
+            Some(OsStr::new("Committer From Env"))
+        );
+        assert_eq!(
+            identity_value(&identity, "GIT_COMMITTER_EMAIL"),
+            Some(OsStr::new("committer@example.com"))
+        );
+    }
+
+    #[test]
+    fn pi_derives_git_identity_from_the_real_home_and_mirrors_its_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let profile = dir.path().join("profile");
+        let pi_home = dir.path().join("pi-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&pi_home).unwrap();
+        let config = "[user]\n\tname = Real Person\n\temail = real@example.com\n";
+        std::fs::write(home.join(".gitconfig"), config).unwrap();
+
+        let _guard = EnvGuard::set(&[
+            ("GIT_AUTHOR_NAME", None),
+            ("GIT_AUTHOR_EMAIL", None),
+            ("GIT_COMMITTER_NAME", None),
+            ("GIT_COMMITTER_EMAIL", None),
+            ("HOME", Some(home.as_os_str())),
+            ("USERPROFILE", Some(profile.as_os_str())),
+        ]);
+
+        let identity = git_identity_env();
+        assert_eq!(identity.len(), 4);
+        for variable in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] {
+            assert_eq!(identity_value(&identity, variable), Some(OsStr::new("Real Person")));
+        }
+        for variable in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
+            assert_eq!(identity_value(&identity, variable), Some(OsStr::new("real@example.com")));
+        }
+
+        mirror_git_config(&pi_home);
+        assert_eq!(
+            std::fs::read_to_string(pi_home.join(".gitconfig")).unwrap(),
+            config
+        );
+    }
+
+    #[test]
+    fn pi_falls_back_to_userprofile_when_home_is_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        let pi_home = dir.path().join("pi-home");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&pi_home).unwrap();
+        let config = "[user]\n name = Profile Person\n email = profile@example.com\n";
+        std::fs::write(profile.join(".gitconfig"), config).unwrap();
+
+        let _guard = EnvGuard::set(&[
+            ("GIT_AUTHOR_NAME", None),
+            ("GIT_AUTHOR_EMAIL", None),
+            ("GIT_COMMITTER_NAME", None),
+            ("GIT_COMMITTER_EMAIL", None),
+            ("HOME", None),
+            ("USERPROFILE", Some(profile.as_os_str())),
+        ]);
+
+        let identity = git_identity_env();
+        assert_eq!(identity.len(), 4);
+        for variable in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] {
+            assert_eq!(identity_value(&identity, variable), Some(OsStr::new("Profile Person")));
+        }
+        for variable in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
+            assert_eq!(
+                identity_value(&identity, variable),
+                Some(OsStr::new("profile@example.com"))
+            );
+        }
+        mirror_git_config(&pi_home);
+        assert_eq!(
+            std::fs::read_to_string(pi_home.join(".gitconfig")).unwrap(),
+            config
+        );
+    }
+
+    #[test]
+    fn pi_without_a_gitconfig_creates_no_identity_or_empty_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let profile = dir.path().join("profile");
+        let pi_home = dir.path().join("pi-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&pi_home).unwrap();
+
+        let _guard = EnvGuard::set(&[
+            ("GIT_AUTHOR_NAME", None),
+            ("GIT_AUTHOR_EMAIL", None),
+            ("GIT_COMMITTER_NAME", None),
+            ("GIT_COMMITTER_EMAIL", None),
+            ("HOME", Some(home.as_os_str())),
+            ("USERPROFILE", Some(profile.as_os_str())),
+        ]);
+
+        assert!(git_identity_env().is_empty());
+        mirror_git_config(&pi_home);
+        assert!(
+            !pi_home.join(".gitconfig").exists(),
+            "a missing user config must not produce an empty file"
+        );
+    }
 
     #[cfg(unix)]
     #[test]
