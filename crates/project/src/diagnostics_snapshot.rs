@@ -12,13 +12,18 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
+use fs::{Fs, PathEventKind, RemoveOptions, Watcher};
+use futures::StreamExt;
 use language::{DiagnosticEntry, PointUtf16, Unclipped};
 use lsp::{DiagnosticSeverity, NumberOrString};
 use path::PathStyle;
 use path::rel_path::RelPath;
 use serde_json::{Value, json};
+use util::ResultExt as _;
 
 /// Bump when the layout changes. The MCP server refuses versions it does not
 /// know and asks the user to refresh.
@@ -32,6 +37,98 @@ pub const MAX_MESSAGE_CHARS: usize = 500;
 
 /// How long to wait for a burst of diagnostics updates to settle.
 pub const DEBOUNCE: Duration = Duration::from_secs(1);
+
+/// Pi's MCP server drops `<project-key>.refresh` beside the snapshot when an
+/// agent asks for fresher diagnostics. Wu answers by rewriting the snapshots
+/// and removing the marker, so a later tool call sees a new `generated_at`.
+pub const REFRESH_REQUEST_SUFFIX: &str = ".refresh";
+const REFRESH_WATCH_LATENCY: Duration = Duration::from_millis(100);
+/// A marker left behind by a session with no open project must never trigger a
+/// rewrite much later, so requests carry the server's clock in milliseconds.
+const REFRESH_REQUEST_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+
+/// Whether a path in the snapshot directory is an agent's refresh request.
+pub fn is_refresh_request(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|file_name| file_name.to_str())
+        .is_some_and(|file_name| file_name.ends_with(REFRESH_REQUEST_SUFFIX))
+}
+
+/// Whether a marker is recent enough to answer. An unreadable timestamp is
+/// treated as abandoned: the server always writes one.
+pub fn is_current_refresh_request(contents: &[u8], now: SystemTime) -> bool {
+    let Ok(text) = std::str::from_utf8(contents) else {
+        return false;
+    };
+    let Ok(millis) = text.trim().parse::<u64>() else {
+        return false;
+    };
+    let Some(written) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(millis)) else {
+        return false;
+    };
+    now.duration_since(written).unwrap_or_default() <= REFRESH_REQUEST_MAX_AGE
+}
+
+/// Watches `dir` for refresh requests. Markers already on disk when the watch
+/// starts are swept: expired ones are removed, still-current ones are returned
+/// as the first batch. The watcher must stay alive for later events to arrive.
+pub async fn watch_refresh_requests(
+    fs: Arc<dyn Fs>,
+    dir: PathBuf,
+) -> (
+    Pin<Box<dyn futures::Stream<Item = Vec<PathBuf>> + Send>>,
+    Arc<dyn Watcher>,
+) {
+    fs.create_dir(&dir).await.log_err();
+    let (events, watcher) = fs.watch(&dir, REFRESH_WATCH_LATENCY).await;
+
+    let mut pending = Vec::new();
+    if let Ok(mut entries) = fs.read_dir(&dir).await {
+        while let Some(entry) = entries.next().await {
+            let Ok(path) = entry else {
+                continue;
+            };
+            if !is_refresh_request(&path) {
+                continue;
+            }
+            let current = fs
+                .load(&path)
+                .await
+                .is_ok_and(|contents| is_current_refresh_request(contents.as_bytes(), SystemTime::now()));
+            if current {
+                pending.push(path);
+            } else {
+                fs.remove_file(
+                    &path,
+                    RemoveOptions {
+                        ignore_if_not_exists: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .log_err();
+            }
+        }
+    }
+
+    let requests = futures::stream::iter((!pending.is_empty()).then_some(pending)).chain(
+        events.filter_map(|batch| {
+            let requests = batch
+                .into_iter()
+                .filter(|event| {
+                    matches!(
+                        event.kind,
+                        Some(PathEventKind::Created | PathEventKind::Changed)
+                    )
+                })
+                .map(|event| event.path)
+                .filter(|path| is_refresh_request(path))
+                .collect::<Vec<_>>();
+            async move { (!requests.is_empty()).then_some(requests) }
+        }),
+    );
+    (Box::pin(requests), watcher)
+}
 
 /// One diagnostic as the snapshot records it: one-based, project-relative.
 #[derive(Debug, Clone, PartialEq, Eq)]

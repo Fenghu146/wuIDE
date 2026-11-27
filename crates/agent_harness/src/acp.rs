@@ -52,7 +52,7 @@ const PI_THINKING_CONFIG_ID: &str = "thought_level";
 
 // Bump when the addendum text changes, so a file written by an older build is
 // recognizable. Pi reads it from the agent directory on every start.
-const PI_ADDENDUM_VERSION: u32 = 3;
+const PI_ADDENDUM_VERSION: u32 = 4;
 
 const GIT_IDENTITY_VARIABLES: [&str; 4] = [
     "GIT_AUTHOR_NAME",
@@ -644,8 +644,10 @@ time it starts you.
 - Wu also records the language-server diagnostics of the project and serves them
   as `diagnostics`. When you need to know about compile errors or warnings, call
   `diagnostics` first instead of guessing from the source or asking the user to
-  paste errors. If it reports that no snapshot exists yet, ask the user to open
-  the Problems panel so the IDE can write one, then call it again.
+  paste errors. If it reports that the snapshot is stale, call it again in a
+  moment: Wu refreshes the snapshot on the first call. If no snapshot exists
+  yet, ask the user to open the Problems panel so the IDE can write one, then
+  call it again.
 - This file is shared by every project and every chat, so it holds no project or
   session state. Derive anything project-specific from the working directory.
 - Reply in the language the user writes in.

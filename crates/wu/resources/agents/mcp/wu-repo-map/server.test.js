@@ -9,14 +9,23 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} = require("node:fs");
 const { tmpdir } = require("node:os");
-const { join } = require("node:path");
+const { dirname, join } = require("node:path");
 const { after, test } = require("node:test");
 
 const {
   DEFAULT_ORDER,
   SNAPSHOT_VERSION,
+  callTool,
+  diagnosticsRefreshPath,
   omittedPathLimit,
   renderDiagnostics,
   renderRepoMap,
@@ -143,6 +152,42 @@ test("a snapshot without a timestamp keeps listing its diagnostics", () => {
   );
   assert.doesNotMatch(text, /Snapshot/);
   assert.match(text, /^- src\/a\.rs:2:3 error error here$/m);
+});
+
+test("a stale snapshot asks Wu to refresh instead of showing old diagnostics", () => {
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const agentDir = mkdtempSync(join(tmpdir(), "wu-diag-refresh-"));
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const refreshPath = diagnosticsRefreshPath();
+    assert.ok(refreshPath);
+    const snapshotPath = refreshPath.replace(/\.refresh$/, ".json");
+    mkdirSync(dirname(snapshotPath), { recursive: true });
+
+    const old = diagnosticsDoc(new Date(Date.now() - 7 * 60 * 1000).toISOString(), [
+      diagnosticItem("src/a.rs", 2, "error"),
+    ]);
+    writeFileSync(snapshotPath, JSON.stringify(old));
+    const stale = callTool("diagnostics", {});
+    assert.ok(stale);
+    assert.match(stale.content[0].text, /Wu has been asked to refresh it/);
+    assert.match(readFileSync(refreshPath, "utf8"), /^\d+$/m);
+
+    rmSync(refreshPath);
+    const fresh = diagnosticsDoc(new Date().toISOString(), [
+      diagnosticItem("src/a.rs", 2, "error"),
+    ]);
+    writeFileSync(snapshotPath, JSON.stringify(fresh));
+    const current = callTool("diagnostics", {});
+    assert.ok(current);
+    assert.match(current.content[0].text, /^Snapshot written/m);
+    assert.match(current.content[0].text, /^- src\/a\.rs:2:3 error error here$/m);
+    assert.equal(existsSync(refreshPath), false);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 // The IDE renders the same page in Rust (`repo_wiki::symbol_map`) from the same

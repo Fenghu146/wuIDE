@@ -13,8 +13,8 @@
 "use strict";
 
 const { createHash } = require("node:crypto");
-const { existsSync, readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 const { createInterface } = require("node:readline");
 
 const SNAPSHOT_VERSION = 2;
@@ -84,6 +84,9 @@ const NO_DIAGNOSTICS_SNAPSHOT =
 const STALE_DIAGNOSTICS_SNAPSHOT =
   "The diagnostics snapshot cannot be read, probably because Wu wrote it in a different " +
   "format. Ask the user to open the Problems panel in Wu to refresh it, then call again.";
+const DIAGNOSTICS_REFRESH_REQUESTED =
+  "The diagnostics snapshot is stale, so Wu has been asked to refresh it. Call `diagnostics` " +
+  "again in a moment to read the fresh list.";
 
 // The IDE prints its repository's scaled cap in `order`; a fallback snapshot
 // has no repository size to scale from, so it names the rule without a number.
@@ -285,6 +288,30 @@ function diagnosticsSnapshotPath() {
   const agentDir = process.env.PI_CODING_AGENT_DIR;
   if (!agentDir) return null;
   return join(agentDir, "diagnostics", `${projectKey(process.cwd())}.json`);
+}
+
+// Same directory, different extension: Wu watches `diagnostics/` and answers a
+// `<project-key>.refresh` marker by rewriting the snapshots and removing it.
+// The timestamp is Wu's expiry check: a marker left behind with no project
+// open is ignored and swept on the next start, not acted on minutes later.
+/** @returns {string | null} */
+function diagnosticsRefreshPath() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR;
+  if (!agentDir) return null;
+  return join(agentDir, "diagnostics", `${projectKey(process.cwd())}.refresh`);
+}
+
+/** @returns {boolean} */
+function requestDiagnosticsRefresh() {
+  const path = diagnosticsRefreshPath();
+  if (!path) return false;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${Date.now()}\n`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** @returns {LoadedSnapshot} */
@@ -782,6 +809,16 @@ function snapshotAgeSeconds(generatedAt, now) {
   return Math.max(0, Math.round((now - written) / 1000));
 }
 
+/**
+ * @param {DiagnosticsDoc} doc
+ * @param {number} now
+ * @returns {boolean}
+ */
+function isStaleDiagnostics(doc, now) {
+  const age = snapshotAgeSeconds(doc.generated_at, now);
+  return age !== null && age >= DIAGNOSTICS_STALE_AFTER_SECONDS;
+}
+
 /** @param {number} seconds @returns {string} */
 function formatAge(seconds) {
   if (seconds < 90) return `${seconds}s`;
@@ -963,7 +1000,8 @@ const TOOLS = [
       "The language-server diagnostics Wu currently holds for this project: compile errors, " +
       "warnings and info, each with its file, line, column, code and message. Use it to find " +
       "out what is broken instead of asking the user to paste errors. Filter by `path` or " +
-      "`severity`, and page with `limit`.",
+      "`severity`, and page with `limit`. If the snapshot is stale, calling this tool asks Wu " +
+      "to refresh it; call again in a moment to read the fresh list.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1009,6 +1047,13 @@ function callTool(name, args) {
     const loaded = loadDiagnosticsSnapshot();
     if ("error" in loaded) return textResult(loaded.error);
     const { doc } = loaded;
+    if (isStaleDiagnostics(doc, Date.now())) {
+      return textResult(
+        requestDiagnosticsRefresh()
+          ? DIAGNOSTICS_REFRESH_REQUESTED
+          : STALE_DIAGNOSTICS_SNAPSHOT,
+      );
+    }
     const severity =
       typeof args.severity === "string" && DIAGNOSTIC_SEVERITIES.has(args.severity)
         ? /** @type {Severity} */ (args.severity)
@@ -1113,6 +1158,8 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_ORDER,
   SNAPSHOT_VERSION,
+  callTool,
+  diagnosticsRefreshPath,
   renderDiagnostics,
   renderRepoMap,
   renderSymbols,
